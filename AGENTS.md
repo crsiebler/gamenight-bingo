@@ -1,0 +1,239 @@
+# GameNight Bingo Agent Guide
+
+This file applies to the entire repository. Read it with `README.md` and
+`tasks/prd-private-realtime-bingo.md`; the PRD is the product source of truth,
+and its user stories are dependency ordered. Keep each change focused on one
+story and preserve user work outside that scope.
+
+## Project Overview
+
+GameNight Bingo is a private, accountless, Internet-hosted 75-ball Bingo game.
+The server is authoritative for participant identity, presence, cards, draw
+order, calls, daubs, progress, winners, timers, and round progression.
+
+The target is a TypeScript modular monolith with two runtime processes:
+
+- `apps/web`: Next.js App Router UI and versioned HTTP API.
+- `apps/game-server`: long-lived Node.js Socket.IO game authority.
+- PostgreSQL: durable application truth, accessed through repositories.
+- Docker Compose: local PostgreSQL and an optional future-only Redis profile.
+
+The workspace and application quality tooling land in later stories. Do not
+create placeholder packages, scripts, or configuration ahead of their story.
+
+## Commands
+
+Run commands from the repository root. The currently available local service
+commands are:
+
+```sh
+docker compose up -d
+docker compose ps
+docker compose down
+docker compose --profile redis up -d
+```
+
+The default Compose stack starts only PostgreSQL. Web and game-server processes
+run through Bun outside Docker when their workspaces exist.
+
+These are the required root command contracts after the relevant workspace and
+quality-tooling stories add them:
+
+```sh
+bun run dev:web
+bun run dev:game-server
+bun run typecheck
+bun run lint
+bun run format:check
+bun run test
+```
+
+Until a command exists, run the safest relevant validation for the files being
+changed and document why unavailable checks were not run. Do not add tooling
+early solely to make a later command executable.
+
+## Domain Boundaries
+
+The planned workspace responsibilities are:
+
+- `packages/contracts`: versioned Zod schemas and shared boundary types.
+- `packages/domain`: framework-independent Bingo rules and transitions.
+- `packages/database`: Prisma and PostgreSQL repository implementations.
+- `packages/patterns`: canonical masks, matching, source references, and previews.
+- `packages/themes`: semantic theme tokens and asset metadata.
+- `packages/ui`: shared accessible presentation components.
+- `packages/test-support`: reusable fixtures, builders, and integration helpers.
+
+`packages/domain` must not import React, Next.js, Prisma, or Socket.IO. Keep
+database details behind repository interfaces. HTTP and realtime adapters must
+validate boundary contracts, authorize the actor, invoke application/domain
+behavior, and return committed results rather than duplicate domain rules.
+
+The server remains authoritative. Never move validation of calls, marks,
+winners, presence, timers, permissions, or progression into a browser-only
+path. Never expose another participant's card or any future draw position.
+
+## State And Realtime Invariants
+
+- Give every state-changing command a client-generated command ID.
+- Process mutations in PostgreSQL Serializable transactions with bounded,
+  observable retries when the database layer is available.
+- Persist state, the command result, and the corresponding active-lobby event
+  before broadcasting. Broadcast only after the transaction commits.
+- A repeated command ID returns its original committed result without repeating
+  effects.
+- Assign active-lobby events a monotonic sequence. Clients apply sequences
+  idempotently and request resynchronization when continuity is uncertain.
+- Sequences order live activity; they are not a public event-history feature and
+  are deleted with the lobby.
+- On reconnect, send a complete authorized snapshot unless transport-level
+  recovery proves continuity across a very brief interruption.
+- After process restart, ticket renewal, uncertain sequence state, or failed
+  recovery, require a full snapshot rather than reconstructing state from the
+  client.
+- A snapshot may include the participant's own card and marks plus current
+  calls, stage, participants, call mode/timer, pause reason, and result. It must
+  not include other cards, credentials, or uncalled draw positions.
+- Reconnect never automatically resumes paused calling.
+
+## HTTP Conventions
+
+- Put application endpoints under `/api/v1` and validate inputs and outputs with
+  shared versioned contracts.
+- Return stable machine-readable error codes with safe, actionable messages.
+- Authenticate and authorize every private read and mutation; a lobby code is a
+  locator, not proof of identity or host authority.
+- Apply origin/CSRF checks, payload limits, and independent rate limits where
+  required by the PRD.
+- Set `Cache-Control: no-store` on private responses.
+- Require command IDs on mutation endpoints and return committed sequence and
+  idempotent result data.
+- Do not add APIs for chat, event-history retrieval, prior-round browsing, or
+  expired-lobby restoration.
+
+## Realtime Conventions
+
+- Authenticate each Socket.IO connection with a short-lived, single-use ticket
+  obtained using the scoped HttpOnly participant cookie.
+- Require a new ticket for each reconnect; consume a ticket atomically and never
+  log its plaintext.
+- Version realtime command and event contracts in `packages/contracts`.
+- Acknowledge commands with their committed result/sequence or a stable error.
+- Keep broadcasts derived from committed events. Do not emit optimistic domain
+  state before persistence succeeds.
+- Aggregate multiple connections for one session as one participant and persist
+  presence generations before broadcasting presence changes.
+
+## Test-Driven Development
+
+Write a failing test before implementing behavior changes, bug fixes, or
+refactors. Keep the smallest useful cycle: failing test, minimal implementation,
+then refactor while green.
+
+- Use Vitest, not Bun's built-in test framework.
+- Put pure rules under unit and property-based tests.
+- Test HTTP and realtime boundaries for contract parsing, authorization,
+  idempotency, privacy, and stable errors.
+- Use isolated PostgreSQL integration tests for repository, transaction,
+  migration, concurrency, and restart behavior.
+- Use multi-client Socket.IO tests for ordering, presence, reconnects, timers,
+  and co-winner behavior.
+- Use React Testing Library for component behavior and Playwright for browser
+  journeys. Frontend stories also require manual browser verification.
+- Use fake timers for reconnect, pause grace, automatic calling, co-winner, and
+  inactivity behavior; avoid wall-clock-dependent tests.
+- Run the narrow affected suite while developing and all available root checks
+  before committing.
+
+## UI Guidance
+
+- Build mobile-first while keeping host workflows clear on larger screens.
+- Use the planned atoms/molecules/organisms/templates/pages organization and
+  shared semantic components instead of duplicating controls.
+- Treat server snapshots and sequenced committed events as UI state inputs; do
+  not infer authoritative game state from animation or local timers.
+- Show loading, offline, reconnecting, snapshot-syncing, grace, paused, waiting,
+  co-winner-window, result, and expired states explicitly where applicable.
+- Keep current call, card, call mode/timer, pause reason, and valid controls
+  prominent. Prevent duplicate pending commands.
+- Generate pattern previews from canonical catalog data. Never hand-maintain a
+  second mask source or transform a source mask implicitly.
+- Themes may change presentation, not game semantics or readability. Lazy-load
+  nonselected assets and preserve functional fallbacks when decoration fails.
+
+## Accessibility
+
+- All core host and player journeys must work with keyboard and screen reader.
+- Prefer native semantic elements; give controls accessible names and associate
+  errors/instructions programmatically.
+- Provide visible focus, logical focus order, generous touch targets, and text
+  equivalents for card and status states.
+- Never communicate called/marked, connection, pause, winner, or error state by
+  color, sound, or motion alone.
+- Use controlled live regions for new calls and important state changes; avoid
+  replaying call history or flooding announcements after snapshots.
+- Respect reduced motion, high contrast, zoom/reflow, and mute/volume settings.
+- Test accessibility in components and affected browser journeys. Do not accept
+  critical accessibility violations.
+
+## Security And Privacy
+
+- Store opaque participant session tokens only as cryptographic hashes. Cookies
+  must be Secure, HttpOnly, SameSite, and scoped to the active lobby flow.
+- Do not fingerprint devices or collect unnecessary device attributes.
+- Never log cookies, realtime tickets, secrets, future draw positions, private
+  cards, or full private snapshots.
+- Keep errors, metrics, health output, and structured logs secret-free and
+  privacy-safe.
+- Mark private pages `noindex`, `nofollow`, and `noarchive`; keep third-party
+  analytics and public structured data off private routes.
+- Validate environment configuration before serving traffic without echoing
+  secret values.
+- Delete inactive lobby data according to configured retention, but never delete
+  an active lobby with active calls or connections.
+- Do not commit secrets, credentials, tokens, local environment files, database
+  contents, or captured user data.
+
+## Database And Migrations
+
+- Keep Prisma confined to `packages/database`; expose repositories to the rest
+  of the application.
+- Design constraints for scoped uniqueness, command idempotency, monotonic event
+  sequences, and cascade deletion rather than relying only on application checks.
+- Migration files are append-only once shared. Do not edit applied migrations to
+  change history.
+- Obtain explicit confirmation before creating or running a migration unless the
+  active automation invocation grants scoped approval.
+- Run migrations only against approved local/test databases during development.
+  Never point local checks at production or destructive targets.
+- Destructive schema or data operations require explicit confirmation and a
+  documented recovery plan.
+
+## Local Operations And Confirmation
+
+- Obtain confirmation before installing/changing dependencies, changing project
+  configuration, changing Docker configuration, running migrations, or deleting
+  data, unless the active task explicitly provides scoped auto approval.
+- Scoped approval never permits production/secret access, work outside the
+  repository, disabling safeguards, destructive unrelated operations, history
+  rewriting, or protected-branch pushes.
+- Bind local data services to `127.0.0.1`. Redis remains optional and no MVP code
+  or default command may depend on it.
+- Wait for PostgreSQL to report healthy in `docker compose ps` before starting
+  application processes or integration tests.
+- `docker compose down` preserves the named PostgreSQL volume. Do not add
+  `--volumes` or otherwise delete local data without explicit confirmation.
+- Do not expose the development database password or reuse it in hosted
+  environments.
+
+## Git And Commits
+
+- Inspect status and diffs before staging. Stage only files required by the
+  current story and never revert unrelated user changes.
+- Do not commit unless applicable typecheck, lint, formatting, and tests pass.
+- Use Conventional Commits in the form `<type>(<scope>): <description>`, for
+  example `feat(realtime): restore snapshot after reconnect`.
+- If an authorized task specifies an exact commit message, follow that task's
+  message instead of rewriting it.
+- Do not amend, rebase shared history, force-push, or push directly to a
+  protected branch.

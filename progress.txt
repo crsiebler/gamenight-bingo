@@ -123,3 +123,37 @@ Review outcome for US-001:
 - Next iteration start:
   - Implement US-004 by creating root contributor/agent guidance aligned with the README and PRD conventions.
 ---
+
+## 2026-07-16 12:48:46 MST - US-004
+- What was implemented
+  - Added root `AGENTS.md` with repository-wide guidance for architecture, commands, domain boundaries, HTTP/realtime behavior, TDD, UI, accessibility, security/privacy, database migrations, local operations, confirmations, and Git workflow.
+  - Documented command idempotency, persist-before-broadcast transactions, monotonic active-lobby event sequences, authoritative reconnect snapshots, and conventional commits.
+  - Updated the README contributor guidance to link to the now-available root agent guide.
+- Files changed: `AGENTS.md`, `README.md`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-004 - Add project implementation guidance`
+- Auto approval: `enabled`
+- Checks:
+  - `ruby -e '<required AGENTS.md section and invariant validation>'` (pass)
+  - `ruby -e '<local Markdown link validation>'` (pass)
+  - `git diff --check` (pass)
+  - `ruby -e '<root TypeScript applicability validation>'` (pass; confirms typecheck is not applicable before the dependency-ordered workspace/tooling stories)
+  - Lint (not run; no root package or lint configuration exists yet)
+  - Tests (documentation validations passed; no project test runner exists yet)
+- Implementation agents:
+  - Recommended: `documentation-engineer`
+  - Used: skipped because standard mode budgets zero implementation agents for a straightforward documentation-only story
+- Specialist review:
+  - Agents used: `code-reviewer`, `documentation-engineer`
+  - Findings: none; both specialists returned empty actionable finding lists
+- Decisions (why):
+  - Documented both currently executable Compose commands and future Bun command contracts so the guide is useful now without claiming later-story tooling already exists.
+  - Kept application rules at repository scope because the planned package directories do not exist yet and all future modules need the same authority, privacy, and persistence invariants.
+  - Added an exact-message exception to the conventional commit rule because authorized automation workflows can require a specific commit message.
+- **Learnings for future iterations:**
+  - Root `AGENTS.md` is the repository-wide implementation authority; add narrower guidance only when a future module has genuinely directory-specific conventions.
+  - Validation must remain proportional while the workspace is absent: check documentation structure, links, and whitespace rather than creating later-story tooling early.
+- Known issues / follow-ups:
+  - Root typecheck, lint, formatting, and Vitest commands become available only after the workspace and quality-tooling stories.
+- Next iteration start:
+  - Implement US-005 by reviewing the project-local skills and aligning them with root `AGENTS.md`, Bun, Vitest, and Bingo-specific examples.
+---

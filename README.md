@@ -263,7 +263,7 @@ checks before committing.
 ## Contributing
 
 - Read the [product requirements](tasks/prd-private-realtime-bingo.md) and root
-  `AGENTS.md` after its implementation-guidance story is added.
+  [`AGENTS.md`](AGENTS.md) before making changes.
 - Work in dependency order and keep each change focused on one user story.
 - Obtain confirmation before dependency installation/changes, configuration
   changes, Docker configuration changes, or database migrations.
