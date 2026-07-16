@@ -4,6 +4,10 @@ Source: tasks/prd-private-realtime-bingo.md
 Completed: 0/63
 Next story: US-001
 
+## Codebase Patterns
+- Stories are dependency ordered; document planned commands explicitly when their workspace/tooling lands later, and do not invent unconfirmed configuration defaults.
+- Dependency installation, dependency changes, configuration changes, and database migrations require confirmation before execution.
+
 Append-only iteration log
 -------------------------
 
@@ -42,3 +46,37 @@ Append-only iteration log
 Review outcome for US-001:
 - Staged self-review completed with no actionable findings.
 - Residual risk is limited to the intentionally untested, code-free baseline; no application checks exist yet.
+
+## 2026-07-16 11:33:39 MST - US-002
+- What was implemented
+  - Added a complete root README covering the MVP, modular architecture, prerequisites, setup, confirmed runtime defaults, Docker and Bun command contracts, workspace boundaries, patterns/themes, authoritative reconnect behavior, privacy/security, checks, contribution rules, and required troubleshooting.
+  - Clearly marked the workspace, Compose stack, and package scripts as planned later stories so contributors are not told that unavailable commands currently work.
+- Files changed: `README.md`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-002 - Create the project README`
+- Checks:
+  - `ruby -e '<local Markdown link validation>'` (pass)
+  - External prerequisite documentation links fetched successfully (pass)
+  - `ruby -e '<required documented-command validation>'` (pass)
+  - `git diff --check` (pass)
+  - `test ! -e package.json && test ! -e tsconfig.json && test -z "$(git ls-files '*.ts' '*.tsx')"` (pass; confirms typecheck is not applicable before the dependency-ordered workspace/tooling stories)
+  - Lint (not run; no root package, lint configuration, or application source exists yet)
+  - Tests (documentation validation commands passed; no project test runner exists yet)
+- Implementation agents:
+  - Recommended: `documentation-engineer`
+  - Used: skipped because this was a straightforward documentation-only story and standard mode budgets zero implementation agents for trivial work
+- Specialist review:
+  - Agents used: `code-reviewer`, `documentation-engineer`; targeted re-review by `documentation-engineer`
+  - Findings: fixed the unconfirmed PostgreSQL Compose service name before commit; discarded metadata findings that conflicted with Ralph's required commit message and post-review PRD staging sequence
+- Decisions (why):
+  - Documented only the seven PRD-confirmed application defaults and deferred infrastructure-specific names/defaults because inventing them would constrain later Compose and runtime-configuration stories.
+  - Included future root commands as an explicit project contract with a bootstrap warning because US-002 requires command documentation before US-003, US-006, and US-007 create their implementations.
+  - Did not add documentation tooling, package configuration, or tests because doing so would cross later dependency-ordered stories and require configuration/dependency confirmation.
+  - Kept Ralph's exact required story commit message despite review suggestions to add a conventional scope because the iteration instructions take precedence.
+- **Learnings for future iterations:**
+  - The README is the contributor-facing source for the target command contract; later infrastructure, workspace, and quality-tooling stories must keep it synchronized with executable scripts and actual environment names/defaults.
+  - Root application checks remain unavailable until the workspace and quality-tooling stories; documentation-only iterations can still validate links, required command references, and whitespace without adding dependencies.
+- Known issues / follow-ups:
+  - Later stories must replace bootstrap caveats with concrete environment templates and verified commands as those assets are added.
+- Next iteration start:
+  - Implement US-003 only after obtaining the required Docker configuration confirmation, then update the README with the actual Compose environment names/defaults.
+---
