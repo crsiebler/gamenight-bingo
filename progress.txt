@@ -7,6 +7,7 @@ Next story: US-001
 ## Codebase Patterns
 - Stories are dependency ordered; document planned commands explicitly when their workspace/tooling lands later, and do not invent unconfirmed configuration defaults.
 - Dependency installation, dependency changes, configuration changes, and database migrations require confirmation before execution.
+- Local Compose data services bind to `127.0.0.1`; PostgreSQL is the only default service and future-only services must use explicit profiles.
 
 Append-only iteration log
 -------------------------
@@ -79,4 +80,46 @@ Review outcome for US-001:
   - Later stories must replace bootstrap caveats with concrete environment templates and verified commands as those assets are added.
 - Next iteration start:
   - Implement US-003 only after obtaining the required Docker configuration confirmation, then update the README with the actual Compose environment names/defaults.
+---
+
+## 2026-07-16 12:42:32 MST - US-003
+- What was implemented
+  - Added `compose.yaml` with PostgreSQL 16, configurable local database settings, a persistent named volume, and a readiness healthcheck.
+  - Added Redis behind the explicit `redis` profile without making it a default or MVP dependency, while keeping web and game-server processes outside Docker.
+  - Updated the README with the executable Compose lifecycle, environment defaults, loopback-only bindings, optional Redis command, persistence behavior, and PostgreSQL troubleshooting.
+- Files changed: `compose.yaml`, `README.md`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-003 - Add local Docker infrastructure`
+- Auto approval: `enabled`
+- Checks:
+  - `docker compose config --quiet` (pass)
+  - `test "$(docker compose config --services)" = "postgres"` (pass)
+  - `test "$(docker compose --profile redis config --services | paste -sd, -)" = "postgres,redis"` (pass)
+  - `POSTGRES_HOST_PORT=55432 ... docker compose -p gamenight-bingo-us003-check up -d --wait postgres` (pass; PostgreSQL became healthy)
+  - `docker compose -p gamenight-bingo-us003-check exec -T postgres pg_isready ...` (pass)
+  - `docker compose -p gamenight-bingo-us003-check exec -T postgres psql ... -c "SELECT 1;"` (pass)
+  - `docker compose -p gamenight-bingo-us003-check down` (pass; test container and network removed, named data volume retained by design)
+  - `git diff --check` (pass)
+  - `test ! -e package.json && test ! -e tsconfig.json && test -z "$(git ls-files '*.ts' '*.tsx')"` (pass; confirms typecheck is not applicable before the dependency-ordered workspace/tooling stories)
+  - Lint (not run; no root package, lint configuration, or application source exists yet)
+  - Tests (Compose model, profile behavior, PostgreSQL health, and live query validations passed; no project test runner exists yet)
+- Implementation agents:
+  - Recommended: `devops-engineer`, `database-administrator`
+  - Used: `devops-engineer`; skipped `database-administrator` because standard mode budgeted one useful adviser and the PostgreSQL configuration was directly verified with readiness and query checks
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, `security-engineer`
+  - Findings: no blocking findings; corrected the copy-safe profile assertion, retained the planned post-review `prd.json` manifest entry, and declined non-blocking digest pinning for the local development images
+- Decisions (why):
+  - Used explicit local-only defaults because this story establishes the Compose contract and the README clearly prohibits reusing the development password in hosted environments.
+  - Bound published ports to loopback because these services are for local development and do not need LAN exposure.
+  - Kept Redis defined but profile-gated because the PRD requires it to be available only for future optional work without affecting the MVP stack.
+  - Used PostgreSQL 16 and Redis 7 Alpine version tags rather than immutable digests because local development should receive compatible image security updates without manual digest maintenance.
+  - Skipped source-text unit tests because this is declarative infrastructure; Compose validation and a live PostgreSQL readiness/query check provide meaningful coverage instead.
+- **Learnings for future iterations:**
+  - `docker compose config --services` excludes the profile-gated Redis service by default and includes it only with `--profile redis`.
+  - PostgreSQL initialization variables apply when the named volume is first initialized; changing them later does not rewrite an existing database cluster.
+  - Root application typecheck, lint, and Vitest commands remain unavailable until the workspace and quality-tooling stories.
+- Known issues / follow-ups:
+  - The isolated health-check project intentionally retained its named volume, matching the documented non-destructive `docker compose down` behavior.
+- Next iteration start:
+  - Implement US-004 by creating root contributor/agent guidance aligned with the README and PRD conventions.
 ---

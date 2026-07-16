@@ -7,11 +7,11 @@ join from their own devices with lobby-unique usernames; accounts and chat are
 outside the MVP.
 
 > [!IMPORTANT]
-> The repository is being rebuilt in dependency-ordered stories. At the US-002
-> baseline it contains product documentation and source pattern PDFs, but the
-> workspace, Compose services, and package scripts described below have not yet
-> been added. The commands are the project contract and become executable as
-> those later stories land.
+> The repository is being rebuilt in dependency-ordered stories. It currently
+> contains product documentation, source pattern PDFs, and local Compose
+> services, but the workspace and package scripts described below have not yet
+> been added. Those commands are the project contract and become executable as
+> later stories land.
 
 ## MVP
 
@@ -74,8 +74,9 @@ gh auth status
 
 ## Setup
 
-Configuration and dependency changes require maintainer confirmation. Once the
-workspace and local infrastructure stories are present:
+Configuration and dependency changes require maintainer confirmation. Local
+infrastructure is available now; workspace commands become available in later
+stories:
 
 1. Clone the repository and enter its root directory.
 2. Confirm the prerequisites above, including `gh auth status`.
@@ -93,6 +94,14 @@ Docker lifecycle commands:
 docker compose up -d
 docker compose ps
 docker compose down
+```
+
+The default stack starts only the `postgres` service. Wait until its status is
+`healthy` in `docker compose ps` before starting application processes. Redis is
+reserved for future work and starts only when its profile is explicitly enabled:
+
+```sh
+docker compose --profile redis up -d
 ```
 
 `docker compose down` stops local services without deleting the named database
@@ -114,6 +123,24 @@ Runtime configuration is validated before either process serves traffic.
 Invalid integers, unsafe ranges, inconsistent timings, and missing required
 secrets must fail startup with actionable errors that do not reveal secrets.
 
+The local Compose settings are configurable through the shell environment:
+
+| Variable | Default | Purpose |
+| --- | ---: | --- |
+| `POSTGRES_HOST_PORT` | `5432` | PostgreSQL port exposed on the host |
+| `POSTGRES_DB` | `gamenight_bingo` | Local PostgreSQL database name |
+| `POSTGRES_USER` | `gamenight_bingo` | Local PostgreSQL username |
+| `POSTGRES_PASSWORD` | `gamenight_bingo` | Local-only PostgreSQL password |
+| `REDIS_HOST_PORT` | `6379` | Redis host port when the `redis` profile is enabled |
+
+For example, use `POSTGRES_HOST_PORT=55432 docker compose up -d` when port
+`5432` is occupied. The checked-in credentials are intentionally non-secret
+development defaults; override them as needed and never reuse them in hosted or
+production environments. Both data services bind only to `127.0.0.1` on the
+host. Changing PostgreSQL initialization variables does not update an existing
+named volume; use matching values or recreate local data only when data loss is
+intentional and explicitly approved.
+
 The confirmed application defaults are:
 
 | Variable | Default | Purpose |
@@ -126,11 +153,10 @@ The confirmed application defaults are:
 | `REALTIME_TICKET_TTL_SECONDS` | `60` | Lifetime of a single-use Socket.IO ticket |
 | `CO_WINNER_WINDOW_MS` | `2000` | Window for completions attributable to the latest call |
 
-Database credentials, database/host names, host ports, public origins, cookie
-secrets, and process ports are infrastructure-specific. Their names and local
-defaults will be defined by the Compose and runtime-configuration stories;
-until then, do not invent or commit values. Secret values have no repository
-default and belong only in approved local or hosted secret storage.
+Application database URLs, public origins, cookie secrets, and process ports are
+infrastructure-specific. Their names and defaults will be defined by the
+runtime-configuration story. Actual secret values have no repository default
+and belong only in approved local or hosted secret storage.
 
 ## Workspace
 
@@ -263,8 +289,8 @@ Examples include `feat(patterns): add canonical shape masks`,
 
 ### PostgreSQL Is Unhealthy
 
-Run `docker compose ps`, note the PostgreSQL service name, then inspect it with
-`docker compose logs <postgres-service-name>`. Confirm Docker has enough
+Run `docker compose ps`, then inspect the `postgres` service with
+`docker compose logs postgres`. Confirm Docker has enough
 disk/memory, the configured database/user/password agree with the application
 connection URL, and the host port is not occupied. Restart with
 `docker compose down` followed by `docker compose up -d`; do not delete the
