@@ -6,3 +6,39 @@ Next story: US-001
 
 Append-only iteration log
 -------------------------
+
+## 2026-07-16 01:31:51 MST - US-001
+- What was implemented
+  - Verified the user-authorized baseline retains the deleted outdated Next.js scaffold, added PDFs under `docs/`, AI skills under `.opencode/`, and this PRD.
+  - Confirmed the baseline was already committed before implementation as `chore(project): establish clean project baseline` and the worktree remained clean.
+- Files changed: `progress.txt`, `prd.json`
+- Commit message: `feat: US-001 - Commit the authorized project baseline`
+- Checks:
+  - `git status` (pass)
+  - `git diff` (pass)
+  - `git log --oneline -10` (pass)
+  - Secret-pattern scan of tracked text files (pass)
+  - Typecheck (not run; application code and configuration were intentionally removed)
+  - Lint (not run; application code and configuration were intentionally removed)
+  - Tests (not run; US-001 explicitly requires no tests)
+- Implementation agents:
+  - Recommended: none
+  - Used: skipped because this was a trivial baseline verification story with no implementation work
+- Specialist review:
+  - Agents used: Ralph self-review, as required for trivial changes in standard mode
+  - Findings: pending staged-diff review
+- Decisions (why):
+  - Reused the existing exact baseline commit instead of duplicating it because `ae87476` already satisfies the story's required baseline commit and no implementation followed it.
+  - Preserved every authorized deletion and addition because the baseline commit exactly matches the story scope.
+- **Learnings for future iterations:**
+  - The intentional baseline contains no application workspace or quality-tool configuration; subsequent stories establish those assets in dependency order.
+  - Binary PDF whitespace reported by `git diff --check` is embedded PDF data, not editable source whitespace.
+- Known issues / follow-ups:
+  - None for this story.
+- Next iteration start:
+  - Implement US-002, beginning with the README requirements and current baseline contents.
+---
+
+Review outcome for US-001:
+- Staged self-review completed with no actionable findings.
+- Residual risk is limited to the intentionally untested, code-free baseline; no application checks exist yet.
