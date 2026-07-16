@@ -8,10 +8,9 @@ outside the MVP.
 
 > [!IMPORTANT]
 > The repository is being rebuilt in dependency-ordered stories. It currently
-> contains product documentation, source pattern PDFs, and local Compose
-> services, but the workspace and package scripts described below have not yet
-> been added. Those commands are the project contract and become executable as
-> later stories land.
+> includes the Bun workspace, strict TypeScript checks, source pattern PDFs, and
+> local Compose services. Framework runtimes and the broader quality-tooling
+> commands described below become executable as their later stories land.
 
 ## MVP
 
@@ -75,8 +74,8 @@ gh auth status
 ## Setup
 
 Configuration and dependency changes require maintainer confirmation. Local
-infrastructure is available now; workspace commands become available in later
-stories:
+infrastructure and workspace checks are available now; application runtimes
+become available in later stories:
 
 1. Clone the repository and enter its root directory.
 2. Confirm the prerequisites above, including `gh auth status`.
@@ -115,7 +114,9 @@ bun run dev:web
 bun run dev:game-server
 ```
 
-The processes run locally through Bun, not in the default Compose stack.
+These commands become executable when their application runtime stories land;
+no placeholder process is provided by the workspace scaffold. The processes
+run locally through Bun, not in the default Compose stack.
 
 ## Environment
 
@@ -160,7 +161,7 @@ and belong only in approved local or hosted secret storage.
 
 ## Workspace
 
-The planned Bun workspace keeps runtime and domain concerns explicit:
+The Bun workspace keeps runtime and domain concerns explicit:
 
 ```text
 apps/
@@ -178,7 +179,9 @@ packages/
 
 Domain code must not import React, Next.js, Prisma, or Socket.IO. HTTP and
 realtime adapters validate contracts, invoke domain/application behavior, and
-return committed results.
+return committed results. `bun run test:workspace-boundaries` enforces the
+domain restriction through TypeScript AST inspection and verifies the expected
+workspace structure.
 
 ## Patterns And Themes
 
@@ -243,11 +246,18 @@ active. Reconnect never automatically resumes paused calls.
 
 ## Checks And Tests
 
-Run the project checks from the repository root after the quality-tooling story
-has established the scripts:
+Install the locked workspace dependencies and run the currently available
+checks from the repository root:
 
 ```sh
+bun install --frozen-lockfile
+bun run test:workspace-boundaries
 bun run typecheck
+```
+
+The quality-tooling story adds the remaining root checks:
+
+```sh
 bun run lint
 bun run format:check
 bun run test

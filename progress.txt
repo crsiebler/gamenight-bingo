@@ -9,6 +9,10 @@ Next story: US-001
 - Dependency installation, dependency changes, configuration changes, and database migrations require confirmation before execution.
 - Local Compose data services bind to `127.0.0.1`; PostgreSQL is the only default service and future-only services must use explicit profiles.
 - Project-local skills live under `.opencode/.opencode/skills`; they reference root `AGENTS.md`, use Bun scripts with Vitest, and report unavailable later-story tooling instead of creating it early.
+- Workspace packages use the `@gamenight-bingo/*` namespace, extend `tsconfig.base.json`, and expose only compileable source entry points until their dependency-ordered implementation stories land; root workspaces are restricted to exactly `apps/*` and `packages/*`, and new package directories under them must be added to the validated workspace contract.
+- Run `bun run test:workspace-boundaries` after workspace-manifest or domain-import changes; the TypeScript AST guard checks static, type-only, dynamic, direct CommonJS (including TypeScript-transparent and comma loader expressions), JSDoc, and triple-slash references with normalized path separators without matching ordinary comments or strings.
+- Boundary parsing must use the source file's actual script kind and fail closed on syntax errors; workspace checks also require real `tsc` scripts without strictness downgrades, prohibit shared/domain module aliases, `rootDirs`, and `moduleSuffixes`, constrain relative source and root/nested package-resolution targets to `packages/domain/src`, and reject source/reference symlinks across TypeScript declaration and JavaScript-extension resolution candidates plus escaping absolute, file-URL, relative, type-reference, file-reference, and AMD dependency paths.
+- Workspace typechecks must cover every discovered `src` file without inherited or implicit exclusions, verified against TypeScript's parsed effective file set, and must reject all parsed configuration diagnostics while retaining effective `noEmit` with `outDir`/`declarationDir` outside `src`; domain source also rejects JavaScript and `@ts-nocheck`. Shared/domain TypeScript configuration cannot inherit or synthesize implicit module imports, and domain bare imports plus package-valued type/AMD directives must be Node built-ins, self-references, or declared dependencies without traversal segments and validated against forbidden runtime or type-package aliases.
 
 Append-only iteration log
 -------------------------
@@ -193,3 +197,462 @@ Review outcome for US-001:
 - Next iteration start:
   - Implement US-006 by establishing the approved Bun workspace and strict TypeScript package boundaries.
 ---
+
+## 2026-07-16 13:12:07 MST - US-006
+- What was implemented
+  - Established the private Bun workspace with `apps/web`, `apps/game-server`, and the seven required responsibility-focused packages under the `@gamenight-bingo/*` namespace.
+  - Added strict shared TypeScript configuration and per-workspace typecheck scripts with compile-only entry points, without creating premature application or package behavior.
+  - Added a TypeScript AST-based boundary checker and executable matcher tests that reject React, Next.js, Prisma, and Socket.IO references from domain source and dependencies.
+  - Updated repository documentation and guidance for the now-available install, boundary, and typecheck commands while retaining later-story runtime and quality-tooling caveats.
+- Files changed: `.gitignore`, `package.json`, `bun.lock`, `tsconfig.base.json`, `scripts/check-workspace-boundaries.mjs`, `scripts/check-workspace-boundaries.test.mjs`, `apps/*/package.json`, `apps/*/tsconfig.json`, `apps/*/src/index.ts`, `packages/*/package.json`, `packages/*/tsconfig.json`, `packages/*/src/index.ts`, `README.md`, `AGENTS.md`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-006 - Establish the modular workspace`
+- Auto approval: `enabled`
+- Checks:
+  - `bun scripts/check-workspace-boundaries.test.mjs` (expected fail before implementation: checker module missing)
+  - `bun install --frozen-lockfile` (pass)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run typecheck` (pass; all nine workspaces)
+  - `bun pm ls --all` (pass; all nine workspaces and pinned TypeScript resolved)
+  - `git diff --check` (pass)
+  - Lint/format/Vitest (not run; US-007 intentionally introduces those tools)
+- Implementation agents:
+  - Recommended: `build-engineer`, `typescript-pro`
+  - Used: `build-engineer`, `typescript-pro` for workspace shape, strict compiler options, boundary strategy, and validation guidance
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, `documentation-engineer`; targeted re-review by `code-reviewer` and `qa-expert`
+  - Findings: initial type-reference/JSDoc import-type and relative dynamic/CommonJS bypasses were fixed, but targeted re-review found remaining medium bypasses for JSDoc `@import`, relative `types=` directives, and backslash-relative specifiers; commit blocked by the one-re-review limit
+- Decisions (why):
+  - Used compile-only `export {}` entry points rather than framework/server/package placeholders because later dependency-ordered stories own actual behavior.
+  - Used Bun workspace filtering for no-emit per-package typechecks instead of TypeScript project references because the current packages have no dependency graph and project references would require generated build artifacts.
+  - Pinned TypeScript 5.9.3 instead of the initially resolved 7.0.2 because TypeScript 7 exposes its AST API through explicitly unstable entry points, while the stable compiler API is appropriate for the boundary guard.
+  - Kept the boundary suite as directly executable assertions rather than introducing Vitest early because US-007 owns the test framework configuration.
+- **Learnings for future iterations:**
+  - Bun's `--filter '@gamenight-bingo/*'` runs the shared `typecheck` script across all workspace packages from the root.
+  - TypeScript compiler options and workspace package exports do not enforce architectural import restrictions by themselves; the AST guard is the mechanical domain boundary.
+  - Framework-specific types and dependencies should be added only to the workspace that needs them rather than broadening the shared base configuration.
+- Known issues / follow-ups:
+  - Resolve and regression-test JSDoc `@import` module references, relative triple-slash `types=` directives, and backslash-relative static/dynamic/CommonJS specifiers before re-running the staged review loop.
+  - US-006 remains `passes: false` and no commit was created because medium findings remained after the allowed targeted re-review.
+  - Root lint, formatting, generic Vitest, and Git-hook commands remain unavailable until US-007.
+  - Web and game-server development scripts remain unavailable until their runtime implementation stories; no no-op scripts were added.
+- Next iteration start:
+  - Resume US-006 by fixing the three targeted re-review bypasses, rerunning boundary/type checks, and restarting the staged review loop.
+---
+
+## 2026-07-16 13:24:21 MST - US-006
+- What was implemented
+  - Resumed the blocked workspace story and added regression coverage for JSDoc `@import`, escaping triple-slash `types=` directives, and backslash-relative module specifiers.
+  - Extended the TypeScript AST boundary guard to inspect JSDoc import tags, constrain relative type references to `packages/domain`, and normalize path separators before containment checks.
+  - Preserved the existing workspace, strict TypeScript configuration, package boundaries, and dependency-ordered runtime/tooling scope.
+- Files changed: `.gitignore`, `package.json`, `bun.lock`, `tsconfig.base.json`, `scripts/check-workspace-boundaries.mjs`, `scripts/check-workspace-boundaries.test.mjs`, `apps/*/package.json`, `apps/*/tsconfig.json`, `apps/*/src/index.ts`, `packages/*/package.json`, `packages/*/tsconfig.json`, `packages/*/src/index.ts`, `README.md`, `AGENTS.md`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-006 - Establish the modular workspace`
+- Auto approval: `enabled`
+- Checks:
+  - `bun scripts/check-workspace-boundaries.test.mjs` (expected fail: JSDoc `@import` was not detected)
+  - Targeted boundary probes (expected fail: escaping `types=` and backslash-relative imports returned no violations)
+  - `bun scripts/check-workspace-boundaries.test.mjs` (pass after implementation)
+  - `bun install --frozen-lockfile` (pass; no changes)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run typecheck` (pass; all nine workspaces)
+  - `bun pm ls --all` (pass; all nine workspaces and TypeScript 5.9.3 resolved)
+  - `git diff --check && git diff --cached --check` (pass)
+  - Lint/format/Vitest (not run; US-007 intentionally introduces those tools)
+- Implementation agents:
+  - Recommended: `build-engineer`, `typescript-pro`
+  - Used: no additional agents; both recommended agents were already used for this story, and the resumed fixes followed their guidance plus concrete prior review findings
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, `security-engineer` planned for the complete staged workspace/configuration diff
+  - Findings: pending staged-diff review
+- Decisions (why):
+  - Normalized backslashes only for containment analysis while retaining the original specifier in diagnostics so the guard is platform-independent without rewriting source.
+  - Added the missing constructs to the existing AST traversal instead of introducing text matching because semantic references should be rejected without false positives from comments or ordinary strings.
+  - Restarted the review loop because the prior iteration correctly stopped after its one permitted targeted re-review still found blocking issues.
+- **Learnings for future iterations:**
+  - TypeScript exposes JSDoc `@import` as `JSDocImportTag.moduleSpecifier`; ordinary import-type handling does not cover it.
+  - Triple-slash `types=` directives are stored separately from `referencedFiles`, so relative containment checks must cover both directive collections.
+  - POSIX path resolution treats backslashes as ordinary characters; normalize module separators before testing whether a relative reference escapes a package.
+- Known issues / follow-ups:
+  - Root lint, formatting, generic Vitest, and Git hooks remain intentionally unavailable until US-007.
+  - Web and game-server runtime commands remain intentionally unavailable until their implementation stories.
+- Next iteration start:
+  - If review passes, implement US-007 quality tooling and Git hooks; otherwise resume the recorded blocking finding.
+---
+
+Review remediation for US-006 at 2026-07-16 13:30:43 MST:
+- Initial specialist review used `code-reviewer`, `qa-expert`, and `security-engineer` against the complete staged diff.
+- Merged blocking findings identified two root causes: triple-slash `path=` references did not normalize backslashes, and computed CommonJS require forms bypassed loader inspection.
+- Fixed both root causes with failing regression tests first, then also canonicalized forbidden package-name casing/separators and covered the direct `module.require.call` equivalent raised by security review.
+- Added the QA review's non-blocking dependency-section coverage because it was specific, cheap, and directly exercised existing boundary behavior.
+- Broader arbitrary loader-alias dataflow analysis was not added because the local syntax guard is scoped to semantic module references and direct loader forms; implementing a whole-program resolver would be disproportionate to this workspace story.
+- Post-fix checks: `bun run test:workspace-boundaries` (pass), `bun run typecheck` (pass for all nine workspaces), and `git diff --check && git diff --cached --check` (pass).
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` review of the revised complete staged diff.
+
+Targeted re-review outcome for US-006 at 2026-07-16 13:33:07 MST:
+- `code-reviewer` and `qa-expert` returned no actionable findings.
+- `security-engineer` found one remaining medium direct-loader bypass: parenthesized `require`, `module.require`, and computed `module["require"]` expressions are not unwrapped before loader matching.
+- Targeted probes confirmed all reported parenthesized literal and nonliteral forms currently return no violations.
+- Per the one-targeted-re-review limit, US-006 remains `passes: false`; no commit was created and the PRD was not updated.
+- Next iteration start: add failing regressions for parenthesized direct loaders, unwrap parenthesized expressions before CommonJS matching, rerun all US-006 checks, and restart the staged review loop.
+
+## 2026-07-16 13:35:21 MST - US-006
+- What was implemented
+  - Resumed the workspace story by adding regression coverage for parenthesized `require`, `module.require`, computed `module["require"]`, and direct `.call(...)` forms with literal and non-literal arguments.
+  - Unwrapped parenthesized expressions before direct CommonJS loader matching, closing the final bypass reported by the prior targeted security review.
+  - Preserved the established modular workspace, strict TypeScript configuration, and focused direct-reference boundary scope.
+- Files changed: `.gitignore`, `package.json`, `bun.lock`, `tsconfig.base.json`, `scripts/check-workspace-boundaries.mjs`, `scripts/check-workspace-boundaries.test.mjs`, `apps/*/package.json`, `apps/*/tsconfig.json`, `apps/*/src/index.ts`, `packages/*/package.json`, `packages/*/tsconfig.json`, `packages/*/src/index.ts`, `README.md`, `AGENTS.md`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-006 - Establish the modular workspace`
+- Auto approval: `enabled`
+- Checks:
+  - `bun scripts/check-workspace-boundaries.test.mjs` (expected fail before implementation: `(require)("react")` returned no violation)
+  - `bun scripts/check-workspace-boundaries.test.mjs` (pass after implementation)
+  - `bun install --frozen-lockfile` (pass; no changes)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run typecheck` (pass; all nine workspaces)
+  - `bun pm ls --all` (pass; all nine workspaces and TypeScript 5.9.3 resolved)
+  - `git diff --check && git diff --cached --check` (pass)
+  - Lint/format/Vitest (not run; US-007 intentionally introduces those tools)
+- Implementation agents:
+  - Recommended: `build-engineer`, `typescript-pro`
+  - Used: skipped in this resumed iteration because both recommended agents already advised this story and the remaining work was a concrete, narrowly scoped prior-review finding
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, `security-engineer` planned for the complete staged workspace/configuration diff
+  - Findings: pending staged-diff review
+- Decisions (why):
+  - Unwrapped only parenthesized expressions in the existing direct-loader matcher because that closes the demonstrated bypass without expanding into disproportionate whole-program alias analysis.
+  - Covered both forbidden literals and non-literal arguments because the checker must reject framework references and indeterminate direct loaders through the same parenthesized syntax.
+  - Did not add nested `AGENTS.md` guidance because the existing root guide already defines the reusable domain-boundary and validation contracts.
+- **Learnings for future iterations:**
+  - Parentheses change the TypeScript AST shape of a call target; direct loader matchers must unwrap `ParenthesizedExpression` nodes before checking identifiers or property access.
+  - Regression tests should cover both literal forbidden imports and non-literal loader arguments when adding a recognized loader syntax.
+- Known issues / follow-ups:
+  - Root lint, formatting, generic Vitest, and Git hooks remain intentionally unavailable until US-007.
+  - Web and game-server runtime commands remain intentionally unavailable until their implementation stories.
+- Next iteration start:
+  - If review passes, implement US-007 quality tooling and Git hooks; otherwise resume the recorded blocking finding.
+---
+
+Review remediation for US-006 at 2026-07-16 13:44:49 MST:
+- Initial specialist review used `code-reviewer`, `qa-expert`, and `security-engineer` against the complete staged diff.
+- Merged blocking findings identified six root causes: incomplete parenthesis normalization across direct CommonJS target components, incorrect all-TSX parsing without fail-closed diagnostics, absolute/file-URL and source-symlink containment gaps, omitted AMD dependency directives, and missing enforcement of strict base/typecheck workspace configuration.
+- Added failing regressions for each reported syntax, parser, filesystem, directive, configuration, and symlink behavior before implementing the fixes.
+- Centralized parenthesis unwrapping for the full direct CommonJS target, receiver, computed key, and `.call` path; inferred script kind by extension and converted parse diagnostics into violations.
+- Rejected absolute paths/file URLs and domain-source symlinks, applied containment checks across direct/type/file/AMD references, inspected forbidden AMD dependencies, and validated strict base configuration plus each workspace's base extension and typecheck script.
+- Updated root `AGENTS.md` and Codebase Patterns with the reusable fail-closed parsing, containment, and configuration-validation contracts.
+- Post-fix checks: `bun scripts/check-workspace-boundaries.test.mjs` (pass), `bun run test:workspace-boundaries` (pass), `bun run typecheck` (pass for all nine workspaces), `bun pm ls --all` (pass), and `git diff --check && git diff --cached --check` (pass).
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` review of the revised complete staged diff because the fixes touched each original specialist area.
+
+Targeted re-review outcome for US-006 at 2026-07-16 13:49:43 MST:
+- `code-reviewer`, `qa-expert`, and `security-engineer` reviewed the revised complete staged diff.
+- Merged blocking findings identified three remaining medium root causes: computed `require["call"]`/`module.require["call"]` targets bypass direct CommonJS detection; symlink rejection does not cover the `packages/domain/src` root or referenced paths elsewhere under `packages/domain`; and workspace validation accepts no-op typecheck scripts plus local `strict: false` overrides.
+- The findings are in scope because they directly weaken the claimed direct-loader, filesystem-containment, and strict-TypeScript acceptance criteria.
+- Per the one-targeted-re-review limit, US-006 remains `passes: false`; no commit was created and the PRD was not updated.
+- Next iteration start: add failing regressions for computed `call` access, root/relative-target symlinks, no-op typecheck scripts, and strictness overrides; implement the narrow fixes, rerun all US-006 checks, and restart the staged review loop.
+
+## 2026-07-16 13:53:52 MST - US-006
+- What was implemented
+  - Resumed the workspace story and closed the recorded computed `require["call"]`, source-root/reference symlink, no-op typecheck, and local strictness-downgrade gaps.
+  - Unified static property and element access recognition for direct CommonJS loaders, including literal and non-literal computed `.call` forms.
+  - Required the established real `tsc` command in every workspace, rejected local strict-family options set to false, and checked relative domain targets plus the source root for symlink traversal.
+- Files changed: `.gitignore`, `package.json`, `bun.lock`, `tsconfig.base.json`, `scripts/check-workspace-boundaries.mjs`, `scripts/check-workspace-boundaries.test.mjs`, `apps/*/package.json`, `apps/*/tsconfig.json`, `apps/*/src/index.ts`, `packages/*/package.json`, `packages/*/tsconfig.json`, `packages/*/src/index.ts`, `README.md`, `AGENTS.md`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-006 - Establish the modular workspace`
+- Auto approval: `enabled`
+- Checks:
+  - `bun scripts/check-workspace-boundaries.test.mjs` (expected fail before implementation: `require["call"]` returned no violation)
+  - `bun scripts/check-workspace-boundaries.test.mjs` (pass after implementation)
+  - `bun install --frozen-lockfile` (pass; no changes)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run typecheck` (pass; all nine workspaces)
+  - `bun pm ls --all` (pass; all nine workspaces and TypeScript 5.9.3 resolved)
+  - `git diff --check && git diff --cached --check` (pass)
+  - Lint/format/Vitest (not run; US-007 intentionally introduces those tools, and the executable boundary regression suite is the available affected test)
+- Implementation agents:
+  - Recommended: `build-engineer`, `typescript-pro`
+  - Used: skipped in this resumed iteration because both recommended agents already advised US-006 and the remaining changes directly implement concrete prior specialist findings
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and `security-engineer`; targeted re-review by the same specialists planned after substantive fixes
+  - Findings: initial bare-package traversal, framework type-package, unexpected-workspace, and remaining direct CommonJS loader findings were fixed before targeted re-review
+- Decisions (why):
+  - Reused one static-member parser for dotted and computed CommonJS access because both forms represent the same direct loader boundary and should not drift.
+  - Enforced the workspace's established `tsc --project tsconfig.json --pretty false` command exactly because accepting arbitrary nonempty scripts allowed checks that never invoked TypeScript or masked failures.
+  - Inspected symlinks only along source and referenced domain paths rather than rejecting unrelated repository symlinks because the boundary risk is filesystem traversal from domain code.
+- **Learnings for future iterations:**
+  - TypeScript element access with a static string key must receive the same boundary treatment as dotted property access, including nested `require` and `call` members.
+  - Lexical path containment is insufficient when a contained path segment can be a symlink; inspect the source root and each referenced path segment without following symlinked source trees.
+  - Strict inheritance can be weakened by workspace compiler overrides, so boundary validation must reject false strict-family options as well as a false top-level `strict` value.
+- Known issues / follow-ups:
+  - Root lint, formatting, generic Vitest, and Git hooks remain intentionally unavailable until US-007.
+  - Web and game-server runtime commands remain intentionally unavailable until their implementation stories.
+- Next iteration start:
+  - If review passes, implement US-007 quality tooling and Git hooks; otherwise resume the recorded blocking finding.
+---
+
+Review remediation for US-006 at 2026-07-16 16:01:55 MST:
+- Initial specialist review used `code-reviewer`, `qa-expert`, and `security-engineer` against the complete staged diff.
+- The merged blocking findings identified four medium root causes: traversal segments in declared/self package imports, incomplete forbidden framework `@types` families, package directories matched by workspace globs but omitted from validation, and remaining direct CommonJS loader-value forms.
+- Added failing regressions before implementation for slash/backslash package traversal, runtime/type-package variants, recursively bound loaders, constant-computed `module.require`, direct loader values and standard invocation helpers, and unexpected workspace paths.
+- Rejected traversal before declared-package lookup, expanded forbidden type-package families, rejected unexpected package workspaces, recursively reduced bound bind functions, statically evaluated constant member names, and failed closed when a direct CommonJS loader value is not part of a modeled invocation.
+- Post-fix checks: `bun scripts/check-workspace-boundaries.test.mjs` (pass), `bun run test:workspace-boundaries` (pass), `bun run typecheck` (pass for all nine workspaces), `bun pm ls --all` (pass), and `git diff --check && git diff --cached --check` (pass).
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` review because the fixes affected every original specialist area.
+
+Targeted re-review outcome for US-006 at 2026-07-16 16:05:58 MST:
+- `code-reviewer`, `qa-expert`, and `security-engineer` confirmed the initial traversal, type-package, expected-workspace-directory, and direct-loader-form fixes but identified two remaining medium root causes.
+- Direct loader-value suppression currently accepts any loader node nested below a recognized loader-call ancestor, including unrelated extra-argument subtrees such as `require("node:path", Reflect.apply(require, null, ["react"]))`; the exemption must be limited to nodes structurally consumed by the modeled callee/receiver path.
+- The root configuration requires the two approved workspace globs but permits additional globs such as `tools/*`, while discovery validates only `apps/*` and `packages/*`; the configured workspace-glob set must be restricted to exactly the supported pair or every configured glob must be resolved and validated.
+- These findings remain in scope because both allow code selected by the configured workspace or a direct loader path to bypass the claimed mechanical boundary.
+- Per the one-targeted-re-review limit, US-006 remains `passes: false`; no commit was created and `prd.json` was not updated.
+- Next iteration start: add failing regressions for loader values in unrelated direct/`call`/`apply` argument subtrees and extra root workspace globs; constrain loader exemptions to the modeled operand path and require the approved workspace-glob set exactly; rerun all checks and restart the staged review loop.
+
+Review remediation for US-006 at 2026-07-16 14:02:06 MST:
+- Initial specialist review used `code-reviewer`, `qa-expert`, and `security-engineer` against the complete staged diff.
+- Merged blocking findings identified four medium root causes: TypeScript-transparent expressions bypassed direct loader matching; direct CommonJS `.apply` calls were not inspected; extensionless/directory references did not inspect resolved symlink candidates; and ESM URL normalization could turn encoded contained paths into escapes.
+- Added failing regressions before implementation for transparent wrappers, `.apply` literal/non-literal arguments, extensionless and directory symlink candidates, encoded dot-segment/separator paths, query/fragment ambiguity, and separate CommonJS path semantics.
+- Unwrapped transparent TypeScript expression nodes, recognized static dotted/computed `.apply` calls, canonicalized ESM references through file URLs, and checked supported extension/index candidates for symlink traversal.
+- Post-fix checks: `bun run test:workspace-boundaries` (pass), `bun run typecheck` (pass for all nine workspaces), `bun pm ls --all` (pass), and `git diff --check && git diff --cached --check` (pass).
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` review because each original specialist area was affected by the substantive fixes.
+
+Targeted re-review outcome for US-006 at 2026-07-16 14:05:48 MST:
+- `qa-expert` returned no actionable findings; `code-reviewer` and `security-engineer` identified two deduplicated medium root causes that remain in scope.
+- TypeScript instantiation expressions such as `(require<string>)("react")` remain transparent at runtime but are represented as `ExpressionWithTypeArguments`, which the direct-loader unwrapping does not yet cover.
+- Symlink candidate generation omits declaration files and TypeScript extension substitution, so extensionless imports resolving to `.d.ts` and `.js` specifiers resolving to `.ts` can avoid referenced-path symlink inspection.
+- Per the one-targeted-re-review limit, US-006 remains `passes: false`; no commit was created and `prd.json` was not updated.
+- Next iteration start: add failing literal/non-literal regressions for instantiation-wrapped direct/call/apply loaders and filesystem regressions for `.d.ts` plus `.js`-to-TypeScript resolution candidates, implement the narrow fixes, rerun all checks, and restart the staged review loop.
+
+## 2026-07-16 14:09:01 MST - US-006
+- What was implemented
+  - Resumed the modular-workspace story and added regression coverage for instantiation-wrapped direct, `.call`, and `.apply` CommonJS loaders with literal and non-literal arguments.
+  - Treated TypeScript `ExpressionWithTypeArguments` nodes as transparent loader expressions and expanded symlink checks to declaration files plus TypeScript's `.js`, `.jsx`, `.mjs`, and `.cjs` extension substitutions.
+  - Preserved the established strict workspace, package boundaries, and dependency-ordered runtime/tooling scope.
+- Files changed: `.gitignore`, `package.json`, `bun.lock`, `tsconfig.base.json`, `scripts/check-workspace-boundaries.mjs`, `scripts/check-workspace-boundaries.test.mjs`, `apps/*/package.json`, `apps/*/tsconfig.json`, `apps/*/src/index.ts`, `packages/*/package.json`, `packages/*/tsconfig.json`, `packages/*/src/index.ts`, `README.md`, `AGENTS.md`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-006 - Establish the modular workspace`
+- Auto approval: `enabled`
+- Checks:
+  - `bun scripts/check-workspace-boundaries.test.mjs` (expected fail before implementation: `(require<string>)("react")` returned no violation)
+  - Targeted declaration/extension-substitution probe (expected fail before implementation: `.d.ts` and `.js`-to-`.ts` symlink candidates returned no violations)
+  - `bun install --frozen-lockfile` (pass; no changes)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run typecheck` (pass; all nine workspaces)
+  - `bun pm ls --all` (pass; all nine workspaces and TypeScript 5.9.3 resolved)
+  - `git diff --check && git diff --cached --check` (pass)
+  - Lint/format/Vitest (not run; US-007 intentionally introduces those tools, and the executable boundary regression suite is the available affected test)
+- Implementation agents:
+  - Recommended: `build-engineer`, `typescript-pro`
+  - Used: skipped in this resumed iteration because both recommended agents already advised US-006 and the remaining work directly addressed concrete prior specialist findings
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and `security-engineer`; targeted re-review by `code-reviewer` and `security-engineer` planned after substantive fixes
+  - Findings: initial review findings for unscanned reachable source, comma-wrapped loaders, and module aliases were fixed; targeted re-review found remaining `rootDirs` and package-resolution redirect gaps
+- Decisions (why):
+  - Reused the existing transparent-expression normalization because instantiation expressions alter only TypeScript typing and do not change the runtime loader target.
+  - Modeled TypeScript's extension substitutions explicitly instead of checking only the written path because a contained import can resolve through a symlinked `.d.ts`, `.ts`, `.tsx`, `.mts`, or `.cts` candidate.
+  - Did not add application behavior, framework dependencies, linting, formatting, or Vitest because those belong to later dependency-ordered stories.
+- **Learnings for future iterations:**
+  - TypeScript represents instantiation expressions such as `require<string>` as `ExpressionWithTypeArguments`; direct-loader analysis must unwrap that node before matching the runtime expression.
+  - Symlink containment checks must inspect declaration files and TypeScript extension substitutions, not only the literal import path and simple extensionless implementation files.
+- Known issues / follow-ups:
+  - Root lint, formatting, generic Vitest, and Git hooks remain intentionally unavailable until US-007.
+  - Web and game-server runtime commands remain intentionally unavailable until their implementation stories.
+- Next iteration start:
+  - If review passes, implement US-007 quality tooling and Git hooks; otherwise resume the recorded blocking finding.
+---
+
+Review remediation for US-006 at 2026-07-16 14:16:48 MST:
+- Initial specialist review used `code-reviewer`, `qa-expert`, and `security-engineer` against the complete staged diff.
+- `qa-expert` returned no actionable findings; the merged blocking findings identified three medium root causes: relative references could reach unscanned source outside `packages/domain/src`, comma expressions could wrap direct CommonJS loaders, and TypeScript/package aliases could hide forbidden or escaping targets.
+- Added failing regressions first for import and triple-slash escapes from the source root, literal/non-literal comma-wrapped direct/call/apply loaders, shared/domain TypeScript aliases, and domain package import aliases.
+- Constrained source references to `packages/domain/src`, unwrapped comma expressions through their runtime right operand, and rejected aliases inherited by or declared for the domain workspace while preserving workspace-local aliases elsewhere.
+- Post-fix checks: `bun scripts/check-workspace-boundaries.test.mjs` (pass), `bun run test:workspace-boundaries` (pass), `bun run typecheck` (pass for all nine workspaces), `bun pm ls --all` (pass), and `git diff --check && git diff --cached --check` (pass).
+- Targeted re-review: pending `code-reviewer` and `security-engineer` review because the fixes addressed their findings; `qa-expert` is not repeated because its initial findings list was empty.
+
+Targeted re-review outcome for US-006 at 2026-07-16 14:22:27 MST:
+- `code-reviewer` and `security-engineer` reviewed the revised complete staged diff; both confirmed the initial three findings were addressed.
+- The merged blocking findings identified two remaining medium root causes: shared/domain `rootDirs` can redirect an apparently contained import to unscanned source, and package resolution metadata can redirect relative package-directory or domain self-references to unscanned targets outside `packages/domain/src`.
+- These findings remain in scope because they materially bypass the mechanical domain-import boundary required by US-006.
+- Per the one-targeted-re-review limit, US-006 remains `passes: false`; no commit was created and `prd.json` was not updated.
+- Next iteration start: add failing regressions for shared/domain `rootDirs`, nested relative package `types`/`main` redirects, and domain self-reference `exports` redirects; either reject the redirecting configuration or resolve and constrain every static target to `packages/domain/src`, then rerun all checks and restart the staged review loop.
+
+## 2026-07-16 14:25:33 MST - US-006
+- What was implemented
+  - Resumed the modular-workspace story and added regressions for inherited/local `rootDirs`, escaping domain self-reference exports, and nested package `main`/`types` redirects.
+  - Rejected shared or domain `rootDirs`, recursively inspected root and nested domain package manifests, and constrained package resolution targets and their symlink candidates to `packages/domain/src`.
+  - Preserved the existing safe `./src/index.ts` domain export and the established strict workspace structure.
+- Files changed: `.gitignore`, `package.json`, `bun.lock`, `tsconfig.base.json`, `scripts/check-workspace-boundaries.mjs`, `scripts/check-workspace-boundaries.test.mjs`, `apps/*/package.json`, `apps/*/tsconfig.json`, `apps/*/src/index.ts`, `packages/*/package.json`, `packages/*/tsconfig.json`, `packages/*/src/index.ts`, `README.md`, `AGENTS.md`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-006 - Establish the modular workspace`
+- Auto approval: `enabled`
+- Checks:
+  - `bun scripts/check-workspace-boundaries.test.mjs` (expected fail before implementation: domain `rootDirs` returned no configuration error)
+  - `bun install --frozen-lockfile` (pass; no changes)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run typecheck` (pass; all nine workspaces)
+  - `bun pm ls --all` (pass; all nine workspaces and TypeScript 5.9.3 resolved)
+  - `git diff --check && git diff --cached --check` (pass)
+  - Lint/format/Vitest (not run; US-007 intentionally introduces those tools, and the executable boundary regression suite is the available affected test)
+- Implementation agents:
+  - Recommended: `build-engineer`, `typescript-pro`
+  - Used: skipped in this resumed iteration because both recommended agents previously advised US-006 and the remaining work directly addressed concrete prior specialist findings
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and `security-engineer`; targeted re-review by the same specialists planned after substantive fixes
+  - Findings: initial findings were fixed; targeted re-review found remaining composed-loader, directive-import, source-checking, and TypeScript redirect/exclusion gaps, so the commit remains blocked
+- Decisions (why):
+  - Rejected `rootDirs` rather than resolving its virtual merge behavior because the domain workspace does not require it and prohibiting redirects keeps the boundary fail-closed.
+  - Allowed package metadata only when every static resolution target remains within domain source, preserving the existing package export without permitting root or nested manifest escapes.
+  - Recursively inspected nested `package.json` files because relative directory imports can consult package metadata below the domain root.
+- **Learnings for future iterations:**
+  - Source-only AST inspection is insufficient when TypeScript or package metadata can redirect an apparently safe import to unscanned files.
+  - Root and nested package `main`, `module`, `types`, `typings`, `exports`, and `typesVersions` targets must remain inside `packages/domain/src` and receive the same symlink-candidate checks as source imports.
+- Known issues / follow-ups:
+  - Root lint, formatting, generic Vitest, and Git hooks remain intentionally unavailable until US-007.
+  - Web and game-server runtime commands remain intentionally unavailable until their implementation stories.
+- Next iteration start:
+  - If review passes, implement US-007 quality tooling and Git hooks; otherwise resume the recorded blocking finding.
+---
+
+Review remediation for US-006 at 2026-07-16 14:25:33 MST:
+- Initial specialist review used `code-reviewer`, `qa-expert`, and `security-engineer` against the complete staged diff.
+- The merged blocking findings identified five root causes: inherited or implicit TypeScript module resolution, `noCheck` or incomplete source inclusion, bound CommonJS loaders, browser/package redirects, and undeclared bare imports resolving through hoisted aliases.
+- Added failing regressions before implementation for root `extends`, implicit `types`/JSX imports, `noCheck`, all-source include coverage, bound `require`, browser redirects, and declared-package enforcement.
+- Rejected root configuration inheritance and implicit domain module options, required `src/**/*` without restrictive `files`/`exclude`, prohibited `noCheck`, rejected bound CommonJS loaders, validated browser targets, and restricted bare domain imports to built-ins, self-references, or declared dependencies.
+- The low-severity request for end-to-end filesystem symlink fixtures was not implemented because candidate-level symlink tests already exercise the lstat integration points and the finding is non-blocking under the local review standard.
+- Post-fix checks: `bun scripts/check-workspace-boundaries.test.mjs` (pass), `bun run test:workspace-boundaries` (pass), `bun run typecheck` (pass for all nine workspaces), and `git diff --check && git diff --cached --check` (pass).
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` review because the fixes affected every original specialist area.
+
+Targeted re-review outcome for US-006 at 2026-07-16 14:25:33 MST:
+- `code-reviewer`, `qa-expert`, and `security-engineer` reviewed the revised complete staged diff.
+- The merged blocking findings identified four remaining medium root causes: composed `.bind`/`.call`/`.apply` CommonJS loader chains; undeclared package aliases in triple-slash type and AMD directives; source files escaping semantic checks through `@ts-nocheck` or unchecked JavaScript; and `moduleSuffixes` or inherited shared exclusions redirecting/omitting domain source.
+- These findings are in scope because they weaken the mechanical domain-import boundary and the requirement that real strict TypeScript checks cover workspace source.
+- Per the one-targeted-re-review limit, US-006 remains `passes: false`; no commit was created and `prd.json` was not updated.
+- Next iteration start: add failing regressions for composed direct-loader chains, declared directive packages, `@ts-nocheck`/JavaScript source, `moduleSuffixes`, and shared source exclusions; implement the narrow fail-closed checks, rerun all US-006 checks, and restart the staged review loop.
+
+## 2026-07-16 15:37:09 MST - US-006
+- What was implemented
+  - Resumed the modular-workspace story and closed the recorded composed CommonJS loader, directive-package, unchecked-source, `moduleSuffixes`, and inherited source-filter gaps.
+  - Replaced one-level direct-loader matching with recursive invocation modeling for composed `bind`, `call`, and `apply` chains while preserving literal and non-literal rejection behavior.
+  - Required package-valued type/AMD directives to use declared dependencies, rejected `@ts-nocheck` and JavaScript domain source, and prohibited shared/domain module suffixes plus inherited root source restrictions.
+- Files changed: `.gitignore`, `package.json`, `bun.lock`, `tsconfig.base.json`, `scripts/check-workspace-boundaries.mjs`, `scripts/check-workspace-boundaries.test.mjs`, `apps/*/package.json`, `apps/*/tsconfig.json`, `apps/*/src/index.ts`, `packages/*/package.json`, `packages/*/tsconfig.json`, `packages/*/src/index.ts`, `README.md`, `AGENTS.md`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-006 - Establish the modular workspace`
+- Auto approval: `disabled`
+- Checks:
+  - `bun scripts/check-workspace-boundaries.test.mjs` (expected fail before implementation: composed `require.bind(...).call(...)` did not report the forbidden module)
+  - `bun scripts/check-workspace-boundaries.test.mjs` (pass after implementation)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run typecheck` (pass; all nine workspaces)
+  - `bun pm ls --all` (pass; all nine workspaces and TypeScript 5.9.3 resolved)
+  - `git diff --check && git diff --cached --check` (pass)
+  - Lint/format/Vitest (not run; US-007 intentionally introduces those tools, and the executable boundary regression suite is the available affected test)
+- Implementation agents:
+  - Recommended: `build-engineer`, `typescript-pro`
+  - Used: skipped because both recommended agents previously advised US-006 and this resumed iteration implemented concrete, narrowly scoped prior-review findings
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and `security-engineer` planned for the complete staged workspace/configuration diff
+  - Findings: pending staged-diff review
+- Decisions (why):
+  - Modeled loader invocation arguments instead of matching more syntax strings because one recursive representation covers direct and composed `bind`/`call`/`apply` forms without whole-program alias analysis.
+  - Rejected JavaScript in domain source rather than changing shared TypeScript configuration because the framework-independent domain package is intentionally strict TypeScript and unchecked JavaScript would evade the real `tsc` contract.
+  - Rejected any explicit `moduleSuffixes` and inherited root source filters because neither is needed by the workspace and both can redirect or omit domain source outside the guard's checked model.
+  - Did not add nested `AGENTS.md` guidance because the root guide already owns reusable workspace and domain-boundary conventions.
+- **Learnings for future iterations:**
+  - CommonJS loader analysis must model the function produced by `bind` and the argument transforms performed by `call` and `apply`; inspecting only the immediate receiver misses composed chains.
+  - Type and AMD directives participate in package resolution and need the same declared-dependency checks as imports.
+  - Wildcard source inclusion does not make unchecked JavaScript or `@ts-nocheck` strict; boundary validation must reject both when the package promises strict TypeScript coverage.
+- Known issues / follow-ups:
+  - Root lint, formatting, generic Vitest, and Git hooks remain intentionally unavailable until US-007.
+  - Web and game-server runtime commands remain intentionally unavailable until their implementation stories.
+- Next iteration start:
+  - If review passes, implement US-007 quality tooling and Git hooks; otherwise resume the recorded blocking finding.
+---
+
+Review remediation for US-006 at 2026-07-16 15:37:09 MST:
+- Initial specialist review used `code-reviewer`, `qa-expert`, and `security-engineer` against the complete staged diff.
+- `code-reviewer` returned no actionable findings; the merged blocking findings identified two medium root causes: constructor and `bind.call`/`bind.apply` CommonJS loads bypassed direct-loader inspection, and config-shape checks did not prove TypeScript's effective file set covered hidden, package-named, or output-directory source.
+- Added failing literal/non-literal regressions for constructor loads and `bind` invoked through `call`/`apply`, plus source-coverage regressions for an output directory under `src` and discovered files absent from TypeScript's checked set.
+- Extended loader invocation modeling to constructor expressions and indirect `bind` invocation, rejected output directories under `src`, and compared recursively discovered workspace source with TypeScript's parsed effective file list.
+- The low-severity real-filesystem symlink-fixture request remains non-blocking and was not implemented because existing injected candidate and path-segment tests exercise the relevant `lstat` behavior without adding test-managed filesystem mutation before US-007.
+- Post-fix checks: `bun scripts/check-workspace-boundaries.test.mjs` (pass), `bun run test:workspace-boundaries` (pass), `bun run typecheck` (pass for all nine workspaces), and `git diff --check && git diff --cached --check` (pass).
+- Targeted re-review: pending `qa-expert` and `security-engineer` review because the substantive fixes address their findings; `code-reviewer` is not repeated because its initial findings list was empty.
+
+Targeted re-review outcome for US-006 at 2026-07-16 15:49:36 MST:
+- `qa-expert` and `security-engineer` confirmed the constructor, immediate `bind.call`/`bind.apply`, and parsed-file-set coverage fixes but identified two remaining medium root causes.
+- Nested indirect bind chains such as `require.bind.call.call(require.bind, require, null, "react")()` are not recursively reduced and still bypass direct-loader inspection, including the equivalent non-literal form.
+- The source-output guard checks the raw local `outDir` string rather than resolved effective TypeScript options, so dot-segment, absolute, inherited `outDir`, and `declarationDir` paths inside workspace `src` can bypass validation before generated files exist; local `noEmit: false` also remains possible.
+- These findings are in scope because they weaken the story's mechanical domain boundary and all-source typecheck guarantee.
+- Per the one-targeted-re-review limit, US-006 remains `passes: false`; no commit was created and `prd.json` was not updated.
+- Next iteration start: add failing literal/non-literal regressions for recursively composed bind method invocations; recursively model or fail closed on those direct require-derived chains; validate resolved effective `outDir`/`declarationDir` containment and `noEmit` using TypeScript's parsed options; rerun all checks and restart the staged review loop.
+
+## 2026-07-16 15:53:37 MST - US-006
+- What was implemented
+  - Resumed the modular-workspace story and closed the recorded nested indirect-bind and effective TypeScript output-configuration gaps.
+  - Recursively modeled `bind` functions transformed through repeated `call`/`apply` chains, preserving literal forbidden-package and non-literal loader rejection.
+  - Validated TypeScript's parsed effective options so every workspace retains `noEmit` and cannot place `outDir` or `declarationDir` under its `src` tree through inherited, absolute, or dot-segment paths.
+- Files changed: `.gitignore`, `package.json`, `bun.lock`, `tsconfig.base.json`, `scripts/check-workspace-boundaries.mjs`, `scripts/check-workspace-boundaries.test.mjs`, `apps/*/package.json`, `apps/*/tsconfig.json`, `apps/*/src/index.ts`, `packages/*/package.json`, `packages/*/tsconfig.json`, `packages/*/src/index.ts`, `README.md`, `AGENTS.md`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-006 - Establish the modular workspace`
+- Auto approval: `disabled`
+- Checks:
+  - `bun scripts/check-workspace-boundaries.test.mjs` (expected fail before implementation: nested `require.bind.call.call(...)` returned no violation)
+  - `bun scripts/check-workspace-boundaries.test.mjs` (pass after implementation)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run typecheck` (pass; all nine workspaces)
+  - `bun pm ls --all` (pass; all nine workspaces and TypeScript 5.9.3 resolved)
+  - `git diff --check && git diff --cached --check` (pass)
+  - Lint/format/Vitest (not run; US-007 intentionally introduces those tools, and the executable boundary regression suite is the available affected test)
+- Implementation agents:
+  - Recommended: `build-engineer`, `typescript-pro`
+  - Used: skipped because both recommended agents previously advised US-006 and this resumed iteration implemented concrete, narrowly scoped prior-review findings
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and `security-engineer` planned for the complete staged workspace/configuration diff
+  - Findings: pending staged-diff review
+- Decisions (why):
+  - Separated recursive bind-function recognition from loader invocation because the same argument transformations apply at every nested `call`/`apply` layer and the smaller model closes the demonstrated chain without whole-program alias analysis.
+  - Used TypeScript's parsed effective compiler options rather than raw local JSON because inheritance and path normalization determine the actual `noEmit`, `outDir`, and `declarationDir` behavior.
+  - Did not run `bun install` because dependencies were already present and unchanged, while auto approval is disabled and package-manager installation requires confirmation.
+  - Did not add nested `AGENTS.md` guidance because the root guide already owns reusable workspace and domain-boundary conventions.
+- **Learnings for future iterations:**
+  - A direct-loader guard must recursively reduce method transforms on the bind function itself, not only one immediate `bind.call` or `bind.apply` layer.
+  - TypeScript output safety must inspect parsed effective options; raw relative strings miss inherited, absolute, and normalized dot-segment paths.
+- Known issues / follow-ups:
+  - Root lint, formatting, generic Vitest, and Git hooks remain intentionally unavailable until US-007.
+  - Web and game-server runtime commands remain intentionally unavailable until their implementation stories.
+- Next iteration start:
+  - If review passes, implement US-007 quality tooling and Git hooks; otherwise resume the recorded blocking finding.
+---
+
+## 2026-07-16 16:15:13 MST - US-006
+- What was implemented
+  - Resumed the modular-workspace story and fixed the five deduplicated findings from the latest complete staged review.
+  - Limited direct CommonJS loader suppression to syntax actually consumed by the modeled loader expression, including transparent wrappers and composed loader chains.
+  - Required exact root workspace globs, resolved every triple-slash file reference as relative, rejected absolute domain manifest targets, and failed on recoverable parsed TypeScript configuration diagnostics.
+- Files changed: `.gitignore`, `package.json`, `bun.lock`, `tsconfig.base.json`, `scripts/check-workspace-boundaries.mjs`, `scripts/check-workspace-boundaries.test.mjs`, `apps/*/package.json`, `apps/*/tsconfig.json`, `apps/*/src/index.ts`, `packages/*/package.json`, `packages/*/tsconfig.json`, `packages/*/src/index.ts`, `README.md`, `AGENTS.md`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-006 - Establish the modular workspace`
+- Auto approval: `disabled`
+- Checks:
+  - `bun scripts/check-workspace-boundaries.test.mjs` (expected fail before implementation: loader values in unrelated arguments were suppressed)
+  - `bun scripts/check-workspace-boundaries.test.mjs` (pass after implementation)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run typecheck` (pass; all nine workspaces)
+  - `bun pm ls --all` (pass; all nine workspaces and TypeScript 5.9.3 resolved)
+  - `git diff --check && git diff --cached --check` (pass)
+  - Lint/format/Vitest (not run; US-007 intentionally introduces those tools, and the executable boundary regression suite is the available affected test)
+- Implementation agents:
+  - Recommended: `build-engineer`, `typescript-pro`
+  - Used: skipped because both recommended agents previously advised US-006 and this resumed iteration addressed concrete review findings
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and `security-engineer`; targeted re-review by the same specialists planned after substantive fixes
+  - Findings: initial loader-suppression, workspace-glob, triple-slash path, parsed-config diagnostic, and manifest-target findings fixed; targeted re-review pending
+- Decisions (why):
+  - Tracked the exact loader-expression nodes consumed by the existing direct-loader model instead of restoring broad ancestor suppression, because unrelated arguments are evaluated and must remain visible to the guard.
+  - Restricted root workspace globs to the approved pair instead of implementing arbitrary glob expansion because the workspace contract intentionally contains only `apps/*` and `packages/*`.
+  - Used TypeScript's returned parsed diagnostics in addition to its unrecoverable callback because recoverable configuration errors must also fail the standalone boundary check.
+  - Did not run `bun install` because dependencies were unchanged and auto approval is disabled.
+- **Learnings for future iterations:**
+  - Loader-value exemptions must follow only the modeled callee/receiver path and must not suppress loader values in unrelated argument subtrees.
+  - Triple-slash `path` values are relative to their source file even when they do not begin with `.`.
+  - TypeScript configuration parsing can return recoverable diagnostics through `parsedConfig.errors`; successful parsing alone does not mean the configuration is valid.
+- Known issues / follow-ups:
+  - Root lint, formatting, generic Vitest, and Git hooks remain intentionally unavailable until US-007.
+  - Web and game-server runtime commands remain intentionally unavailable until their implementation stories.
+- Next iteration start:
+  - If targeted review passes, complete US-006 metadata and commit; otherwise stop on any remaining blocking finding.
+---
+
+Targeted re-review outcome for US-006 at 2026-07-16 16:17:45 MST:
+- `code-reviewer`, `qa-expert`, and `security-engineer` reviewed the revised complete staged diff and returned empty actionable finding lists.
+- The original loader-suppression, workspace-glob, triple-slash path, parsed-config diagnostic, and manifest-target findings are resolved.
+- Residual risks are limited to intentionally unavailable US-007 tooling, injected rather than filesystem-managed symlink fixtures, and out-of-scope whole-program loader alias analysis.
+- All in-scope blocking findings are resolved; US-006 can be marked passing and committed.

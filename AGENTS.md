@@ -18,15 +18,19 @@ The target is a TypeScript modular monolith with two runtime processes:
 - PostgreSQL: durable application truth, accessed through repositories.
 - Docker Compose: local PostgreSQL and an optional future-only Redis profile.
 
-The workspace and application quality tooling land in later stories. Do not
-create placeholder packages, scripts, or configuration ahead of their story.
+The workspace now provides strict TypeScript and domain-boundary checks.
+Application runtimes and broader quality tooling land in later stories. Do not
+create placeholder behavior, scripts, or configuration ahead of their story.
 
 ## Commands
 
-Run commands from the repository root. The currently available local service
-commands are:
+Run commands from the repository root. The currently available workspace and
+local service commands are:
 
 ```sh
+bun install --frozen-lockfile
+bun run test:workspace-boundaries
+bun run typecheck
 docker compose up -d
 docker compose ps
 docker compose down
@@ -34,15 +38,14 @@ docker compose --profile redis up -d
 ```
 
 The default Compose stack starts only PostgreSQL. Web and game-server processes
-run through Bun outside Docker when their workspaces exist.
+run through Bun outside Docker after their runtime implementation stories land.
 
-These are the required root command contracts after the relevant workspace and
-quality-tooling stories add them:
+These are the remaining root command contracts after the relevant application
+and quality-tooling stories add them:
 
 ```sh
 bun run dev:web
 bun run dev:game-server
-bun run typecheck
 bun run lint
 bun run format:check
 bun run test
@@ -68,6 +71,31 @@ The planned workspace responsibilities are:
 database details behind repository interfaces. HTTP and realtime adapters must
 validate boundary contracts, authorize the actor, invoke application/domain
 behavior, and return committed results rather than duplicate domain rules.
+Run `bun run test:workspace-boundaries` after changing workspace manifests or
+domain imports; its AST-based guard covers static, type-only, dynamic, CommonJS,
+JSDoc, and triple-slash module references with normalized path separators rather
+than relying on text matching. The guard also requires each workspace's real
+`tsc` command over all `src` files without local strictness downgrades or
+`noCheck`, including inherited or implicit source exclusions verified against
+TypeScript's parsed file set. Parsed configuration diagnostics are blocking,
+parsed effective options must retain `noEmit`, and output paths must stay
+outside workspace `src`; the guard also rejects unchecked JavaScript or
+`@ts-nocheck` in domain source. It fails closed on parse
+errors and rejects escaping filesystem references or symlink traversal from
+domain source.
+Relative domain source references must remain under `packages/domain/src`, and
+shared/domain TypeScript configuration plus the domain manifest may not define
+inherited, implicit, or explicit module aliases and resolution redirects such as
+`rootDirs` or `moduleSuffixes`; root and nested domain package targets must also
+resolve inside `packages/domain/src`. Bare imports and package-valued type/AMD
+directives must use declared dependencies (except Node built-ins and the domain
+self-reference), may not traverse package paths, and remain subject to forbidden
+framework type-package checks. Direct-loader checks unwrap TypeScript-transparent
+and comma expressions, follow composed `bind`/`call`/`apply` CommonJS loaders,
+and reject unmodeled direct loader values; symlink checks cover TypeScript's
+declaration and JavaScript-extension resolution candidates. The workspace guard
+permits exactly the `apps/*` and `packages/*` root workspace globs and rejects
+unexpected package directories matched by them.
 
 The server remains authoritative. Never move validation of calls, marks,
 winners, presence, timers, permissions, or progression into a browser-only

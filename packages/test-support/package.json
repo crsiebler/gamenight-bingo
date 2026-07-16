@@ -1,0 +1,10 @@
+{
+  "name": "@gamenight-bingo/test-support",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --project tsconfig.json --pretty false"
+  }
+}

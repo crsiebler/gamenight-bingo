@@ -1,0 +1,17 @@
+{
+  "name": "gamenight-bingo",
+  "private": true,
+  "packageManager": "bun@1.3.14",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "check:workspace-boundaries": "bun scripts/check-workspace-boundaries.mjs",
+    "test:workspace-boundaries": "bun scripts/check-workspace-boundaries.test.mjs && bun run check:workspace-boundaries",
+    "typecheck": "bun run test:workspace-boundaries && bun run --filter '@gamenight-bingo/*' typecheck"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}
