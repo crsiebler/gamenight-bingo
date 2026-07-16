@@ -1,0 +1,1003 @@
+{
+  "project": "GameNight Bingo",
+  "branchName": "ralph/private-realtime-bingo",
+  "description": "A private Internet-hosted, server-authoritative 75-ball Bingo application with accountless lobbies, manual or automatic calling, durable realtime gameplay, same-device rejoin, accessible themed UI, and authoritative reconnect snapshots.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Commit the authorized project baseline",
+      "description": "As a developer, I want the intentional current repository state committed before implementation so that future work starts from a clean baseline.",
+      "acceptanceCriteria": [
+        "Record that the user explicitly authorized retaining the deleted outdated Next.js scaffold, added PDFs under `docs/`, AI skills under `.opencode/`, and this PRD.",
+        "Inspect `git status`, `git diff`, and `git log --oneline -10` before staging.",
+        "Preserve all authorized deletions and additions; do not restore the old scaffold or remove the new files.",
+        "Stage only the intended current baseline changes after verifying no secrets or unrelated files are included.",
+        "Commit the baseline before any implementation with exactly `chore(project): establish clean project baseline`.",
+        "Do not perform this commit while drafting or revising the PRD; this criterion instructs the later implementation workflow.",
+        "No tests or typecheck are required because application code was intentionally removed."
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-002",
+      "title": "Create the project README",
+      "description": "As a contributor, I want a complete `README.md` so that I can understand and run the project.",
+      "acceptanceCriteria": [
+        "Document the product/MVP, architecture, and prerequisites: Bun, Node.js, Docker with Compose, and authenticated GitHub CLI.",
+        "Document setup, environment variables and defaults, Docker commands, web/game-server development commands, checks, and tests.",
+        "Explain the workspace, pattern/theme packages, realtime snapshots/reconnect behavior, privacy/security, contributing rules, and `<type>(<scope>): <description>` commits.",
+        "Include troubleshooting for unhealthy PostgreSQL, occupied ports, invalid environment configuration, unauthenticated `gh`, Socket.IO connection failures, and cleared cookies.",
+        "Documentation link and command checks pass.",
+        "Typecheck passes."
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "Recommended agents: @documentation-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-003",
+      "title": "Add local Docker infrastructure",
+      "description": "As a developer, I want reproducible local data services so that application processes can run consistently.",
+      "acceptanceCriteria": [
+        "After configuration confirmation, create `compose.yaml` with PostgreSQL 16, a named data volume, healthcheck, and configurable host port, database, username, and password.",
+        "Add Redis only under an optional Compose profile reserved for future work; no MVP code or default command depends on Redis.",
+        "Keep web and game-server processes running through Bun outside Docker by default.",
+        "Document `docker compose up -d`, `docker compose ps`, and `docker compose down` in the README.",
+        "Do not install dependencies or change configuration without required confirmation during execution.",
+        "Compose configuration and PostgreSQL health tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "Recommended agents: @devops-engineer, @database-administrator. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-004",
+      "title": "Add project implementation guidance",
+      "description": "As a contributor, I want root agent guidance so that implementation rules are unambiguous.",
+      "acceptanceCriteria": [
+        "Create root `AGENTS.md` covering overview, commands, domain boundaries, HTTP/realtime conventions, TDD, UI, accessibility, security/privacy, migrations, local operations, and confirmation requirements.",
+        "Document persist-before-broadcast, command IDs, active-lobby event sequences, snapshot reconnects, and conventional commits.",
+        "Documentation checks pass.",
+        "Typecheck passes."
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "Recommended agents: @documentation-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-005",
+      "title": "Rewrite project-local skills",
+      "description": "As an autonomous agent, I want project-specific skills so that generated work follows repository conventions.",
+      "acceptanceCriteria": [
+        "Review skills under `.opencode/.opencode/skills` and make them relevant to Bingo after approval.",
+        "Use Bun and Vitest, remove calculator and unrelated npm examples, and point to root `AGENTS.md`.",
+        "Preserve user-authored content outside the approved scope.",
+        "Skill reference and documented-command tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-006",
+      "title": "Establish the modular workspace",
+      "description": "As a developer, I want clear package boundaries so that concerns remain separated.",
+      "acceptanceCriteria": [
+        "After configuration confirmation, create `apps/web`, `apps/game-server`, and `packages/contracts`, `domain`, `database`, `patterns`, `themes`, `ui`, and `test-support`.",
+        "Configure Bun workspace scripts and strict TypeScript; install/change dependencies only after confirmation.",
+        "Mechanically prevent domain imports of React, Next.js, Prisma, and Socket.IO.",
+        "Workspace-boundary tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "Recommended agents: @build-engineer, @typescript-pro. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-007",
+      "title": "Configure quality tooling and Git hooks",
+      "description": "As a developer, I want consistent checks so that defects are caught early.",
+      "acceptanceCriteria": [
+        "After approval, configure ESLint flat config, Prettier with the Tailwind plugin, Vitest, React Testing Library, and Playwright.",
+        "Use Vitest rather than Bun's built-in test framework.",
+        "Preserve the Husky pre-commit script exactly: `npx lint-staged || exit 1`, `npx tsc --noEmit || exit 1`, `bun run test || exit 1`.",
+        "Fixture violations prove each configured check can fail.",
+        "Tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "Recommended agents: @build-engineer, @test-automator. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-008",
+      "title": "Define and validate runtime configuration",
+      "description": "As an operator, I want validated defaults so that every process uses the same limits and timing.",
+      "acceptanceCriteria": [
+        "Define code defaults: `MAX_PLAYERS_PER_LOBBY=25`, `MAX_ACTIVE_LOBBIES=100`, `LOBBY_IDLE_TTL_SECONDS=1800`, `PLAYER_RECONNECT_WINDOW_SECONDS=120`, `DISCONNECT_PAUSE_GRACE_SECONDS=10`, `REALTIME_TICKET_TTL_SECONDS=60`, and `CO_WINNER_WINDOW_MS=2000`.",
+        "Allow environment overrides and validate all values at process startup with actionable, secret-free errors.",
+        "Reject nonintegers, unsafe ranges, and inconsistent timing values before serving traffic.",
+        "Share parsed configuration types without allowing domain code to read process environment directly.",
+        "Default, override, and invalid-startup tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "Recommended agents: @backend-developer, @security-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-009",
+      "title": "Define shared contracts",
+      "description": "As a developer, I want versioned Zod contracts so that every boundary agrees on data shapes.",
+      "acceptanceCriteria": [
+        "Define branded IDs and schemas for lobby/round state, participant session, cards, marks, calls, presence, timers, two-second co-winner results, snapshots, commands, and errors.",
+        "Model call configuration as `{ mode: \"manual\" } | { mode: \"automatic\"; intervalSeconds: 5 | 10 | 30 | 60 | 120 }`.",
+        "Include command IDs, schema versions, timestamps, and monotonic active-lobby event sequences where required.",
+        "Define no event-history retrieval endpoint or realtime command.",
+        "Parsing and malformed-payload tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "Recommended agents: @api-designer, @typescript-pro. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-010",
+      "title": "Document the canonical pattern catalog",
+      "description": "As a developer, I want human-reviewable canonical pattern documentation before runtime encoding.",
+      "acceptanceCriteria": [
+        "Create `docs/bingo-pattern-catalog.md` with mask notation, exact/flexible classification, center behavior, duplicate masks, source aliases, PDF page/diagram references, and the rule against implicit rotation/reflection/translation.",
+        "Include every source pattern from all four supplied PDFs and document `Full House` only as the source PDF alias for runtime/user-facing Blackout.",
+        "Record these confirmed masks exactly, using slash-separated rows:\n- Q `#####/#...#/#...#/#..##/#####`\n- W `#...#/#...#/#.#.#/##.##/#...#`\n- 10 `#.###/#.#.#/#.#.#/#.#.#/#.###`\n- 11 `.#..#/##.##/.#..#/.#..#/.#..#`\n- 12 `#.###/#...#/#.###/#.#../#.###`\n- 13 `#.###/#...#/#.###/#...#/#.###`\n- 14 `#.#.#/#.#.#/#.###/#...#/#...#`\n- 15 `#.###/#.#../#.###/#...#/#.###`\n- 16 `#.###/#.#../#.###/#.#.#/#.###`\n- 17 `#.###/#.#.#/#...#/#...#/#...#`\n- 18 `#.###/#.#.#/#.###/#.#.#/#.###`\n- 19 `#.###/#.#.#/#.###/#...#/#...#`",
+        "State that runtime canonical data later lives in `packages/patterns/src/catalog.ts` and generated/tested documentation must not diverge from it.",
+        "Documentation completeness and mask-format tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-011",
+      "title": "Generate valid Bingo cards",
+      "description": "As a player, I want a valid randomized card so that play follows 75-ball rules.",
+      "acceptanceCriteria": [
+        "Generate a 5x5 B/I/N/G/O card using ranges 1-15, 16-30, 31-45, 46-60, and 61-75 with unique values per column.",
+        "Make the center free and always satisfied; ensure cards are unique within a round.",
+        "Accept injectable cryptographic randomness for deterministic tests.",
+        "Unit and property-based invariant tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-012",
+      "title": "Generate the draw order",
+      "description": "As a player, I want fair nonrepeating calls so that the round is valid.",
+      "acceptanceCriteria": [
+        "Cryptographically shuffle every integer 1-75 exactly once.",
+        "Commit exactly one next position and return a stable error when exhausted.",
+        "Never expose uncalled positions to clients or logs.",
+        "Unit and property-based permutation tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": "Recommended agents: @security-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-013",
+      "title": "Implement canonical pattern semantics",
+      "description": "As a developer, I want runtime pattern data and matching rules so that wins are deterministic.",
+      "acceptanceCriteria": [
+        "Implement `packages/patterns/src/catalog.ts` with stable ID, user-facing name, category, source reference/alias, version, mode, and 5x5 masks.",
+        "Exact masks require every diagram cell, tolerate extra daubs, satisfy center, and never transform.",
+        "One Line accepts any row, column, or diagonal; Two Lines accepts any two distinct lines, including intersecting lines; Blackout requires all noncenter cells.",
+        "Provide only one runtime/user-facing Blackout entry for the source alias described in the documentation.",
+        "A generated comparison test fails when documentation and runtime data diverge.",
+        "Matcher, schema, and documentation parity tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-014",
+      "title": "Encode and review shape patterns",
+      "description": "As a host, I want every approved shape available.",
+      "acceptanceCriteria": [
+        "Encode Bunny Ears, Two Lines, Four Corners, Windmill, Outside Edge, Blackout, Airplane, Wine Glass, X, Turtle, Stairs, Bow Tie, Cross, Plus, Rectangle, Heart, Hat, Hour Glass, Pyramid, Checkerboard, Inside Square, Kite, Smiley Face, and Block of Nine from `docs/shapes-bingo-patterns.pdf`.",
+        "Map both Two Lines diagrams to one flexible rule and map the PDF's alternate Blackout label through the documented source alias rather than a selectable entry.",
+        "Complete cell-by-cell source review records.",
+        "Count, ID, source, and mask tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-015",
+      "title": "Preview and golden-test shapes",
+      "description": "As a reviewer, I want generated previews so that transcription errors are visible.",
+      "acceptanceCriteria": [
+        "Generate thumbnails from canonical data and show name, ID, mode, source, and mask.",
+        "Label both Two Lines diagrams as flexible-rule examples.",
+        "Golden fixtures cover every runtime shape entry.",
+        "Golden and thumbnail tests pass.",
+        "Typecheck passes.",
+        "Verify in browser using dev-browser skill."
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": "Recommended agents: @frontend-developer, @test-automator. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-016",
+      "title": "Encode, preview, and test letters",
+      "description": "As a host, I want every approved letter pattern.",
+      "acceptanceCriteria": [
+        "Encode A-Y from `docs/letter-bingo-patterns.pdf`, document Z as absent, and preserve Letter X/Letter O IDs independently of identical shape masks.",
+        "Use the confirmed Q and W masks from canonical documentation.",
+        "Generate source-linked thumbnails and golden fixtures for A-Y.",
+        "Catalog, parity, golden, and thumbnail tests pass.",
+        "Typecheck passes.",
+        "Verify in browser using dev-browser skill."
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-017",
+      "title": "Encode, preview, and test numbers",
+      "description": "As a host, I want approved number patterns 0-19.",
+      "acceptanceCriteria": [
+        "Encode 0-19 from `docs/number-bingo-patterns.pdf` with category-specific stable IDs.",
+        "Use the confirmed 10-19 masks from canonical documentation without pending sign-off flags.",
+        "Generate source-linked thumbnails and golden fixtures for every number.",
+        "Catalog, parity, golden, and thumbnail tests pass.",
+        "Typecheck passes.",
+        "Verify in browser using dev-browser skill."
+      ],
+      "priority": 17,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-018",
+      "title": "Encode, preview, and test Christmas patterns",
+      "description": "As a host, I want the complete Christmas catalog.",
+      "acceptanceCriteria": [
+        "Encode Christmas Tree, Tinsel, Reindeer, Skis, Wreath, Cross, Bell, Snow Boot, Mittens, Snow, Gift, and Snowmobile from `docs/christmas-bingo-patterns.pdf`.",
+        "Preserve separate Christmas Cross and Christmas Snow IDs despite duplicate masks.",
+        "Generate source-linked thumbnails and golden fixtures for every entry.",
+        "Catalog, parity, golden, and thumbnail tests pass.",
+        "Typecheck passes.",
+        "Verify in browser using dev-browser skill."
+      ],
+      "priority": 18,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-019",
+      "title": "Audit the complete pattern catalog",
+      "description": "As a product owner, I want every source diagram accounted for before gameplay uses it.",
+      "acceptanceCriteria": [
+        "Map every PDF diagram to a runtime entry, source alias, or flexible-rule example.",
+        "Confirm distinct IDs for Cross/Plus/Christmas Cross, X/Letter X, Outside Edge/Letter O, and Checkerboard/Christmas Snow.",
+        "Confirm Q, W, and 10-19 exactly match the approved masks and no transform/deduplication occurred.",
+        "Audit fails for missing sources, IDs, aliases, parity, or golden fixtures.",
+        "Catalog audit tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 19,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-020",
+      "title": "Define the domain state machine",
+      "description": "As a developer, I want explicit states so that invalid commands cannot transition a game.",
+      "acceptanceCriteria": [
+        "Define waiting, active, paused, co-winner-window, result, ended, and expired behavior.",
+        "Permit One Line to Two Lines to Blackout only; Blackout and non-One-Line initial patterns are terminal.",
+        "Model waiting/completed/abandoned inactivity and protect an active lobby with active calls or connections from expiry.",
+        "Return stable errors for invalid transitions.",
+        "State-transition tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 20,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-021",
+      "title": "Model durable PostgreSQL state",
+      "description": "As an operator, I want active games to survive a realtime-process restart.",
+      "acceptanceCriteria": [
+        "After migration confirmation, model lobbies, participants, hashed session tokens, rounds, cards, marks, draw order, calls, active-lobby events, command results, presence generations, co-winner sets, and inactivity timestamps.",
+        "Add scoped uniqueness constraints for active codes, normalized usernames, cards, calls, sequences, and command IDs.",
+        "Store no prior-round result history; keep Prisma in `packages/database` behind repository interfaces.",
+        "PostgreSQL integration tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 21,
+      "passes": false,
+      "notes": "Recommended agents: @postgres-pro, @database-optimizer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-022",
+      "title": "Add serializable idempotent transactions",
+      "description": "As a player, I want concurrent commands to produce one deterministic state.",
+      "acceptanceCriteria": [
+        "Use PostgreSQL Serializable transactions with bounded, observable retries.",
+        "Persist state/events before broadcast and persist command results with monotonic active-lobby sequences.",
+        "Duplicate command IDs return the original result without repeating effects.",
+        "Concurrency, retry, ordering, and idempotency tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 22,
+      "passes": false,
+      "notes": "Recommended agents: @postgres-pro, @backend-developer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-023",
+      "title": "Generate secure lobby codes",
+      "description": "As a host, I want a short code that is easy to share.",
+      "acceptanceCriteria": [
+        "Generate secure six-character codes from uppercase unambiguous Base32 excluding 0/O and 1/I.",
+        "Normalize case-insensitive entry and retry collisions until unique among active lobbies.",
+        "Treat codes only as locators and enforce the active-lobby limit.",
+        "Property, normalization, collision, and limit tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 23,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-024",
+      "title": "Normalize and reserve usernames",
+      "description": "As a participant, I want predictable lobby-unique naming.",
+      "acceptanceCriteria": [
+        "Trim leading/trailing whitespace, collapse repeated internal whitespace, and retain the resulting original casing for display.",
+        "Derive uniqueness as `username.trim().toLowerCase()` after whitespace collapse.",
+        "Reject empty names and all control characters with stable validation errors.",
+        "Enforce at most 25 participants using the configured default/override.",
+        "Unicode, whitespace, collision, control-character, and limit tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 24,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-025",
+      "title": "Issue same-device lobby sessions",
+      "description": "As a participant, I want a private same-device session without an account.",
+      "acceptanceCriteria": [
+        "Issue an opaque Secure HttpOnly SameSite cookie and store only its cryptographic hash.",
+        "Scope the session to the active lobby and prior participant; do not use device fingerprinting or collect unnecessary device attributes.",
+        "If the cookie is missing or cleared, require joining as a new participant.",
+        "Delete session data with the lobby.",
+        "Cookie, hash, scope, and missing-cookie tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 25,
+      "passes": false,
+      "notes": "Recommended agents: @security-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-026",
+      "title": "Implement two-minute same-device rejoin",
+      "description": "As a disconnected participant, I want to rejoin briefly from the same device.",
+      "acceptanceCriteria": [
+        "During the configured 120-second window, a valid cookie offers `Rejoin as <username>` for the same active lobby.",
+        "After 120 seconds, mark the participant departed, reject that cookie for the prior slot, and require a new join that waits for the next round when one is active.",
+        "Do not support cross-device slot reclaim or reclaim of expired/deleted lobbies.",
+        "Fake-timer, departed-slot, cleared-cookie, and active-round waiting tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 26,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-027",
+      "title": "Implement lobby entry HTTP APIs",
+      "description": "As a client, I want versioned lobby endpoints.",
+      "acceptanceCriteria": [
+        "Add `/api/v1` endpoints for pattern catalog, create lobby, join lobby, same-device session status/rejoin, and authorized snapshot.",
+        "Apply normalized username uniqueness and independent create/join/rejoin rate limits.",
+        "Return stable errors and `Cache-Control: no-store` for private responses.",
+        "Define no endpoint for expired/old lobby restoration or event-history retrieval.",
+        "HTTP contract, authorization, rate-limit, and privacy tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 27,
+      "passes": false,
+      "notes": "Recommended agents: @api-designer, @security-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-028",
+      "title": "Issue single-use realtime tickets",
+      "description": "As a client, I want a temporary credential for one authenticated Socket.IO connection.",
+      "acceptanceCriteria": [
+        "Issue a ticket through `/api/v1` using the HttpOnly cookie, scoped to one participant and lobby.",
+        "Expire it after the configured 60 seconds and atomically consume it on one Socket.IO connection.",
+        "Require a new ticket from the cookie for every reconnect.",
+        "Never log ticket plaintext or return it in snapshots/errors.",
+        "Expiry, single-use, scope, reconnect, and redaction tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 28,
+      "passes": false,
+      "notes": "Recommended agents: @security-engineer, @websocket-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-029",
+      "title": "Implement round-control HTTP APIs",
+      "description": "As a client, I want versioned fallback command endpoints.",
+      "acceptanceCriteria": [
+        "Add configure, create/start/pause/resume/call-next/continue/end round, and own-card mark endpoints.",
+        "Require command IDs, enforce host/own-card authorization, and return the committed sequence/idempotent result.",
+        "Validate manual versus automatic configuration and reject unsupported intervals.",
+        "Contract and authorization tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 29,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-030",
+      "title": "Establish authenticated Socket.IO",
+      "description": "As a participant, I want secure low-latency updates.",
+      "acceptanceCriteria": [
+        "Run a separate long-lived Node.js Socket.IO authority authenticated by a consumed realtime ticket.",
+        "Support versioned heartbeat, configure, round-control, mark, and resync commands.",
+        "Support full snapshot, presence, call, mark result, near-win, co-winner, stage, round-end, ack, and error events; define no chat or event-history retrieval command.",
+        "Authentication and contract tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 30,
+      "passes": false,
+      "notes": "Recommended agents: @websocket-engineer, @security-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-031",
+      "title": "Restore authoritative snapshots",
+      "description": "As a reconnecting participant, I want exact active state restored.",
+      "acceptanceCriteria": [
+        "Send a full authorized snapshot after every reconnect except transport-level recovery of a very brief interruption.",
+        "Restore exact own card, marks, calls, stage, participants, call mode/timer, pause reason, and result.",
+        "Use event sequences only for active connection ordering/idempotency and discard them with the lobby.",
+        "Never expose another player's card or future draw positions.",
+        "Disconnect and single-process-restart snapshot tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 31,
+      "passes": false,
+      "notes": "Recommended agents: @websocket-engineer, @test-automator. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-032",
+      "title": "Aggregate participant presence",
+      "description": "As a host, I want presence to count people rather than tabs.",
+      "acceptanceCriteria": [
+        "Track authenticated heartbeats and aggregate all connections for one session as one participant.",
+        "Mark absence only after the last connection is gone and persist presence generations.",
+        "Broadcast sequenced presence changes.",
+        "Multi-client and multiple-tab tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 32,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-033",
+      "title": "Pause after participant absence",
+      "description": "As a disconnected participant, I want calling paused after a grace period.",
+      "acceptanceCriteria": [
+        "Apply configured 10-second grace after the last connection and pause if absence remains.",
+        "Host absence always pauses and cannot be overridden.",
+        "Reconnect never automatically resumes; persist pause reason and generation.",
+        "Fake-timer and multi-client tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 33,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-034",
+      "title": "Override a current player absence",
+      "description": "As a host, I want to override one normal player's current absence generation.",
+      "acceptanceCriteria": [
+        "Permit only host-authorized override of a normal player's current generation, never host absence.",
+        "Reconnect then disconnect creates a new generation unaffected by an old override.",
+        "Override does not resume calls automatically.",
+        "Generation and authorization tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 34,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-035",
+      "title": "Configure call mode and create a round",
+      "description": "As a host, I want manual or automatic calling with a valid configuration.",
+      "acceptanceCriteria": [
+        "Accept `{ mode: \"manual\" }` with no interval and `{ mode: \"automatic\", intervalSeconds }` only for 5, 10, 30, 60, or 120.",
+        "Reject a manual interval, a missing automatic interval, and every unsupported interval.",
+        "Default pattern to One Line and transactionally generate unique cards/private order for joined players.",
+        "Configuration and round-creation tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 35,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-036",
+      "title": "Queue players joining active rounds",
+      "description": "As a late player, I want to wait safely for the next round.",
+      "acceptanceCriteria": [
+        "Mark active-round joiners as waiting with no card, mark, or win eligibility.",
+        "Show only authorized lobby/game state and include them in the next round.",
+        "Apply the same behavior to a participant joining anew after the two-minute window.",
+        "Late-join integration tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 36,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-037",
+      "title": "Call balls manually and automatically",
+      "description": "As a host, I want reliable calls in either mode.",
+      "acceptanceCriteria": [
+        "Manual mode never schedules and advances only through host `Call Next`.",
+        "Automatic mode schedules from its validated interval; host `Call Next` remains idempotent and cannot race the timer into duplicate positions.",
+        "Persist call/history before broadcast; block calls while paused, in the co-winner window, ended, or exhausted.",
+        "Recover automatic timing after one realtime-process restart without repeating a ball.",
+        "Timer, manual-mode, concurrency, restart, and no-repeat tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 37,
+      "passes": false,
+      "notes": "Recommended agents: @backend-developer, @test-automator. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-038",
+      "title": "Validate and persist daubs",
+      "description": "As a player, I want valid marks to survive reconnects.",
+      "acceptanceCriteria": [
+        "Mark only called numbers on the authenticated player's active card; center remains satisfied.",
+        "Make repeated mark commands idempotent and persist valid marks before mark-result broadcast.",
+        "Stable errors make no state change.",
+        "Validation, authorization, and persistence tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 38,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-039",
+      "title": "Calculate progress and near-win",
+      "description": "As a player, I want optional feedback when one required called number remains.",
+      "acceptanceCriteria": [
+        "Calculate from authoritative calls/marks for exact and flexible patterns.",
+        "Define near-win as exactly one required called number away and emit it privately.",
+        "Disabling feedback does not alter winner validation.",
+        "Matcher and near-win tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 39,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-040",
+      "title": "Settle the two-second co-winner window",
+      "description": "As a player, I want completions from the latest call resolved fairly.",
+      "acceptanceCriteria": [
+        "The first valid completion immediately pauses calls and opens the configured 2000 ms two-second co-winner window.",
+        "Include all valid completions attributable to the same latest called ball that arrive during the window.",
+        "Permit no call during the window; persist and broadcast the complete winner set after it closes.",
+        "Use deterministic ordering for presentation without excluding co-winners.",
+        "Fake-timer and multi-client co-winner tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 40,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-041",
+      "title": "Continue One Line rounds",
+      "description": "As a host, I want to continue One Line to Two Lines and Blackout.",
+      "acceptanceCriteria": [
+        "Offer end or Two Lines after One Line and end or Blackout after Two Lines.",
+        "Preserve cards, daubs, calls, history, and draw order; clear only stage winner state.",
+        "Blackout and every non-One-Line initial exact pattern end on win.",
+        "Progression tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 41,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-042",
+      "title": "Start another round without result history",
+      "description": "As a host, I want a fresh round in the same lobby.",
+      "acceptanceCriteria": [
+        "Retain eligible participants and include waiting players.",
+        "Generate new cards/order and empty daubs/history.",
+        "Replace the previous result state rather than offering prior-round history.",
+        "New-round tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 42,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-043",
+      "title": "Expire inactive lobbies",
+      "description": "As a participant, I want private data minimized after a lobby is abandoned or complete.",
+      "acceptanceCriteria": [
+        "Delete waiting, completed, or abandoned lobbies after configured 1800 seconds without qualifying activity.",
+        "Never delete a currently active lobby with active calls or connections.",
+        "Cascade deletion to cards, marks, calls, active-lobby events, sessions, participants, and related state.",
+        "Provide no restoration of expired/old lobbies and make cleanup idempotent/observable.",
+        "Inactivity, active-protection, cascade, and retry tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 43,
+      "passes": false,
+      "notes": "Recommended agents: @postgres-pro, @security-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-044",
+      "title": "Adapt GroundsControl references into accessible UI foundations",
+      "description": "As a frontend developer, I want reviewed reference concepts adapted locally without a runtime dependency.",
+      "acceptanceCriteria": [
+        "Run `gh auth status` before attempting access and stop with actionable guidance if GitHub CLI is not authenticated.",
+        "Review these exact pages:\n- `https://github.com/crsiebler/groundscontrol.com/blob/main/components/atoms/Button/Button.tsx`\n- `https://github.com/crsiebler/groundscontrol.com/blob/main/components/atoms/Text/Text.tsx`\n- `https://github.com/crsiebler/groundscontrol.com/blob/main/components/atoms/TextArea/TextArea.tsx`\n- `https://github.com/crsiebler/groundscontrol.com/blob/main/components/atoms/Select/Select.tsx`\n- `https://github.com/crsiebler/groundscontrol.com/blob/main/components/atoms/Select/Option.tsx`\n- `https://github.com/crsiebler/groundscontrol.com/blob/main/components/atoms/LinkButton/LinkButton.tsx`\n- `https://github.com/crsiebler/groundscontrol.com/blob/main/components/atoms/Input/Input.tsx`\n- `https://github.com/crsiebler/groundscontrol.com/blob/main/components/atoms/JsonLd/JsonLd.tsx`\n- `https://github.com/crsiebler/groundscontrol.com/blob/main/eslint.config.mjs`\n- `https://github.com/crsiebler/groundscontrol.com/blob/main/tsconfig.json`\n- `https://github.com/crsiebler/groundscontrol.com/blob/main/.prettierrc`",
+        "Fetch raw private content only with the authenticated pattern `gh api \"repos/crsiebler/groundscontrol.com/contents/<path>?ref=main\" -H \"Accept: application/vnd.github.raw+json\"`.",
+        "Adapt concepts into local atoms/molecules/organisms/templates/pages, correct semantic/accessibility issues, and add no GroundsControl runtime dependency.",
+        "Configure aliases `@/atoms`, `@/molecules`, `@/organisms`, `@/templates`, `@/lib`, and `@`.",
+        "Component and accessibility tests pass.",
+        "Typecheck passes.",
+        "Verify in browser using dev-browser skill."
+      ],
+      "priority": 44,
+      "passes": false,
+      "notes": "Recommended agents: @react-specialist, @accessibility-tester. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-045",
+      "title": "Build public landing and create flow",
+      "description": "As a host, I want to create a lobby from a clear public page.",
+      "acceptanceCriteria": [
+        "Build mobile-first landing/create UI with host username, theme, pattern defaulted to One Line, and call mode.",
+        "Use an accessible Select or button group: manual shows no interval; automatic limits choices to 5/10/30/60/120.",
+        "Add public WebApplication/SoftwareApplication JsonLd matching visible HowTo content with no private data.",
+        "Form, configuration, metadata, and accessibility tests pass.",
+        "Typecheck passes.",
+        "Verify in browser using dev-browser skill."
+      ],
+      "priority": 45,
+      "passes": false,
+      "notes": "Recommended agents: @nextjs-developer, @accessibility-tester. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-046",
+      "title": "Build join and same-device rejoin flows",
+      "description": "As a player, I want to enter a spoken code or rejoin from the same device.",
+      "acceptanceCriteria": [
+        "Support typed/pasted case-insensitive code entry and normalized username with accessible errors.",
+        "Offer `Rejoin as <username>` only while the valid cookie remains within the two-minute window.",
+        "After departure, missing cookie, or cleared cookie, show new join; active-round new players wait.",
+        "Invite URLs prefill code but never authenticate identity.",
+        "Form, timer, privacy, and accessibility tests pass.",
+        "Typecheck passes.",
+        "Verify in browser using dev-browser skill."
+      ],
+      "priority": 46,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-047",
+      "title": "Build sharing and lobby pages",
+      "description": "As a participant, I want clear sharing, presence, and readiness.",
+      "acceptanceCriteria": [
+        "Provide large code, Copy Code, Copy Invite URL, native share when available, and accessible fallbacks; URLs contain no credentials.",
+        "Show each participant once with host, connected, grace, absent, departed, and waiting states.",
+        "Show theme, pattern, call mode/interval, and host-only configuration/start controls.",
+        "Mark private pages `noindex`, `nofollow`, `noarchive`, and `no-store`.",
+        "Clipboard, presence, authorization, and accessibility tests pass.",
+        "Typecheck passes.",
+        "Verify in browser using dev-browser skill."
+      ],
+      "priority": 47,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-048",
+      "title": "Build the accessible Bingo card",
+      "description": "As a player, I want touch, keyboard, and screen-reader marking.",
+      "acceptanceCriteria": [
+        "Render semantic B/I/N/G/O headers and 25 related cells with free, called, marked, uncalled, and unavailable text semantics.",
+        "Support keyboard navigation/activation, visible focus, mobile touch targets, and no color-only meaning.",
+        "Reject uncalled daubs with clear feedback.",
+        "Component, keyboard, and accessibility tests pass.",
+        "Typecheck passes.",
+        "Verify in browser using dev-browser skill."
+      ],
+      "priority": 48,
+      "passes": false,
+      "notes": "Recommended agents: @react-specialist, @accessibility-tester. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-049",
+      "title": "Build live call and status UI",
+      "description": "As a participant, I want calls and connection state to remain clear.",
+      "acceptanceCriteria": [
+        "Show current letter/number, chronological call grid, pattern preview/progress, call mode, and automatic countdown when applicable.",
+        "Announce only new calls in a controlled live region and apply sequenced events idempotently.",
+        "Show connected, reconnecting, offline, snapshot-syncing, grace, paused, co-winner-window, and recovered states.",
+        "Identify pause reason and explain that reconnect does not resume calls.",
+        "UI, sequence, timer, and accessibility tests pass.",
+        "Typecheck passes.",
+        "Verify in browser using dev-browser skill."
+      ],
+      "priority": 49,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-050",
+      "title": "Build live host controls",
+      "description": "As a host, I want safe controls for valid round actions.",
+      "acceptanceCriteria": [
+        "Show start, pause, resume, Call Next, continue, end, and player-absence override only when authorized/valid.",
+        "In manual mode make Call Next the sole advance path; in automatic mode show interval/countdown and still prevent duplicate pending commands.",
+        "Disable controls through ack/error, label continuation target, never override host absence, and confirm end-round.",
+        "UI, authorization, mode, and command tests pass.",
+        "Typecheck passes.",
+        "Verify in browser using dev-browser skill."
+      ],
+      "priority": 50,
+      "passes": false,
+      "notes": "Recommended agents: @frontend-developer, @accessibility-tester. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-051",
+      "title": "Build winner and result states",
+      "description": "As a participant, I want clear and respectful outcomes.",
+      "acceptanceCriteria": [
+        "Show the two-second co-winner window before displaying the complete co-winner set.",
+        "Provide celebratory winner and respectful other-player result scenes with valid continuation/end actions.",
+        "Communicate outcomes without depending on sound, motion, or color and expose no previous-round browser.",
+        "Result, progression, and accessibility tests pass.",
+        "Typecheck passes.",
+        "Verify in browser using dev-browser skill."
+      ],
+      "priority": 51,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-052",
+      "title": "Add privacy notice and expired state",
+      "description": "As a participant, I want clear data-minimization behavior.",
+      "acceptanceCriteria": [
+        "Explain that private lobbies use a necessary same-device cookie, collect no unnecessary device data, and use no third-party analytics on private routes.",
+        "Explain the two-minute rejoin window, 30-minute inactive-lobby deletion, and deletion of associated game/session data.",
+        "Show a terminal expired state with new-lobby/join navigation and no old-lobby restoration action.",
+        "Keep notice concise, accessible, and consistent with actual cookie/data behavior.",
+        "Privacy-copy, expired-state, analytics-absence, and accessibility tests pass.",
+        "Typecheck passes.",
+        "Verify in browser using dev-browser skill."
+      ],
+      "priority": 52,
+      "passes": false,
+      "notes": "Recommended agents: @security-engineer, @accessibility-tester. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-053",
+      "title": "Define theme moodboards and tokens",
+      "description": "As a designer, I want a legible foundation for every approved theme.",
+      "acceptanceCriteria": [
+        "Define moodboards and semantic palettes for Animals, Nature, original generic Superheroes, Pirates, Ghosts, Sports, Christmas, Halloween, July 4th, Valentine's Day, and Birthday.",
+        "Specify card, text, focus, state, ball, and result tokens plus high-contrast/reduced-motion behavior.",
+        "Document original, respectful, non-infringing direction.",
+        "Contrast-token tests pass.",
+        "Typecheck passes.",
+        "Verify in browser using dev-browser skill."
+      ],
+      "priority": 53,
+      "passes": false,
+      "notes": "Recommended agents: @ui-designer, @accessibility-tester. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-054",
+      "title": "Create themed visual assets",
+      "description": "As a player, I want original themed visuals without reduced clarity.",
+      "acceptanceCriteria": [
+        "Create original vector daubers/icons, optional efficient sprite sheets, call-ball treatments, card decoration, and win/other-player-won scenes for every theme.",
+        "Include suitable hero swoop, floating ghost, cartoon pirate cannon/walk-plank, and baseball strikeout concepts without protected assets or hostile loss treatment.",
+        "Provide static, reduced-motion, high-contrast, and decorative-load-failure fallbacks.",
+        "Keep active selected-theme visuals at or below 500 KB compressed and lazy-load nonselected themes.",
+        "Visual, contrast, budget, and fallback tests pass.",
+        "Typecheck passes.",
+        "Verify in browser using dev-browser skill."
+      ],
+      "priority": 54,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-055",
+      "title": "Produce and integrate theme audio",
+      "description": "As a participant, I want optional controlled theme sounds.",
+      "acceptanceCriteria": [
+        "Provide original/licensed call, daub, near-win, win, and respectful other-player-won audio per theme.",
+        "Achieve consistent perceived volume with no clipping; no formal LUFS certification is required.",
+        "Start only after user gesture, provide persistent mute/volume, keep selected-theme audio at or below 1 MB after opt-in, and lazy-load nonselected themes.",
+        "Core gameplay works when audio fails and meaning never depends on sound.",
+        "Audio gating, budget, mute, volume, and fallback tests pass.",
+        "Typecheck passes.",
+        "Verify in browser using dev-browser skill."
+      ],
+      "priority": 55,
+      "passes": false,
+      "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-056",
+      "title": "Optimize and document assets",
+      "description": "As a maintainer, I want fast, traceable assets.",
+      "acceptanceCriteria": [
+        "Create suitable AVIF/WebP variants and document fallbacks.",
+        "Record source, author, license, modification, and approval for every nongenerated asset.",
+        "Enforce 500 KB selected-theme visual and 1 MB opt-in audio budgets, lazy loading, and decorative failure behavior in automated checks.",
+        "Budget, fallback, and provenance tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 56,
+      "passes": false,
+      "notes": "Recommended agents: @performance-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-057",
+      "title": "Add gameplay, browser, and recovery test suites",
+      "description": "As a developer, I want cross-layer regressions detected automatically.",
+      "acceptanceCriteria": [
+        "Add unit/property tests for cards, draws, patterns, progress, modes, co-winners, expiry, and transitions.",
+        "Add PostgreSQL tests for repositories/transactions and Socket.IO multi-client tests for tickets, snapshots, presence, pause, co-winners, and restart.",
+        "Add Playwright host/player journeys for the latest two stable Chrome, Edge, Firefox, and Safari plus current iOS Safari and Android Chrome, using available browser/device automation and documented manual coverage where Playwright cannot execute a native engine.",
+        "All test suites pass.",
+        "Typecheck passes."
+      ],
+      "priority": 57,
+      "passes": false,
+      "notes": "Recommended agents: @test-automator, @websocket-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-058",
+      "title": "Add accessibility and theme regression tests",
+      "description": "As a disabled user, I want every theme and core journey usable.",
+      "acceptanceCriteria": [
+        "Test keyboard create/join/lobby/card/host/result flows and names, roles, live regions, focus, and errors.",
+        "Audit all page states and every theme's text, card, dauber, focus, result, high-contrast, reduced-motion, mute, and asset-failure behavior.",
+        "No critical accessibility violation remains.",
+        "Accessibility and visual tests pass.",
+        "Typecheck passes.",
+        "Verify in browser using dev-browser skill."
+      ],
+      "priority": 58,
+      "passes": false,
+      "notes": "Recommended agents: @accessibility-tester, @test-automator. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-059",
+      "title": "Harden security and privacy",
+      "description": "As a participant, I want private identity and game state protected.",
+      "acceptanceCriteria": [
+        "Validate/limit all inputs and enforce host, participant, own-card, lobby, and round authorization.",
+        "Add origin, CSRF, cookie, transport, header, cache, enumeration, and rate-limit protections.",
+        "Redact session tokens, realtime tickets, private cards, and future draw order from diagnostics.",
+        "Verify no third-party analytics execute on private routes and no unnecessary device attributes are persisted.",
+        "No critical security finding remains.",
+        "Injection, bypass, ticket-reuse, rate-limit, privacy, and leak tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 59,
+      "passes": false,
+      "notes": "Recommended agents: @security-engineer, @security-auditor. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-060",
+      "title": "Verify single-instance load and latency",
+      "description": "As an operator, I want measured performance for the intended MVP architecture.",
+      "acceptanceCriteria": [
+        "Test defaults of 25 players per lobby and 100 active lobbies against one realtime instance and one PostgreSQL database.",
+        "Measure commit-to-render, command-to-commit, and snapshot reconnect percentiles.",
+        "Meet normal committed call-to-render below 250 ms with no repeated balls, dropped committed events, or divergent snapshots.",
+        "Load and performance tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 60,
+      "passes": false,
+      "notes": "Recommended agents: @performance-engineer, @test-automator. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-061",
+      "title": "Add basic health and privacy-safe logging",
+      "description": "As an operator, I want enough diagnostics for a single-instance MVP without collecting private data.",
+      "acceptanceCriteria": [
+        "Add basic health/readiness endpoints for web, game server, and PostgreSQL dependency state.",
+        "Add structured correlation logs for commands, event sequences, transaction retries, disconnect pauses, and restart restoration.",
+        "Exclude session tokens, realtime tickets, cards, future draw order, and unnecessary device data.",
+        "Health and redaction tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 61,
+      "passes": false,
+      "notes": "Recommended agents: @sre-engineer, @security-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-062",
+      "title": "Verify single-instance restart behavior",
+      "description": "As a participant, I want an active game to survive a realtime-process restart.",
+      "acceptanceCriteria": [
+        "Restart the one realtime process in an automated nonproduction test while PostgreSQL remains available.",
+        "Reconnect clients with new single-use tickets and full snapshots.",
+        "Prove exact cards, marks, calls, stage, call mode, pause state, and co-winner result are restored without repeated calls.",
+        "Restart integration tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 62,
+      "passes": false,
+      "notes": "Recommended agents: @test-automator, @websocket-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-063",
+      "title": "Prepare final manual acceptance handoff",
+      "description": "As a product owner, I want a concise manual checklist after automated checks pass so that I can accept the MVP.",
+      "acceptanceCriteria": [
+        "Prepare a checklist for create/join, manual calls, automatic calls at each allowed interval, no repeats, daubing, and near-win.",
+        "Cover the two-second co-winner window, One Line to Two Lines to Blackout, and a terminal exact pattern.",
+        "Cover disconnect pause, two-minute same-device rejoin, departed/new waiting player behavior, and single-instance restart restoration.",
+        "Cover desktop/mobile, keyboard/screen-reader basics, every theme, mute/volume, reduced motion, high contrast, and decorative-asset failure.",
+        "Record prerequisite automated commands and require them to pass before handoff.",
+        "Product owner performs and records final manual acceptance; implementation agents do not self-approve it.",
+        "Handoff documentation checks pass.",
+        "Typecheck passes.",
+        "Verify in browser using dev-browser skill."
+      ],
+      "priority": 63,
+      "passes": false,
+      "notes": "Recommended agents: @test-automator, @accessibility-tester. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+GameNight Bingo — Ralph Progress
+Branch: ralph/private-realtime-bingo
+Source: tasks/prd-private-realtime-bingo.md
+Completed: 0/63
+Next story: US-001
+
+Append-only iteration log
+-------------------------
