@@ -1,33 +1,36 @@
 ---
 name: test-runner
-description: Executes tests, analyzes coverage, and debugs test failures in JavaScript/TypeScript repositories using Vitest.
+description: Runs and diagnoses GameNight Bingo Vitest suites through Bun. Use for focused tests, full validation, or failure investigation.
 ---
 
-## What I do
+# Test Runner
 
-- Run the Vitest test suite (all or individual files)
-- Generate and analyze code coverage reports
-- Help debug failing tests and explain error outputs
-- Advise on common test/data setup patterns for JS/TS
-- Assess code quality using coverage and test output
+## Commands
 
-## When to use me
+Read root `AGENTS.md` and inspect `package.json` before running a command. Once
+the quality-tooling story has established the scripts, use:
 
-Use this when you need to execute tests, check coverage, or troubleshoot test failures in a JavaScript/TypeScript project using Vitest. This includes running all tests, single test files, or debugging specific test issues.
+```sh
+bun run test
+bun run test -- path/to/file.test.ts
+```
 
-## Procedure
+These commands must invoke Vitest. Do not use `bun test`, which runs Bun's
+built-in test framework. If a planned script is not available yet, report that
+fact rather than adding tooling outside the active story.
 
-1. (Optional) Ensure correct Node version (`nvm use` if required by project)
-2. Run all tests: `npm test`
-3. Run tests with coverage: `npm test -- --coverage` or `npx vitest run --coverage`
-4. Review code coverage summary in the console and open the coverage report (e.g., `coverage/index.html` in your browser)
-5. To run a specific test file: `npx vitest run path/to/file.test.ts`
-6. Debug failures by reviewing Vitest error messages and stack traces
-7. Fix code or tests based on issues identified by Vitest outputs
+## Test Selection
 
-## Related Guidelines
+1. Start with the narrow suite for the changed package or boundary.
+2. Use unit and property-based tests for pure Bingo rules.
+3. Use isolated PostgreSQL integration tests for repositories, transactions,
+   migrations, and concurrency.
+4. Use multi-client Socket.IO tests with fake timers for presence, reconnects,
+   calls, pauses, and co-winner behavior.
+5. Use React Testing Library for component behavior and Playwright for browser
+   journeys. Frontend stories also require manual browser verification.
+6. Run all available root checks after the focused suite passes.
 
-- Follow test naming and structure conventions in this project
-- Use mocks, test doubles, and setup/teardown in Vitest (`beforeEach`, `afterAll`, etc.)
-- Ensure pre-commit checks (e.g., lint-staged, husky, eslint) pass before commits
-- Refer to AGENTS.md for organizational and style conventions
+When diagnosing a failure, preserve the original error, isolate the smallest
+reproduction, and distinguish a product defect from a brittle test or invalid
+fixture. Never weaken assertions merely to make a suite pass.

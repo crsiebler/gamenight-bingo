@@ -8,6 +8,7 @@ Next story: US-001
 - Stories are dependency ordered; document planned commands explicitly when their workspace/tooling lands later, and do not invent unconfirmed configuration defaults.
 - Dependency installation, dependency changes, configuration changes, and database migrations require confirmation before execution.
 - Local Compose data services bind to `127.0.0.1`; PostgreSQL is the only default service and future-only services must use explicit profiles.
+- Project-local skills live under `.opencode/.opencode/skills`; they reference root `AGENTS.md`, use Bun scripts with Vitest, and report unavailable later-story tooling instead of creating it early.
 
 Append-only iteration log
 -------------------------
@@ -156,4 +157,39 @@ Review outcome for US-001:
   - Root typecheck, lint, formatting, and Vitest commands become available only after the workspace and quality-tooling stories.
 - Next iteration start:
   - Implement US-005 by reviewing the project-local skills and aligning them with root `AGENTS.md`, Bun, Vitest, and Bingo-specific examples.
+---
+
+## 2026-07-16 12:55:07 MST - US-005
+- What was implemented
+  - Rewrote all five project-local skills around GameNight Bingo architecture, server authority, privacy, accessibility, TDD, and focused Git workflows.
+  - Replaced npm/npx and calculator guidance with Bun-driven Vitest commands and explicit deferral when dependency-ordered tooling is not yet available.
+  - Pointed every skill to root `AGENTS.md` and retained the existing skill names and locations.
+- Files changed: `.opencode/.opencode/skills/code-formatter/SKILL.md`, `.opencode/.opencode/skills/feature-implementer/SKILL.md`, `.opencode/.opencode/skills/git-manager/SKILL.md`, `.opencode/.opencode/skills/refactor-specialist/SKILL.md`, `.opencode/.opencode/skills/test-runner/SKILL.md`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-005 - Rewrite project-local skills`
+- Auto approval: `enabled`
+- Checks:
+  - `ruby -e '<skill frontmatter, reference, Bun/Vitest, and forbidden-example validation>'` (pass)
+  - `ruby -e '<documented skill command and project-rule validation>'` (pass)
+  - `git diff --check` (pass)
+  - `ruby -e '<root TypeScript applicability validation>'` (pass; confirms typecheck is not applicable before US-006 establishes the workspace)
+  - Lint (not run; no root package or lint configuration exists yet)
+  - Tests (skill reference and documented-command validations passed; no project test runner exists until US-007)
+- Implementation agents:
+  - Recommended: none
+  - Used: skipped because this was a straightforward documentation/configuration rewrite and standard mode budgets zero implementation agents for trivial work
+- Specialist review:
+  - Agents used: `code-reviewer`, `documentation-engineer`; targeted re-review by both specialists
+  - Findings: fixed implicit package execution, the incomplete refactor TDD rule, and unsupported coverage guidance; targeted re-review returned no actionable findings; discarded the pre-review PRD-status finding because Ralph requires that update only after review passes
+- Decisions (why):
+  - Rewrote the existing five skills in place rather than adding or renaming skills because the story asks to make the authorized skill set project-specific.
+  - Documented planned root commands with availability guards because US-006 and US-007 establish the executable workspace and quality tooling later.
+  - Omitted direct formatter and coverage invocations until repository scripts and providers exist because project skills must not download or invent tooling.
+  - Kept reusable guidance in root `AGENTS.md` rather than adding a nested guide because the skill rules directly derive from existing repository-wide conventions.
+- **Learnings for future iterations:**
+  - Skill validation can remain dependency-free before the workspace exists by checking frontmatter, root-guide references, forbidden legacy examples, and documented command contracts.
+  - `bun run test` must invoke Vitest; `bun test` is intentionally excluded because it selects Bun's built-in runner.
+- Known issues / follow-ups:
+  - Root typecheck, lint, formatting, and Vitest scripts remain unavailable until their dependency-ordered workspace and tooling stories.
+- Next iteration start:
+  - Implement US-006 by establishing the approved Bun workspace and strict TypeScript package boundaries.
 ---

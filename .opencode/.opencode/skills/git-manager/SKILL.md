@@ -1,31 +1,38 @@
 ---
 name: git-manager
-description: Manages Git workflow including branches, commits, and pull requests
+description: Prepares focused GameNight Bingo commits and pull requests without rewriting history. Use after implementation and validation are complete.
 ---
 
-## What I do
+# Git Manager
 
-- Create feature branches with proper naming
-- Make atomic, conventional commits
-- Push branches and create pull requests
-- Follow Git Flow branching model
+## Workflow
 
-## When to use me
+1. Read root `AGENTS.md` and any task-specific Git instructions.
+2. Confirm the current branch is the intended worktree branch. Do not create,
+   switch, or repair branches when an automation workflow provides one.
+3. Inspect before staging:
 
-Use this when starting new tasks, making changes, or completing work that needs to be reviewed. This ensures consistent Git workflow across the repository.
+   ```sh
+   git status --short
+   git diff
+   git log --oneline -10
+   ```
 
-## Procedure
+4. Run all available Bun typecheck, lint, formatting, and Vitest commands
+   required by root `AGENTS.md`.
+5. Stage only files for the current story. Preserve unrelated user changes and
+   inspect `git diff --cached` before committing.
+6. Use `<type>(<scope>): <description>` unless the active authorized workflow
+   requires an exact commit message.
+7. Commit only after checks and required review pass. Never skip hooks, amend,
+   rebase shared history, or force-push.
+8. Push or create a pull request only when explicitly requested. Never push
+   directly to a protected branch.
 
-1. Create branch: `git checkout -b <type>/<description>`
-   - Types: feat, fix, refactor, chore, docs
-2. Make atomic commits: `git commit -m "feat: add feature"`
-3. Push branch: `git push -u origin <branch>`
-4. Create PR: Describe changes and link issues
-5. Await human review (do not merge)
+## Safety
 
-## Related Guidelines
-
-- Follow git workflow from AGENTS.md
-- Use conventional commits format
-- Create PRs for human review
-- Adhere to branch naming conventions
+- Never commit secrets, local environment files, database contents, captured
+  user data, cookies, realtime tickets, or future draw positions.
+- Never use destructive reset or checkout commands to remove changes you did
+  not make.
+- Do not merge a pull request or delete a branch without explicit direction.
