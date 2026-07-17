@@ -1,7 +1,13 @@
 export {
+  CommandReplayMismatchError,
   connectDatabase,
   type CallMode,
+  type CommandTransactionRepositories,
+  type CommandTransactionRepository,
+  type CommandTransactionRequest,
+  type CommittedCommand,
   type DatabaseConnection,
+  type DatabaseConnectionOptions,
   type DeliveryScope,
   type DurableActiveLobbyEvent,
   type DurableCall,
@@ -23,8 +29,17 @@ export {
   type LobbyStatus,
   type ParticipantRole,
   type PauseReason,
+  type PendingActiveLobbyEvent,
+  type PendingCommandCommit,
   type PresenceStatus,
   type RoundEligibility,
   type RoundStage,
   type SessionStatus,
+  type TransactionalLobbyRepository,
 } from "./lobby-state-repository.js";
+export {
+  TransactionRetryExhaustedError,
+  type TransactionRetryEvent,
+  type TransactionRetryOptions,
+  type TransactionRetryReason,
+} from "./transaction-retry.js";

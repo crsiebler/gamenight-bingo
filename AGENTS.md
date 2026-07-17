@@ -124,6 +124,10 @@ invalid counts, timestamps, or durations.
   before broadcasting. Broadcast only after the transaction commits.
 - A repeated command ID returns its original committed result without repeating
   effects.
+- Serializable command callbacks are scoped to one lobby and may run more than
+  once after rolled-back conflicts, so they must not perform external effects.
+  Only a freshly committed active-lobby command returns an event to broadcast;
+  replays and participant-private commits return no broadcastable event.
 - Assign active-lobby events a monotonic sequence. Clients apply sequences
   idempotently and request resynchronization when continuity is uncertain.
 - Put active-lobby sequences only on messages delivered to every authorized

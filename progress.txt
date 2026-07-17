@@ -30,6 +30,9 @@ Next story: US-001
 - Prisma 7 is confined to `packages/database`; `bun run db:generate` creates the ignored client during install, while repository interfaces expose durable aggregate state without exporting Prisma types.
 - PostgreSQL-only partial indexes, checks, and composite foreign keys live in append-only migration SQL; the durable schema keeps one current round per lobby so round cards, marks, private draw order, calls, winners, events, and command results cascade without prior-round history.
 - Database integration tests require an explicitly approved, migrated PostgreSQL 16 `TEST_DATABASE_URL`; the generic Vitest run skips them when the variable is absent.
+- Serializable command transactions lock and scope work to one lobby, check persisted command results before mutation, and use bounded observable retries; callbacks may rerun only after rollback and must have no external effects, while only fresh active-lobby commits return a broadcastable event.
+- PostgreSQL concurrency tests must coordinate actual transaction overlap before asserting Serializable retries; observing the second command waiting on the lobby fence avoids flaky assumptions about `Promise.all` scheduling.
+- Retry classification scans nested Prisma/adapter `cause`, `meta`, and `driverAdapterError` metadata before falling back to generic conflict codes; PostgreSQL `40P01` deadlocks take precedence over outer Prisma `P2034` wrappers so telemetry stays accurate.
 
 Append-only iteration log
 -------------------------
@@ -1580,3 +1583,165 @@ Targeted re-review outcome for US-021 at 2026-07-17 01:55:19 MST:
 - The cross-lobby ownership, nullable-check, call-fixture, and cascade-edge findings are resolved.
 - Residual risk is limited to structural rather than executing DELETE cascade verification because destructive-operation approval was not granted; the committed foreign-key graph and delete rules are covered non-destructively.
 - No in-scope critical, high, or medium findings remain. US-021 can be marked passing and committed.
+
+## 2026-07-17 02:12:00 MST - US-022
+- What was implemented
+  - Added a Prisma-confined command transaction repository that serializes mutations per lobby, checks committed command IDs before effects, and atomically persists state, active-lobby events, command results, and monotonic event sequences.
+  - Added bounded observable retries for Prisma/PostgreSQL serialization conflicts, including adapter-wrapped SQLSTATEs, with a typed exhaustion error and privacy-safe retry events.
+  - Added unit and PostgreSQL integration coverage for retries, exhaustion, public/private commit scope, sequential and concurrent idempotent replay, contiguous concurrent ordering, and rollback before commit.
+- Files changed: `AGENTS.md`, `packages/database/src/database.integration.test.ts`, `packages/database/src/index.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/transaction-retry.test.ts`, `packages/database/src/transaction-retry.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-022 - Add serializable idempotent transactions`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run packages/database/src/transaction-retry.test.ts` (expected fail before implementation because the retry module was absent; pass after implementation with 4 tests)
+  - `TEST_DATABASE_URL=... bunx vitest run packages/database/src/database.integration.test.ts` (expected fail before implementation because command transactions were absent; pass after implementation and review remediation with 14 tests)
+  - `DATABASE_URL=... bun run db:migrate:deploy` (pass; existing initial migration applied to the approved local PostgreSQL 16 database, with no new migration required)
+  - `bun run lint` (pass)
+  - `bun run format:check` (fail only on three pre-existing untracked US-018 browser report artifacts)
+  - Tracked tree plus intended new-file Prettier check (pass)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `TEST_DATABASE_URL=... bun run test` (pass after review remediation; 16 Vitest files and 250 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `postgres-pro`, `backend-developer`
+  - Used: `postgres-pro`, `backend-developer` for the transaction protocol, package-owned API, retry classification, observability seam, concurrency risks, and integration-test strategy
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and data-integrity-triggered `security-engineer`; targeted re-review by `code-reviewer` and `qa-expert` planned after substantive fixes
+  - Findings: concurrent private no-op replay, unchecked replay typing, deterministic retry assertion, and late-failure rollback findings fixed before targeted re-review
+- Decisions (why):
+  - Reused the existing command-result primary key, event foreign key, and lobby sequence column without a migration because they already enforce the required durable relationships.
+  - Used a no-op lobby-row write before the idempotency lookup so all mutations for one lobby have one serializable ordering point, including participant-private commands that otherwise change no lobby state.
+  - Scoped the callback repository to the target lobby and returned a broadcastable event only for a fresh active-lobby commit so callers cannot publish before commit, rebroadcast replays, or create sequence gaps for private results.
+  - Required a caller-provided result decoder and rejected command-type/round mismatches on replay so persisted JSON is never cast to a newly inferred handler result type.
+  - Used deterministic capped backoff rather than jitter because the single-instance MVP has bounded lobby contention and deterministic injected sleep makes retry behavior directly testable.
+- **Learnings for future iterations:**
+  - Prisma 7 surfaces raw PostgreSQL serialization failures as `P2010` errors with SQLSTATE `40001` nested in adapter metadata, while other write conflicts may use top-level `P2034`; retry classification must handle both without broadly retrying integrity failures.
+  - Serializable callbacks can execute more than once after rolled-back conflicts, so IDs, timestamps, randomness, and external effects must be prepared outside the callback or persisted through its transaction-scoped repositories.
+  - Replayed and participant-private commits deliberately return `committedEvent: null`; only a fresh active-lobby commit is safe to broadcast.
+- Known issues / follow-ups:
+  - Root `bun run format:check` still scans three pre-existing untracked US-018 report files; they remain untouched and unstaged, while the complete intended candidate passes Prettier.
+  - Future command stories must add transaction-scoped state methods rather than expose Prisma or perform external work inside the retryable callback.
+- Next iteration start:
+  - If review passes, implement US-023 secure lobby-code generation and active-lobby capacity enforcement; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-022 at 2026-07-17 02:19:51 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced four deduplicated blocking findings: private no-op duplicate races could invoke mutation twice, replayed JSON was cast to an unchecked caller-inferred type, PostgreSQL concurrency tests did not require a retry, and rollback coverage stopped before event/result persistence.
+- Added failing regressions first for concurrent private no-op replay and mismatched command-type reuse; both failed in the expected implementation paths before remediation.
+- Replaced the read lock with a no-op lobby-row write fence so every lobby command conflicts and retries consistently, even when the command has no state or event mutation.
+- Added explicit persisted-result decoding and command scope checks, asserted real PostgreSQL retry observations, and proved a command-result foreign-key failure rolls back prior activity, sequence, and event writes.
+- Post-fix checks: focused 4 retry tests and 14 database integration tests pass, `bun run lint` passes, the complete intended candidate passes Prettier, `bun run typecheck` passes, the full PostgreSQL-enabled suite passes with 250 tests, Playwright smoke passes, and `git diff --check` passes.
+- Targeted re-review: pending `code-reviewer` and `qa-expert` review because their substantive findings changed implementation and tests; `security-engineer` is not repeated because it returned no findings and the fixes did not expand the reviewed security surface.
+
+Targeted re-review outcome for US-022 at 2026-07-17 02:23:00 MST:
+- `code-reviewer` returned no actionable findings and confirmed the private no-op write fence plus explicit result-decoding/scope-check remediations.
+- `qa-expert` found one remaining medium test-reliability blocker: the integration tests require observed retries after unsynchronized `Promise.all` starts, so PostgreSQL may validly schedule all commands serially and make the assertions flaky.
+- The finding is in scope because deterministic retry coverage is an explicit US-022 acceptance criterion; the next iteration must coordinate transaction overlap before asserting a real retry rather than relying on scheduler timing.
+- Per the one-targeted-re-review limit, US-022 remains `passes: false`; no commit was created and `prd.json` was not updated.
+- Next iteration start: add a deterministic transaction-test synchronization seam or database coordination barrier that forces two Serializable attempts to overlap, prove the test fails without retry handling, rerun all US-022 checks, and restart the staged review loop.
+
+## 2026-07-17 02:27:55 MST - US-022
+- What was implemented
+  - Resumed the serializable transaction story by replacing scheduler-dependent retry assertions with a PostgreSQL lock-wait barrier that proves the duplicate command's second transaction overlaps the first at the per-lobby fence.
+  - Retained deterministic retry verification on the coordinated duplicate-command path and kept the independent sequence-ordering test focused on contiguous committed sequences rather than requiring incidental contention.
+  - Preserved the previously reviewed transaction implementation, result decoding, command-scope validation, rollback behavior, and private/public broadcast semantics.
+- Files changed: `AGENTS.md`, `packages/database/src/database.integration.test.ts`, `packages/database/src/index.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/transaction-retry.test.ts`, `packages/database/src/transaction-retry.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-022 - Add serializable idempotent transactions`
+- Auto approval: `enabled`
+- Checks:
+  - `docker compose up -d --wait postgres` (pass; PostgreSQL 16 healthy)
+  - `DATABASE_URL=... bun run db:migrate:deploy` (pass; no pending migrations)
+  - `TEST_DATABASE_URL=... bunx vitest run packages/database/src/database.integration.test.ts` (pass; 14 tests with coordinated lock-induced retry)
+  - `bunx vitest run packages/database/src/transaction-retry.test.ts` (expected fail in 2 deadlock-classification cases during review remediation; pass after implementation with 5 tests)
+  - `bun run lint` (pass)
+  - `bun run format:check` (expected fail only on three pre-existing untracked US-018 report files)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked candidate)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `TEST_DATABASE_URL=... bun run test` (pass after review remediation; 16 Vitest files and 251 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+- Implementation agents:
+  - Recommended: `postgres-pro`, `backend-developer`
+  - Used: skipped in this resumed iteration because both recommended agents already advised US-022 and the remaining work directly addressed one concrete prior QA finding
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and data-integrity specialist `postgres-pro`; targeted re-review by `postgres-pro` planned after substantive retry-telemetry fixes
+  - Findings: fixed inaccurate deadlock telemetry before targeted re-review; `code-reviewer` and `qa-expert` returned no actionable findings
+- Decisions (why):
+  - Observed `pg_stat_activity` for the second command's lock wait before releasing the first transaction because this coordinates real database overlap without adding a test-only synchronization seam to the production repository API.
+  - Removed retry assertions from the four-command sequence test because contiguous sequence allocation is its contract and PostgreSQL may validly serialize unsynchronized starts without a retry.
+  - Kept the retry assertion on the coordinated duplicate path because it now fails if conflict classification or retry execution is removed while also proving the mutation callback does not repeat.
+  - Did not add more `AGENTS.md` guidance because its existing Serializable callback and external-effect rules remain complete; the test-specific coordination pattern belongs in consolidated progress guidance.
+- **Learnings for future iterations:**
+  - `Promise.all` starts do not guarantee overlapping PostgreSQL transactions; wait until the competing command is blocked on the known row fence before releasing the winning transaction.
+  - Retry behavior and sequence ordering should be asserted in separately coordinated tests so valid database scheduling cannot make an unrelated ordering test flaky.
+- Known issues / follow-ups:
+  - Root `bun run format:check` still scans three pre-existing untracked US-018 report files; they remain untouched and unstaged, while the complete tracked candidate passes Prettier.
+- Next iteration start:
+  - If review passes, implement US-023 secure lobby-code generation and active-lobby capacity enforcement; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-022 at 2026-07-17 02:34:29 MST:
+- The restarted complete staged review used `code-reviewer`, `qa-expert`, and `postgres-pro`; code and QA returned empty finding lists, while the PostgreSQL specialist identified one medium telemetry issue.
+- Split SQLSTATE `40P01` deadlocks from `40001` serialization conflicts in observable retry events while preserving the same bounded retry behavior for both.
+- Added failing regressions first for top-level and adapter-nested deadlock codes; both failed with the prior `serialization-conflict` reason and pass with the new `deadlock` reason.
+- Post-fix checks: focused retry tests pass with 5 tests, `bun run lint` passes, tracked-tree Prettier passes, `bun run typecheck` passes, and the full PostgreSQL-enabled suite passes with 251 tests.
+- Targeted re-review: pending `postgres-pro` review because the substantive fix addresses its sole finding; `code-reviewer` and `qa-expert` are not repeated because their initial finding lists were empty.
+
+Targeted re-review outcome for US-022 at 2026-07-17 02:35:57 MST:
+- `postgres-pro` confirmed standalone and nested `40P01` classification but found one remaining medium precedence gap: an outer generic `P2034` returns `serialization-conflict` before nested metadata can identify a more specific `40P01` deadlock.
+- The finding remains in scope because bounded retry telemetry is required to be observable and the current traversal can still mislabel wrapped PostgreSQL deadlocks.
+- Per the one-targeted-re-review limit, no further implementation changes or commit are permitted in this iteration. `US-022` remains `passes: false` and `prd.json` remains unchanged.
+- Next iteration start: add a failing mixed-wrapper regression such as `{ code: "P2034", meta: { originalCode: "40P01" } }`, scan all reachable metadata for `40P01` before falling back to generic `P2034`/`40001`, rerun all US-022 checks, and restart the complete staged review loop.
+
+## 2026-07-17 02:38:57 MST - US-022
+- What was implemented
+  - Resumed the serializable transaction story and corrected mixed-wrapper retry telemetry so a nested PostgreSQL `40P01` deadlock takes precedence over an outer generic Prisma `P2034` conflict.
+  - Added a focused regression proving wrapped metadata is fully scanned before generic serialization fallback, while preserving bounded retries, idempotent replay, atomic persistence, and monotonic sequence behavior.
+  - Preserved the previously reviewed PostgreSQL lock-wait coordination that deterministically proves real Serializable retry behavior.
+- Files changed: `AGENTS.md`, `packages/database/src/database.integration.test.ts`, `packages/database/src/index.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/transaction-retry.test.ts`, `packages/database/src/transaction-retry.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-022 - Add serializable idempotent transactions`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run packages/database/src/transaction-retry.test.ts` (expected fail before implementation: mixed `P2034`/nested `40P01` wrapper reported `serialization-conflict`; pass after implementation with 6 tests)
+  - `docker compose ps` (pass; PostgreSQL 16 healthy on loopback)
+  - `DATABASE_URL=... bun run db:migrate:deploy` (pass; no pending migrations)
+  - `TEST_DATABASE_URL=... bunx vitest run packages/database/src/database.integration.test.ts` (pass; 14 tests)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (expected fail only on three pre-existing untracked US-018 report files)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked candidate)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `TEST_DATABASE_URL=... bun run test` (pass; 16 Vitest files and 252 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `git diff --check && git diff --cached --check` (pass)
+- Implementation agents:
+  - Recommended: `postgres-pro`, `backend-developer`
+  - Used: skipped in this resumed iteration because both recommended agents already advised US-022 and the remaining change directly addressed one concrete prior PostgreSQL specialist finding
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and data-integrity specialist `postgres-pro`; targeted re-review by `qa-expert` planned after its substantive test fix
+  - Findings: initial broadcast-candidate/persisted-event equality gap fixed before targeted re-review; `code-reviewer` and `postgres-pro` returned no actionable findings
+- Decisions (why):
+  - Scanned every reachable supported wrapper before returning the generic serialization classification because specific PostgreSQL SQLSTATE telemetry is more informative than Prisma's outer retryable category.
+  - Kept immediate return for `40P01` but accumulated generic conflict detection because no supported retry reason is more specific than deadlock and the traversal remains bounded by object identity.
+  - Added no further nested `AGENTS.md` guidance because the root Serializable callback rules and consolidated retry-classification pattern cover the reusable behavior.
+- **Learnings for future iterations:**
+  - Outer Prisma codes can describe a broad retry category while nested adapter metadata carries the precise PostgreSQL SQLSTATE; classification precedence must inspect the complete supported wrapper graph.
+  - A visited-object set keeps recursive/wrapped error metadata traversal cycle-safe without logging error contents.
+- Known issues / follow-ups:
+  - Root `bun run format:check` still scans three pre-existing untracked US-018 report files; they remain untouched and unstaged, while the complete tracked candidate passes Prettier.
+- Next iteration start:
+  - If review passes, implement US-023 secure lobby-code generation and active-lobby capacity enforcement; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-022 at 2026-07-17 02:45:26 MST:
+- The restarted complete staged review used `code-reviewer`, `qa-expert`, and `postgres-pro`; code and PostgreSQL returned empty finding lists, while QA identified one medium atomicity-test gap.
+- Strengthened the active-lobby command integration test to compare the complete newly persisted durable event with the exact event returned for post-commit broadcast, covering sequence, round, type, schema version, payload, and timestamp.
+- The assertion passed against the existing implementation, confirming the finding was a regression-coverage gap rather than a production mapping defect.
+- Post-fix checks: focused 14-test database integration suite passes, `bun run lint` passes, tracked-tree Prettier passes, `bun run typecheck` passes, the full PostgreSQL-enabled suite passes with 252 tests, and diff whitespace checks pass.
+- Targeted re-review: pending `qa-expert` review because the substantive fix addresses its sole finding; `code-reviewer` and `postgres-pro` are not repeated because their initial finding lists were empty.
+
+Targeted re-review outcome for US-022 at 2026-07-17 02:47:10 MST:
+- `qa-expert` returned an empty actionable finding list and confirmed the sequence-ordered final restored event reliably represents the newly persisted event.
+- The durable-event/broadcast-candidate equality gap is resolved, and no new test-reliability issue was introduced.
+- Residual risk is limited to future Prisma/adapter error-wrapper shapes that may require additional SQLSTATE traversal coverage; all currently supported wrappers and required project checks pass.
+- No in-scope critical, high, or medium findings remain. US-022 can be marked passing and committed.

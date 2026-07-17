@@ -3,7 +3,15 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
-import { connectDatabase, type DurableLobbyState } from "./index.js";
+import {
+  CommandReplayMismatchError,
+  connectDatabase,
+  type CommandTransactionRepositories,
+  type CommandTransactionRequest,
+  type DurableLobbyState,
+  type JsonObject,
+  type TransactionRetryEvent,
+} from "./index.js";
 
 const testDatabaseUrl = process.env["TEST_DATABASE_URL"];
 const describeDatabase = testDatabaseUrl === undefined ? describe.skip : describe;
@@ -295,6 +303,57 @@ describeDatabase("PostgreSQL durable game state", () => {
     return connection;
   }
 
+  async function connectWithRetryObserver(events: TransactionRetryEvent[]) {
+    const connection = await connectDatabase(testDatabaseUrl!, {
+      transactionRetry: {
+        observer: (event) => events.push(event),
+      },
+    });
+    connections.push(connection);
+    return connection;
+  }
+
+  async function waitForBlockedCommandFence(timeoutMs = 5_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      const result = await pool.query<{ blocked: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1
+             FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND pid <> pg_backend_pid()
+              AND wait_event_type = 'Lock'
+              AND query LIKE '%UPDATE "lobbies"%'
+              AND query LIKE '%last_event_sequence%'
+         ) AS blocked`,
+      );
+      if (result.rows[0]?.blocked === true) {
+        return;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    throw new Error("Timed out waiting for a concurrent command to block on the lobby fence.");
+  }
+
+  function commandRequest(
+    state: DurableLobbyState,
+    commandId: string,
+    commandType = "test-command",
+  ): CommandTransactionRequest<JsonObject> {
+    return {
+      lobbyId: state.lobby.id,
+      participantId: state.participants[0]!.id,
+      commandId,
+      commandType,
+      roundId: state.round!.id,
+      createdAt: new Date("2026-07-17T09:00:00.000Z"),
+      decodeResult: (result) => result,
+    };
+  }
+
   test("restores the complete authoritative state after reconnecting the client", async () => {
     const expected = createLobbyState();
     const firstConnection = await connect();
@@ -477,5 +536,297 @@ describeDatabase("PostgreSQL durable game state", () => {
         ],
       ),
     ).rejects.toMatchObject({ code: "23505" });
+  });
+
+  test("commits state, an active-lobby event, and its idempotent result atomically", async () => {
+    const connection = await connect();
+    const state = createLobbyState();
+    const request = commandRequest(state, `command-public-${randomUUID()}`);
+    const activityAt = new Date("2026-07-17T09:00:00.000Z");
+    let mutationInvocations = 0;
+    await connection.lobbyStates.create(state);
+
+    const execute = () =>
+      connection.commandTransactions.execute(request, async ({ lobbies }) => {
+        mutationInvocations += 1;
+        await lobbies.recordActivity(activityAt);
+        return {
+          deliveryScope: "active-lobby" as const,
+          result: { status: "committed" },
+          event: {
+            roundId: state.round!.id,
+            eventType: "test-public-command",
+            schemaVersion: 1,
+            payload: { status: "committed" },
+            createdAt: activityAt,
+          },
+        };
+      });
+
+    const committed = await execute();
+    const replayed = await execute();
+    const restored = await connection.lobbyStates.findById(state.lobby.id);
+
+    expect(committed).toMatchObject({
+      idempotentReplay: false,
+      committedEvent: {
+        sequence: 2n,
+        eventType: "test-public-command",
+      },
+      commandResult: {
+        commandId: request.commandId,
+        eventSequence: 2n,
+        result: { status: "committed" },
+      },
+    });
+    expect(replayed).toEqual({
+      commandResult: committed.commandResult,
+      committedEvent: null,
+      idempotentReplay: true,
+    });
+    expect(mutationInvocations).toBe(1);
+    expect(restored?.lobby).toMatchObject({
+      lastActivityAt: activityAt,
+      lastEventSequence: 2n,
+    });
+    expect(restored?.events).toHaveLength(2);
+    expect(restored?.events.at(-1)).toEqual(committed.committedEvent);
+    expect(restored?.commandResults).toHaveLength(2);
+  });
+
+  test("commits participant-private results without allocating a lobby sequence", async () => {
+    const connection = await connect();
+    const state = createLobbyState();
+    const request = commandRequest(state, `command-private-${randomUUID()}`);
+    const activityAt = new Date("2026-07-17T09:01:00.000Z");
+    await connection.lobbyStates.create(state);
+
+    const committed = await connection.commandTransactions.execute(request, async ({ lobbies }) => {
+      await lobbies.recordActivity(activityAt);
+      return {
+        deliveryScope: "participant-private" as const,
+        result: { accepted: true },
+      };
+    });
+    const restored = await connection.lobbyStates.findById(state.lobby.id);
+
+    expect(committed).toMatchObject({
+      idempotentReplay: false,
+      committedEvent: null,
+      commandResult: {
+        deliveryScope: "participant-private",
+        eventSequence: null,
+        result: { accepted: true },
+      },
+    });
+    expect(restored?.lobby.lastEventSequence).toBe(1n);
+    expect(restored?.events).toHaveLength(1);
+    expect(restored?.commandResults).toHaveLength(2);
+  });
+
+  test("concurrent duplicate commands commit one effect and replay the winner", async () => {
+    const state = createLobbyState();
+    const setupConnection = await connect();
+    const firstConnection = await connect();
+    const secondConnection = await connect();
+    const request = commandRequest(state, `command-race-${randomUUID()}`);
+    const activityAt = new Date("2026-07-17T09:02:00.000Z");
+    let mutationInvocations = 0;
+    await setupConnection.lobbyStates.create(state);
+
+    const mutate = async ({ lobbies }: CommandTransactionRepositories) => {
+      mutationInvocations += 1;
+      await lobbies.recordActivity(activityAt);
+      return {
+        deliveryScope: "active-lobby" as const,
+        result: { operationId: request.commandId },
+        event: {
+          roundId: state.round!.id,
+          eventType: "test-raced-command",
+          schemaVersion: 1,
+          payload: { operationId: request.commandId },
+          createdAt: activityAt,
+        },
+      };
+    };
+
+    const results = await Promise.all([
+      firstConnection.commandTransactions.execute(request, mutate),
+      secondConnection.commandTransactions.execute(request, mutate),
+    ]);
+    const restored = await setupConnection.lobbyStates.findById(state.lobby.id);
+
+    expect(results.map((result) => result.idempotentReplay).sort()).toEqual([false, true]);
+    expect(results[0]!.commandResult).toEqual(results[1]!.commandResult);
+    expect(results.filter((result) => result.committedEvent !== null)).toHaveLength(1);
+    expect(mutationInvocations).toBeGreaterThanOrEqual(1);
+    expect(restored?.lobby.lastEventSequence).toBe(2n);
+    expect(restored?.events).toHaveLength(2);
+    expect(restored?.commandResults).toHaveLength(2);
+  }, 15_000);
+
+  test("concurrent participant-private no-op commands replay without repeating mutation", async () => {
+    const state = createLobbyState();
+    const setupConnection = await connect();
+    const retryEvents: TransactionRetryEvent[] = [];
+    const firstConnection = await connectWithRetryObserver(retryEvents);
+    const secondConnection = await connectWithRetryObserver(retryEvents);
+    const request = commandRequest(state, `command-private-race-${randomUUID()}`);
+    let mutationInvocations = 0;
+    let signalFirstMutation!: () => void;
+    let releaseFirstMutation!: () => void;
+    const firstMutationStarted = new Promise<void>((resolve) => {
+      signalFirstMutation = resolve;
+    });
+    const firstMutationRelease = new Promise<void>((resolve) => {
+      releaseFirstMutation = resolve;
+    });
+    await setupConnection.lobbyStates.create(state);
+
+    const firstResult = firstConnection.commandTransactions.execute(request, async () => {
+      mutationInvocations += 1;
+      signalFirstMutation();
+      await firstMutationRelease;
+      return {
+        deliveryScope: "participant-private" as const,
+        result: { accepted: false, reason: "no-change" },
+      };
+    });
+    await firstMutationStarted;
+
+    const secondResult = secondConnection.commandTransactions.execute(request, async () => {
+      mutationInvocations += 1;
+      return {
+        deliveryScope: "participant-private" as const,
+        result: { accepted: false, reason: "no-change" },
+      };
+    });
+    try {
+      await waitForBlockedCommandFence();
+    } finally {
+      releaseFirstMutation();
+    }
+
+    const results = await Promise.all([firstResult, secondResult]);
+    const restored = await setupConnection.lobbyStates.findById(state.lobby.id);
+
+    expect(results.map((result) => result.idempotentReplay).sort()).toEqual([false, true]);
+    expect(results[0]!.commandResult).toEqual(results[1]!.commandResult);
+    expect(mutationInvocations).toBe(1);
+    expect(retryEvents.some((event) => event.kind === "retry")).toBe(true);
+    expect(restored?.lobby.lastEventSequence).toBe(1n);
+    expect(restored?.events).toHaveLength(1);
+    expect(restored?.commandResults).toHaveLength(2);
+  }, 15_000);
+
+  test("rejects replaying a command ID under a different command type", async () => {
+    const connection = await connect();
+    const state = createLobbyState();
+    const commandId = `command-mismatch-${randomUUID()}`;
+    const firstRequest = commandRequest(state, commandId, "first-command");
+    await connection.lobbyStates.create(state);
+    await connection.commandTransactions.execute(firstRequest, async () => ({
+      deliveryScope: "participant-private",
+      result: { accepted: true },
+    }));
+
+    const mismatchedRequest = commandRequest(state, commandId, "different-command");
+    await expect(
+      connection.commandTransactions.execute(mismatchedRequest, async () => ({
+        deliveryScope: "participant-private",
+        result: { accepted: false },
+      })),
+    ).rejects.toBeInstanceOf(CommandReplayMismatchError);
+  });
+
+  test("orders concurrent commands with contiguous committed lobby sequences", async () => {
+    const state = createLobbyState();
+    const setupConnection = await connect();
+    const commandConnections = await Promise.all(Array.from({ length: 4 }, async () => connect()));
+    await setupConnection.lobbyStates.create(state);
+
+    const results = await Promise.all(
+      commandConnections.map(async (connection, index) => {
+        const request = commandRequest(state, `ordered-${index}-${randomUUID()}`);
+        const activityAt = new Date(`2026-07-17T09:03:0${index}.000Z`);
+        return connection.commandTransactions.execute(request, async ({ lobbies }) => {
+          await lobbies.recordActivity(activityAt);
+          return {
+            deliveryScope: "active-lobby" as const,
+            result: { index },
+            event: {
+              roundId: state.round!.id,
+              eventType: "test-ordered-command",
+              schemaVersion: 1,
+              payload: { index },
+              createdAt: activityAt,
+            },
+          };
+        });
+      }),
+    );
+    const restored = await setupConnection.lobbyStates.findById(state.lobby.id);
+
+    expect(
+      results
+        .map((result) => result.commandResult.eventSequence)
+        .sort((left, right) => (left! < right! ? -1 : 1)),
+    ).toEqual([2n, 3n, 4n, 5n]);
+    expect(restored?.lobby.lastEventSequence).toBe(5n);
+    expect(restored?.events.map((event) => event.sequence)).toEqual([1n, 2n, 3n, 4n, 5n]);
+  }, 15_000);
+
+  test("rolls back state when a command mutation fails before its event is committed", async () => {
+    const connection = await connect();
+    const state = createLobbyState();
+    const request = commandRequest(state, `command-failure-${randomUUID()}`);
+    await connection.lobbyStates.create(state);
+
+    await expect(
+      connection.commandTransactions.execute(request, async ({ lobbies }) => {
+        await lobbies.recordActivity(new Date("2026-07-17T09:04:00.000Z"));
+        throw new Error("mutation failed");
+      }),
+    ).rejects.toThrow("mutation failed");
+    const restored = await connection.lobbyStates.findById(state.lobby.id);
+
+    expect(restored?.lobby.lastActivityAt).toEqual(state.lobby.lastActivityAt);
+    expect(restored?.lobby.lastEventSequence).toBe(1n);
+    expect(restored?.events).toHaveLength(1);
+    expect(restored?.commandResults).toHaveLength(1);
+  });
+
+  test("rolls back state, sequence, and event when command-result persistence fails", async () => {
+    const connection = await connect();
+    const state = createLobbyState();
+    const request = {
+      ...commandRequest(state, `command-late-failure-${randomUUID()}`),
+      participantId: `missing-participant-${randomUUID()}`,
+    };
+    const activityAt = new Date("2026-07-17T09:05:00.000Z");
+    await connection.lobbyStates.create(state);
+
+    await expect(
+      connection.commandTransactions.execute(request, async ({ lobbies }) => {
+        await lobbies.recordActivity(activityAt);
+        return {
+          deliveryScope: "active-lobby",
+          result: { accepted: true },
+          event: {
+            roundId: state.round!.id,
+            eventType: "test-late-failure",
+            schemaVersion: 1,
+            payload: { accepted: true },
+            createdAt: activityAt,
+          },
+        };
+      }),
+    ).rejects.toBeDefined();
+    const restored = await connection.lobbyStates.findById(state.lobby.id);
+
+    expect(restored?.lobby.lastActivityAt).toEqual(state.lobby.lastActivityAt);
+    expect(restored?.lobby.lastEventSequence).toBe(1n);
+    expect(restored?.events).toHaveLength(1);
+    expect(restored?.commandResults).toHaveLength(1);
   });
 });

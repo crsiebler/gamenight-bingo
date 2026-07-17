@@ -14,6 +14,7 @@ import {
   type RoundStage as DatabaseRoundStage,
   type SessionStatus as DatabaseSessionStatus,
 } from "../generated/prisma/client.js";
+import { runTransactionWithRetry, type TransactionRetryOptions } from "./transaction-retry.js";
 
 export type JsonPrimitive = boolean | number | string | null;
 export type JsonValue = JsonPrimitive | JsonObject | readonly JsonValue[];
@@ -140,14 +141,14 @@ export interface DurableActiveLobbyEvent {
   readonly createdAt: Date;
 }
 
-export interface DurableCommandResult {
+export interface DurableCommandResult<Result extends JsonObject = JsonObject> {
   readonly participantId: string;
   readonly commandId: string;
   readonly roundId: string | null;
   readonly commandType: string;
   readonly deliveryScope: DeliveryScope;
   readonly eventSequence: bigint | null;
-  readonly result: JsonObject;
+  readonly result: Result;
   readonly createdAt: Date;
 }
 
@@ -166,8 +167,72 @@ export interface LobbyStateRepository {
   findById(lobbyId: string): Promise<DurableLobbyState | null>;
 }
 
+export interface CommandTransactionRequest<Result extends JsonObject = JsonObject> {
+  readonly lobbyId: string;
+  readonly participantId: string;
+  readonly commandId: string;
+  readonly commandType: string;
+  readonly roundId: string | null;
+  readonly createdAt: Date;
+  readonly decodeResult: (result: JsonObject) => Result;
+}
+
+export class CommandReplayMismatchError extends Error {
+  constructor() {
+    super("Command ID is already committed for a different command scope.");
+    this.name = "CommandReplayMismatchError";
+  }
+}
+
+export interface TransactionalLobbyRepository {
+  recordActivity(activityAt: Date): Promise<void>;
+}
+
+export interface CommandTransactionRepositories {
+  readonly lobbies: TransactionalLobbyRepository;
+}
+
+export interface PendingActiveLobbyEvent {
+  readonly roundId: string | null;
+  readonly eventType: string;
+  readonly schemaVersion: number;
+  readonly payload: JsonObject;
+  readonly createdAt: Date;
+}
+
+export type PendingCommandCommit<Result extends JsonObject> =
+  | {
+      readonly deliveryScope: "active-lobby";
+      readonly result: Result;
+      readonly event: PendingActiveLobbyEvent;
+    }
+  | {
+      readonly deliveryScope: "participant-private";
+      readonly result: Result;
+      readonly event?: never;
+    };
+
+export interface CommittedCommand<Result extends JsonObject> {
+  readonly commandResult: DurableCommandResult<Result>;
+  readonly committedEvent: DurableActiveLobbyEvent | null;
+  readonly idempotentReplay: boolean;
+}
+
+export interface CommandTransactionRepository {
+  /** The callback may run again after a rolled-back conflict and must not perform external effects. */
+  execute<Result extends JsonObject>(
+    request: CommandTransactionRequest<Result>,
+    mutate: (repositories: CommandTransactionRepositories) => Promise<PendingCommandCommit<Result>>,
+  ): Promise<CommittedCommand<Result>>;
+}
+
+export interface DatabaseConnectionOptions {
+  readonly transactionRetry?: TransactionRetryOptions;
+}
+
 export interface DatabaseConnection {
   readonly lobbyStates: LobbyStateRepository;
+  readonly commandTransactions: CommandTransactionRepository;
   disconnect(): Promise<void>;
 }
 
@@ -249,6 +314,31 @@ function toJsonObject(value: Prisma.JsonValue): JsonObject {
     throw new TypeError("Persisted event and command payloads must be JSON objects.");
   }
   return value as JsonObject;
+}
+
+function toDurableCommandResult<Result extends JsonObject>(
+  command: {
+    readonly participantId: string;
+    readonly commandId: string;
+    readonly roundId: string | null;
+    readonly commandType: string;
+    readonly deliveryScope: DatabaseDeliveryScope;
+    readonly eventSequence: bigint | null;
+    readonly result: Prisma.JsonValue;
+    readonly createdAt: Date;
+  },
+  decodeResult: (result: JsonObject) => Result,
+): DurableCommandResult<Result> {
+  return {
+    participantId: command.participantId,
+    commandId: command.commandId,
+    roundId: command.roundId,
+    commandType: command.commandType,
+    deliveryScope: deliveryScopes.fromDatabase(command.deliveryScope),
+    eventSequence: command.eventSequence,
+    result: decodeResult(toJsonObject(command.result)),
+    createdAt: command.createdAt,
+  };
 }
 
 function assertAggregate(state: DurableLobbyState): void {
@@ -594,13 +684,159 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
   }
 }
 
-export async function connectDatabase(connectionString: string): Promise<DatabaseConnection> {
+class PrismaTransactionalLobbyRepository implements TransactionalLobbyRepository {
+  constructor(
+    private readonly transaction: Prisma.TransactionClient,
+    private readonly lobbyId: string,
+  ) {}
+
+  async recordActivity(activityAt: Date): Promise<void> {
+    const updated = await this.transaction.$executeRaw`
+      UPDATE "lobbies"
+         SET "last_activity_at" = GREATEST("last_activity_at", ${activityAt})
+       WHERE "id" = ${this.lobbyId}
+    `;
+    if (updated !== 1) {
+      throw new Error("Cannot record activity for an unknown lobby.");
+    }
+  }
+}
+
+class PrismaCommandTransactionRepository implements CommandTransactionRepository {
+  constructor(
+    private readonly prisma: GeneratedPrismaClient,
+    private readonly retryOptions: TransactionRetryOptions,
+  ) {}
+
+  async execute<Result extends JsonObject>(
+    request: CommandTransactionRequest<Result>,
+    mutate: (repositories: CommandTransactionRepositories) => Promise<PendingCommandCommit<Result>>,
+  ): Promise<CommittedCommand<Result>> {
+    return runTransactionWithRetry(
+      async () =>
+        this.prisma.$transaction(
+          async (transaction) => {
+            const lockedLobbies = await transaction.$queryRaw<readonly { id: string }[]>`
+              UPDATE "lobbies"
+                 SET "last_event_sequence" = "last_event_sequence"
+               WHERE "id" = ${request.lobbyId}
+               RETURNING "id"
+            `;
+            if (lockedLobbies.length !== 1) {
+              throw new Error("Cannot execute a command for an unknown lobby.");
+            }
+
+            const existing = await transaction.commandResult.findUnique({
+              where: {
+                lobbyId_participantId_commandId: {
+                  lobbyId: request.lobbyId,
+                  participantId: request.participantId,
+                  commandId: request.commandId,
+                },
+              },
+            });
+            if (existing !== null) {
+              if (
+                existing.commandType !== request.commandType ||
+                existing.roundId !== request.roundId
+              ) {
+                throw new CommandReplayMismatchError();
+              }
+              return {
+                commandResult: toDurableCommandResult(existing, request.decodeResult),
+                committedEvent: null,
+                idempotentReplay: true,
+              };
+            }
+
+            const pending = await mutate({
+              lobbies: new PrismaTransactionalLobbyRepository(transaction, request.lobbyId),
+            });
+            const validatedResult = request.decodeResult(pending.result);
+
+            let eventSequence: bigint | null = null;
+            let committedEvent: DurableActiveLobbyEvent | null = null;
+            if (pending.deliveryScope === "active-lobby") {
+              if (pending.event.roundId !== request.roundId) {
+                throw new RangeError("A command event must use the command's round scope.");
+              }
+              const sequenceRows = await transaction.$queryRaw<readonly { sequence: bigint }[]>`
+                UPDATE "lobbies"
+                   SET "last_event_sequence" = "last_event_sequence" + 1
+                 WHERE "id" = ${request.lobbyId}
+                 RETURNING "last_event_sequence" AS "sequence"
+              `;
+              const sequence = sequenceRows[0]?.sequence;
+              if (sequence === undefined) {
+                throw new Error("Cannot allocate an event sequence for an unknown lobby.");
+              }
+              eventSequence = sequence;
+              committedEvent = {
+                sequence,
+                roundId: pending.event.roundId,
+                eventType: pending.event.eventType,
+                schemaVersion: pending.event.schemaVersion,
+                payload: pending.event.payload,
+                createdAt: pending.event.createdAt,
+              };
+              await transaction.activeLobbyEvent.create({
+                data: {
+                  lobbyId: request.lobbyId,
+                  sequence,
+                  roundId: pending.event.roundId,
+                  eventType: pending.event.eventType,
+                  schemaVersion: pending.event.schemaVersion,
+                  payload: toInputJson(pending.event.payload),
+                  createdAt: pending.event.createdAt,
+                },
+              });
+            }
+
+            const storedCommand = await transaction.commandResult.create({
+              data: {
+                lobbyId: request.lobbyId,
+                participantId: request.participantId,
+                commandId: request.commandId,
+                roundId: request.roundId,
+                commandType: request.commandType,
+                deliveryScope: deliveryScopes.toDatabase(pending.deliveryScope),
+                eventSequence,
+                result: toInputJson(validatedResult),
+                createdAt: request.createdAt,
+              },
+            });
+
+            return {
+              commandResult: toDurableCommandResult(storedCommand, request.decodeResult),
+              committedEvent,
+              idempotentReplay: false,
+            };
+          },
+          {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+            maxWait: 5_000,
+            timeout: 10_000,
+          },
+        ),
+      this.retryOptions,
+    );
+  }
+}
+
+export async function connectDatabase(
+  connectionString: string,
+  options: DatabaseConnectionOptions = {},
+): Promise<DatabaseConnection> {
   const adapter = new PrismaPg({ connectionString });
   const prisma = new PrismaClient({ adapter });
   await prisma.$connect();
 
   return {
     lobbyStates: new PrismaLobbyStateRepository(prisma),
+    commandTransactions: new PrismaCommandTransactionRepository(
+      prisma,
+      options.transactionRetry ?? {},
+    ),
     async disconnect() {
       await prisma.$disconnect();
     },
