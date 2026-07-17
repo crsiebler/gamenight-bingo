@@ -19,6 +19,7 @@ Next story: US-001
 - After workspace dependency manifests change, run `bun install` to refresh `bun.lock`, then verify reproducibility with `bun install --frozen-lockfile`.
 - Versioned Zod wire contracts live under `packages/contracts/src/v1`; every nested object is strict, top-level messages carry `schemaVersion`, identifiers and active-lobby sequences are branded, client commands contain intent rather than authoritative state, and authorized snapshots structurally omit credentials, foreign cards, future draws, prior-round history, and active event history. Lobby-wide sequences belong only on messages delivered to every authorized lobby consumer; private-only events omit them, acknowledgements declare their scope, and snapshot refinements enforce cross-object roster/state consistency.
 - `docs/bingo-pattern-catalog.md` inventories source diagrams as `p1/dNN` in reading order with exact, flexible-example, or alias modes and tested 5x5 source masks; when `packages/patterns/src/catalog.ts` lands, generate and parity-test the documentation from runtime canonical data rather than maintaining a second mask source.
+- Domain randomization accepts injected `CryptographicRandomBytes`; runtime adapters own the secure byte source, deterministic tests inject seeded bytes, and bounded integer selection uses rejection sampling rather than biased modulo reduction.
 
 Append-only iteration log
 -------------------------
@@ -970,3 +971,48 @@ Review outcome for US-010 at 2026-07-16 19:09:50 MST:
 - `code-reviewer` and `qa-expert` reviewed the complete staged catalog, test, and progress diff against the four source PDFs.
 - Both specialists returned only the same low-severity observation that `progress.txt` listed `prd.json` before the required post-review metadata update; the finding is resolved by the mandated final staging sequence and requires no substantive change or re-review.
 - No in-scope critical, high, or medium findings remain. Residual risk is limited to future runtime/documentation parity, which US-013 explicitly owns.
+
+## 2026-07-16 19:21:46 MST - US-011
+- What was implemented
+  - Added framework-independent 75-ball card generation with B/I/N/G/O column ranges, unique column values, a free center, and duplicate rejection across every card generated for a round.
+  - Added injected cryptographic random-byte input with rejection-sampled bounded selection so deterministic tests do not require domain access to runtime crypto APIs and production selection avoids modulo bias.
+  - Added free-cell satisfaction behavior plus unit and fast-check property tests covering deterministic generation, forced duplicate candidates, card invariants, round uniqueness, bounded random-source failure, and the configured 25-participant bound.
+- Files changed: `AGENTS.md`, `package.json`, `bun.lock`, `packages/domain/src/bingo-card.ts`, `packages/domain/src/index.ts`, `tests/bingo-card.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-011 - Generate valid Bingo cards`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run tests/bingo-card.test.ts` (expected fail before implementation: 5 failures because the domain card API did not exist; expected fail during review remediation for unbounded rejection sampling; pass after remediation with 7 tests)
+  - `bun install --frozen-lockfile` (pass; 248 installs checked with no changes)
+  - `bun run lint` (pass)
+  - `bun run format:check` (initial fail on 2 new files; pass after formatting)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `bun run test` (pass after review remediation; 6 Vitest files and 152 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: none
+  - Used: skipped because the card rules and existing domain boundaries were clear and standard mode did not require an implementation adviser
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and randomness-triggered `security-engineer`; targeted re-review by the same specialists
+  - Findings: initial forced-collision coverage and unbounded rejection-sampling findings fixed; targeted re-review returned no actionable findings
+- Decisions (why):
+  - Generated all cards for a round through one API so uniqueness is enforced at the domain boundary that can observe the complete card set rather than delegated to callers.
+  - Required injected random bytes instead of reading global or Node crypto inside the domain package, preserving deterministic tests and framework-independent runtime boundaries.
+  - Used Fisher-Yates shuffles with rejection-sampled byte selection because direct modulo reduction would bias bounded choices when 256 is not divisible by the requested range.
+  - Added fast-check as an exact root development dependency because the acceptance criteria explicitly require property-based invariant tests.
+- **Learnings for future iterations:**
+  - A 75-ball card is stored row-major to match the v1 card contract; `index % 5` identifies B/I/N/G/O range and index 12 is the free center.
+  - Round-level generation must own duplicate detection; independently generated cards cannot guarantee uniqueness within the round.
+  - The same injected byte-source and rejection-sampling convention should be reused for the draw-order shuffle in US-012.
+- Known issues / follow-ups:
+  - Runtime adapters that supply secure bytes land in later application stories; the domain intentionally requires the source as an argument.
+- Next iteration start:
+  - Implement US-012 draw-order generation using the established injected byte-source convention without exposing future positions.
+---
+
+Review remediation for US-011 at 2026-07-16 19:25:50 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced two deduplicated medium blockers: generated property inputs did not force the duplicate-card path, and rejection sampling could loop forever for a pathological injected source.
+- Added a repeating deterministic source that proves duplicate candidates never escape and the generator fails instead of returning a non-unique round.
+- Added a failing regression for repeated rejected bytes, then bounded unbiased index sampling to 256 attempts with an explicit failure.
+- Post-fix checks: focused card suite (7 tests pass), `bun run lint` (pass), `bun run format:check` (pass), `bun run typecheck` (pass), `bun run test` (152 tests pass), `bun run test:e2e` (pass), and staged/unstaged diff checks (pass).
+- Targeted re-review: `code-reviewer`, `qa-expert`, and `security-engineer` returned empty actionable finding lists with no residual risks; all in-scope blockers are resolved.

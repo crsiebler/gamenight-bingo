@@ -79,6 +79,9 @@ cannot be represented.
 database details behind repository interfaces. HTTP and realtime adapters must
 validate boundary contracts, authorize the actor, invoke application/domain
 behavior, and return committed results rather than duplicate domain rules.
+Domain randomization accepts injected `CryptographicRandomBytes`; runtime
+adapters provide the secure byte source, tests provide deterministic sources,
+and bounded integer selection must avoid modulo bias.
 Run `bun run test:workspace-boundaries` after changing workspace manifests or
 domain imports; its AST-based guard covers static, type-only, dynamic, CommonJS,
 JSDoc, and triple-slash module references with normalized path separators rather
