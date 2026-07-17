@@ -9,6 +9,8 @@ import {
   LobbyCodeSchema,
   LobbyEntryResponseSchema,
   PatternCatalogResponseSchema,
+  RealtimeTicketRequestSchema,
+  RealtimeTicketResponseSchema,
   RejoinLobbyRequestSchema,
   SameDeviceSessionStatusResponseSchema,
   SnapshotMessageSchema,
@@ -31,7 +33,7 @@ const SESSION_ENTROPY_BYTES = 32;
 const MAX_CREDENTIAL_ATTEMPTS = 3;
 const PRIVATE_HEADERS = { "cache-control": "no-store" } as const;
 
-export type EntryRateLimitScope = "create" | "join" | "rejoin" | "status" | "snapshot";
+export type EntryRateLimitScope = "create" | "join" | "rejoin" | "ticket" | "status" | "snapshot";
 
 export interface EntryRateLimiter {
   consume(input: {
@@ -107,6 +109,18 @@ export interface LobbyEntryStore extends ParticipantSessionStore {
     readonly lobbyId: string;
     readonly tokenHash: Uint8Array;
   }): Promise<Snapshot | null>;
+  issueRealtimeTicket(input: {
+    readonly lobbyId: string;
+    readonly sessionTokenHash: Uint8Array;
+    readonly ticketHash: Uint8Array;
+    readonly ttlSeconds: number;
+  }): Promise<
+    | { readonly ok: true; readonly expiresAt: Date }
+    | {
+        readonly ok: false;
+        readonly error: { readonly code: "TICKET_HASH_COLLISION" | "UNAUTHORIZED" };
+      }
+  >;
 }
 
 export interface LobbyEntryHttpDependencies {
@@ -120,6 +134,7 @@ export interface LobbyEntryHttpDependencies {
   readonly nextLobbyCode: () => string;
   readonly maxPlayersPerLobby: number;
   readonly maxActiveLobbies: number;
+  readonly realtimeTicketTtlSeconds: number;
 }
 
 interface Credential {
@@ -340,6 +355,7 @@ export function createInMemoryRateLimiter(
     ["create", new Map()],
     ["join", new Map()],
     ["rejoin", new Map()],
+    ["ticket", new Map()],
     ["status", new Map()],
     ["snapshot", new Map()],
   ]);
@@ -465,7 +481,7 @@ export function createLobbyEntryHttpHandler(dependencies: LobbyEntryHttpDependen
     }
 
     const match =
-      /^\/api\/v1\/lobbies\/([^/]+)\/(participants|session|session\/rejoin|snapshot)$/.exec(
+      /^\/api\/v1\/lobbies\/([^/]+)\/(participants|session|session\/rejoin|realtime-ticket|snapshot)$/.exec(
         pathname,
       );
     if (match === null) {
@@ -480,13 +496,16 @@ export function createLobbyEntryHttpHandler(dependencies: LobbyEntryHttpDependen
       (request.method === "POST" && resource === "participants") ||
       (request.method === "GET" && resource === "session") ||
       (request.method === "POST" && resource === "session/rejoin") ||
+      (request.method === "POST" && resource === "realtime-ticket") ||
       (request.method === "GET" && resource === "snapshot");
     if (!supportedRoute) {
       return errorResponse("NOT_FOUND", 404, dependencies.clock());
     }
     if (
       request.method === "POST" &&
-      (resource === "participants" || resource === "session/rejoin") &&
+      (resource === "participants" ||
+        resource === "session/rejoin" ||
+        resource === "realtime-ticket") &&
       !hasValidOrigin(request)
     ) {
       return errorResponse("FORBIDDEN", 403, dependencies.clock());
@@ -497,6 +516,10 @@ export function createLobbyEntryHttpHandler(dependencies: LobbyEntryHttpDependen
     }
     if (request.method === "POST" && resource === "session/rejoin") {
       const limited = consumeRateLimit(dependencies, "rejoin", request, null);
+      if (limited !== null) return limited;
+    }
+    if (request.method === "POST" && resource === "realtime-ticket") {
+      const limited = consumeRateLimit(dependencies, "ticket", request, null);
       if (limited !== null) return limited;
     }
     if (request.method === "GET" && resource === "session") {
@@ -545,6 +568,44 @@ export function createLobbyEntryHttpHandler(dependencies: LobbyEntryHttpDependen
         if (error !== null) return error;
       }
       return errorResponse("INTERNAL_ERROR", 500, now, parsed.data.commandId);
+    }
+
+    if (request.method === "POST" && resource === "realtime-ticket") {
+      const now = dependencies.clock();
+      const parsedBody = await parseBody(request);
+      if (!parsedBody.ok) return errorResponse("INVALID_PAYLOAD", parsedBody.status, now);
+      const parsed = RealtimeTicketRequestSchema.safeParse(parsedBody.value);
+      if (!parsed.success) return errorResponse("INVALID_PAYLOAD", 400, now);
+      const cookie = parseCookie(request);
+      const sessionTokenHash =
+        cookie === undefined ? null : hashCanonicalParticipantSessionToken(cookie);
+      if (sessionTokenHash === null) {
+        return errorResponse("UNAUTHORIZED", 401, now);
+      }
+      for (let attempt = 0; attempt < MAX_CREDENTIAL_ATTEMPTS; attempt += 1) {
+        const credential = createCredential(dependencies.randomBytes);
+        const result = await dependencies.store.issueRealtimeTicket({
+          lobbyId,
+          sessionTokenHash,
+          ticketHash: credential.tokenHash,
+          ttlSeconds: dependencies.realtimeTicketTtlSeconds,
+        });
+        if (result.ok) {
+          return privateJson(
+            RealtimeTicketResponseSchema.parse({
+              schemaVersion: CONTRACT_SCHEMA_VERSION,
+              type: "realtime-ticket",
+              ticket: credential.token,
+              expiresAt: result.expiresAt.toISOString(),
+            }),
+            201,
+          );
+        }
+        if (result.error.code === "UNAUTHORIZED") {
+          return errorResponse("UNAUTHORIZED", 401, now);
+        }
+      }
+      return errorResponse("INTERNAL_ERROR", 500, now);
     }
 
     if (request.method === "GET" && resource === "session") {

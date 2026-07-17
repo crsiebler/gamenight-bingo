@@ -6,6 +6,8 @@ import {
   JoinLobbyRequestSchema,
   LobbyEntryResponseSchema,
   PatternCatalogResponseSchema,
+  RealtimeTicketRequestSchema,
+  RealtimeTicketResponseSchema,
   RejoinLobbyRequestSchema,
   SameDeviceSessionStatusResponseSchema,
 } from "../packages/contracts/src/index.js";
@@ -98,6 +100,39 @@ describe("v1 lobby entry HTTP contracts", () => {
       commandId: "command-entry",
       idempotentReplay: true,
     });
+  });
+
+  test("accepts intent-only realtime ticket issuance and returns one opaque credential", () => {
+    expect(RealtimeTicketRequestSchema.parse({ schemaVersion: CONTRACT_SCHEMA_VERSION })).toEqual({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+    });
+    expect(
+      RealtimeTicketRequestSchema.safeParse({
+        schemaVersion: CONTRACT_SCHEMA_VERSION,
+        participantId: "participant-1",
+      }).success,
+    ).toBe(false);
+
+    const response = {
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "realtime-ticket",
+      ticket: "A".repeat(43),
+      expiresAt: "2026-07-17T12:01:00.000Z",
+    } as const;
+    expect(RealtimeTicketResponseSchema.parse(response)).toEqual(response);
+    for (const ticket of [
+      "A".repeat(42),
+      "A".repeat(44),
+      `${"A".repeat(42)}=`,
+      "A".repeat(42) + "+",
+      "A".repeat(42) + "B",
+    ]) {
+      expect(RealtimeTicketResponseSchema.safeParse({ ...response, ticket }).success).toBe(false);
+    }
+    expect(
+      RealtimeTicketResponseSchema.safeParse({ ...response, participantId: "participant-1" })
+        .success,
+    ).toBe(false);
   });
 
   test("exposes identity only for a recognized scoped session", () => {

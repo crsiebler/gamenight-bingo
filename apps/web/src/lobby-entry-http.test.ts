@@ -15,6 +15,7 @@ import {
 
 const NOW = new Date("2026-07-17T12:00:00.000Z");
 const SESSION_TOKEN = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const REALTIME_TICKET = Buffer.alloc(32, 1).toString("base64url");
 
 test("routes a bare private lobby path through the shared dispatcher", async () => {
   const route = await readFile(
@@ -139,6 +140,10 @@ function createStore(overrides: Partial<LobbyEntryStore> = {}): LobbyEntryStore 
       ok: true,
       entry: { ...entry, commandId: input.commandId },
     }),
+    issueRealtimeTicket: async () => ({
+      ok: true,
+      expiresAt: new Date(NOW.getTime() + 60_000),
+    }),
     findActiveLobbyIdByCode: async (code) => (code === "ABC234" ? "lobby-1" : null),
     expireParticipantRejoinWindows: async () => 0,
     markParticipantSessionDisconnected: async () => null,
@@ -182,7 +187,7 @@ function createDependencies(
       },
     ],
     rateLimiter: createInMemoryRateLimiter(
-      { create: 10, join: 10, rejoin: 10, status: 10, snapshot: 10 },
+      { create: 10, join: 10, rejoin: 10, ticket: 10, status: 10, snapshot: 10 },
       60_000,
     ),
     requesterKey: (request) => request.headers.get("x-forwarded-for") ?? "unidentified",
@@ -192,6 +197,7 @@ function createDependencies(
     nextLobbyCode: () => "ABC234",
     maxPlayersPerLobby: 25,
     maxActiveLobbies: 100,
+    realtimeTicketTtlSeconds: 60,
     ...overrides,
   };
 }
@@ -366,9 +372,143 @@ describe("lobby entry HTTP API", () => {
     });
   });
 
+  test("issues a scoped realtime ticket while persisting only its hash", async () => {
+    const writes: Parameters<LobbyEntryStore["issueRealtimeTicket"]>[0][] = [];
+    const store = createStore({
+      issueRealtimeTicket: async (input) => {
+        writes.push(input);
+        return { ok: true, expiresAt: new Date(NOW.getTime() + 60_000) };
+      },
+    });
+    const bytes = Buffer.from(REALTIME_TICKET, "base64url");
+    const handle = createLobbyEntryHttpHandler(
+      createDependencies(store, { randomBytes: () => new Uint8Array(bytes) }),
+    );
+
+    const response = await handle(
+      request("/api/v1/lobbies/ABC234/realtime-ticket", {
+        method: "POST",
+        body: JSON.stringify({ schemaVersion: CONTRACT_SCHEMA_VERSION }),
+        headers: { cookie: `${PARTICIPANT_SESSION_COOKIE_NAME}=${SESSION_TOKEN}` },
+      }),
+    );
+    const body = await responseJson(response);
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(body).toEqual({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "realtime-ticket",
+      ticket: REALTIME_TICKET,
+      expiresAt: "2026-07-17T12:01:00.000Z",
+    });
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({ lobbyId: "lobby-1", ttlSeconds: 60 });
+    expect(writes[0]?.sessionTokenHash).toHaveLength(32);
+    expect(writes[0]?.ticketHash).toHaveLength(32);
+    expect(JSON.stringify(writes[0])).not.toContain(REALTIME_TICKET);
+    expect(JSON.stringify(writes[0])).not.toContain(SESSION_TOKEN);
+  });
+
+  test("requires a valid scoped cookie and redacts credentials from ticket errors", async () => {
+    let writes = 0;
+    const store = createStore({
+      issueRealtimeTicket: async () => {
+        writes += 1;
+        return { ok: false, error: { code: "UNAUTHORIZED" } };
+      },
+    });
+    const handle = createLobbyEntryHttpHandler(createDependencies(store));
+
+    for (const cookie of [undefined, "malformed", SESSION_TOKEN]) {
+      const response = await handle(
+        request("/api/v1/lobbies/ABC234/realtime-ticket", {
+          method: "POST",
+          body: JSON.stringify({ schemaVersion: CONTRACT_SCHEMA_VERSION }),
+          ...(cookie === undefined
+            ? {}
+            : { headers: { cookie: `${PARTICIPANT_SESSION_COOKIE_NAME}=${cookie}` } }),
+        }),
+      );
+      const serialized = JSON.stringify(await responseJson(response));
+      expect(response.status).toBe(401);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(serialized).not.toContain(cookie ?? "missing");
+      expect(serialized).not.toContain(REALTIME_TICKET);
+      expect(serialized).not.toContain("tokenHash");
+    }
+    expect(writes).toBe(1);
+  });
+
+  test("retries a realtime ticket hash collision with fresh entropy", async () => {
+    const first = new Uint8Array(32).fill(1);
+    const second = new Uint8Array(32).fill(2);
+    let randomCalls = 0;
+    let writes = 0;
+    const store = createStore({
+      issueRealtimeTicket: async () => {
+        writes += 1;
+        return writes === 1
+          ? { ok: false, error: { code: "TICKET_HASH_COLLISION" } }
+          : { ok: true, expiresAt: new Date(NOW.getTime() + 60_000) };
+      },
+    });
+    const handle = createLobbyEntryHttpHandler(
+      createDependencies(store, {
+        randomBytes: () => (randomCalls++ === 0 ? first : second),
+      }),
+    );
+
+    const response = await handle(
+      request("/api/v1/lobbies/ABC234/realtime-ticket", {
+        method: "POST",
+        body: JSON.stringify({ schemaVersion: CONTRACT_SCHEMA_VERSION }),
+        headers: { cookie: `${PARTICIPANT_SESSION_COOKIE_NAME}=${SESSION_TOKEN}` },
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(((await responseJson(response)) as { ticket: string }).ticket).toBe(
+      Buffer.from(second).toString("base64url"),
+    );
+    expect(randomCalls).toBe(2);
+    expect(writes).toBe(2);
+  });
+
+  test("mints a distinct ticket for each authenticated reconnect request", async () => {
+    let entropy = 0;
+    const persistedHashes: Uint8Array[] = [];
+    const store = createStore({
+      issueRealtimeTicket: async ({ ticketHash }) => {
+        persistedHashes.push(ticketHash);
+        return { ok: true, expiresAt: new Date(NOW.getTime() + 60_000) };
+      },
+    });
+    const handle = createLobbyEntryHttpHandler(
+      createDependencies(store, {
+        randomBytes: (length) => new Uint8Array(length).fill(++entropy),
+      }),
+    );
+    const issue = () =>
+      handle(
+        request("/api/v1/lobbies/ABC234/realtime-ticket", {
+          method: "POST",
+          body: JSON.stringify({ schemaVersion: CONTRACT_SCHEMA_VERSION }),
+          headers: { cookie: `${PARTICIPANT_SESSION_COOKIE_NAME}=${SESSION_TOKEN}` },
+        }),
+      );
+
+    const first = (await responseJson(await issue())) as { ticket: string };
+    const second = (await responseJson(await issue())) as { ticket: string };
+
+    expect(first.ticket).not.toBe(second.ticket);
+    expect(persistedHashes).toHaveLength(2);
+    expect(persistedHashes[0]).not.toEqual(persistedHashes[1]);
+  });
+
   test("uses independent create, join, and rejoin rate-limit buckets", async () => {
     const limiter = createInMemoryRateLimiter(
-      { create: 1, join: 1, rejoin: 1, status: 1, snapshot: 1 },
+      { create: 1, join: 1, rejoin: 1, ticket: 1, status: 1, snapshot: 1 },
       60_000,
     );
     const handle = createLobbyEntryHttpHandler(
@@ -426,11 +566,20 @@ describe("lobby entry HTTP API", () => {
       });
     expect((await handle(rejoinRequest())).status).toBe(200);
     expect((await handle(rejoinRequest())).status).toBe(429);
+
+    const ticketRequest = () =>
+      request("/api/v1/lobbies/ABC234/realtime-ticket", {
+        method: "POST",
+        body: JSON.stringify({ schemaVersion: CONTRACT_SCHEMA_VERSION }),
+        headers: { cookie: `${PARTICIPANT_SESSION_COOKIE_NAME}=${SESSION_TOKEN}` },
+      });
+    expect((await handle(ticketRequest())).status).toBe(201);
+    expect((await handle(ticketRequest())).status).toBe(429);
   });
 
   test("isolates limiter buckets by the trusted requester identity", async () => {
     const limiter = createInMemoryRateLimiter(
-      { create: 1, join: 1, rejoin: 1, status: 1, snapshot: 1 },
+      { create: 1, join: 1, rejoin: 1, ticket: 1, status: 1, snapshot: 1 },
       60_000,
     );
     const handle = createLobbyEntryHttpHandler(
@@ -454,7 +603,7 @@ describe("lobby entry HTTP API", () => {
 
   test("resets a fixed-window bucket at the exact deadline", () => {
     const limiter = createInMemoryRateLimiter(
-      { create: 1, join: 1, rejoin: 1, status: 1, snapshot: 1 },
+      { create: 1, join: 1, rejoin: 1, ticket: 1, status: 1, snapshot: 1 },
       1_000,
     );
     const startedAt = new Date(NOW);
@@ -480,7 +629,7 @@ describe("lobby entry HTTP API", () => {
 
   test("bounds active requester buckets and reclaims expired capacity", () => {
     const limiter = createInMemoryRateLimiter(
-      { create: 1, join: 1, rejoin: 1, status: 1, snapshot: 1 },
+      { create: 1, join: 1, rejoin: 1, ticket: 1, status: 1, snapshot: 1 },
       1_000,
       2,
     );
@@ -564,6 +713,7 @@ describe("lobby entry HTTP API", () => {
       create: 10,
       join: 10,
       rejoin: 10,
+      ticket: 10,
       status: 1,
       snapshot: 1,
     } as const;

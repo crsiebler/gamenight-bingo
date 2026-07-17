@@ -187,6 +187,14 @@ invalid counts, timestamps, or durations.
   obtained using the scoped HttpOnly participant cookie.
 - Require a new ticket for each reconnect; consume a ticket atomically and never
   log its plaintext.
+- Generate tickets from 32 cryptographically secure bytes encoded as canonical
+  unpadded base64url, persist only their SHA-256 hashes, and issue them under the
+  lobby fence only for an active scoped participant session. Realtime adapters
+  must atomically consume the hash and trust only the lobby, participant, and
+  session identity returned from persistence, never client identity claims.
+  Burn every presented ticket even when expired or invalid, purge expired
+  abandoned tickets during issuance, and invalidate outstanding tickets whenever
+  their participant session leaves active status so rejoin cannot revive them.
 - Version realtime command and event contracts in `packages/contracts`.
 - Acknowledge commands with their committed result/sequence or a stable error.
 - Keep broadcasts derived from committed events. Do not emit optimistic domain
@@ -217,6 +225,9 @@ then refactor while green.
   `TEST_DATABASE_URL` and otherwise skips only that database-backed test.
 - Use isolated PostgreSQL integration tests for repository, transaction,
   migration, concurrency, and restart behavior.
+- PostgreSQL lock-coordination tests must roll back and release checked-out
+  clients in `finally` blocks and await blocked operations during cleanup so a
+  failed synchronization assertion cannot hang the suite.
 - Use multi-client Socket.IO tests for ordering, presence, reconnects, timers,
   and co-winner behavior.
 - Use React Testing Library for component behavior and Playwright for browser

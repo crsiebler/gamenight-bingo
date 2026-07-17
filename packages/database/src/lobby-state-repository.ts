@@ -216,6 +216,26 @@ export type RecognizedParticipantSession =
 
 export type CreateParticipantSessionResult = "created" | "scope-not-found" | "token-hash-collision";
 
+export interface IssueRealtimeTicketInput {
+  readonly lobbyId: string;
+  readonly sessionTokenHash: Uint8Array;
+  readonly ticketHash: Uint8Array;
+  readonly ttlSeconds: number;
+}
+
+export type IssueRealtimeTicketResult =
+  | { readonly ok: true; readonly expiresAt: Date }
+  | {
+      readonly ok: false;
+      readonly error: { readonly code: "TICKET_HASH_COLLISION" | "UNAUTHORIZED" };
+    };
+
+export interface ConsumedRealtimeTicket {
+  readonly lobbyId: string;
+  readonly participantId: string;
+  readonly participantSessionId: string;
+}
+
 export interface ReserveParticipantOptions {
   readonly maxPlayersPerLobby: number;
 }
@@ -334,6 +354,10 @@ export interface LobbyStateRepository {
     options: ReserveParticipantOptions,
   ): Promise<ReserveParticipantResult>;
   createParticipantSession(session: NewParticipantSession): Promise<CreateParticipantSessionResult>;
+  issueRealtimeTicket(input: IssueRealtimeTicketInput): Promise<IssueRealtimeTicketResult>;
+  consumeRealtimeTicket(input: {
+    readonly ticketHash: Uint8Array;
+  }): Promise<ConsumedRealtimeTicket | null>;
   expireParticipantRejoinWindows(lobbyId: string): Promise<number>;
   markParticipantSessionDisconnected(input: {
     readonly lobbyId: string;
@@ -716,6 +740,9 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
       if (session.rejoinUntil === null) {
         throw new Error("Disconnected participant sessions require a rejoin deadline.");
       }
+      await transaction.realtimeTicket.deleteMany({
+        where: { participantSessionId: session.id },
+      });
       await transaction.participantSession.update({
         where: { id: session.id },
         data: { status: "DEPARTED", departedAt: session.rejoinUntil },
@@ -1606,6 +1633,146 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
     }
   }
 
+  async issueRealtimeTicket(input: IssueRealtimeTicketInput): Promise<IssueRealtimeTicketResult> {
+    if (input.sessionTokenHash.length !== 32 || input.ticketHash.length !== 32) {
+      throw new RangeError(
+        "Realtime ticket and session token hashes must contain exactly 32 bytes.",
+      );
+    }
+    if (
+      !Number.isSafeInteger(input.ttlSeconds) ||
+      input.ttlSeconds < 1 ||
+      input.ttlSeconds > 3_600
+    ) {
+      throw new RangeError(
+        "The realtime ticket TTL must be a safe integer between 1 and 3600 seconds.",
+      );
+    }
+
+    return runTransactionWithRetry(
+      async () =>
+        this.prisma.$transaction(
+          async (transaction) => {
+            const fenced = await transaction.$queryRaw<readonly { id: string }[]>`
+              UPDATE "lobbies"
+                 SET "last_event_sequence" = "last_event_sequence"
+               WHERE "id" = ${input.lobbyId}
+                 AND "status" IN ('WAITING', 'ACTIVE')
+               RETURNING "id"
+            `;
+            if (fenced.length !== 1) {
+              return { ok: false, error: { code: "UNAUTHORIZED" } } as const;
+            }
+
+            const issuedAt = this.currentLifecycleTime();
+            await this.expireDueParticipantSessions(transaction, input.lobbyId, issuedAt);
+            await transaction.realtimeTicket.deleteMany({
+              where: { expiresAt: { lte: issuedAt } },
+            });
+            const session = await transaction.participantSession.findFirst({
+              where: {
+                lobbyId: input.lobbyId,
+                tokenHash: new Uint8Array(input.sessionTokenHash),
+                status: "ACTIVE",
+                participant: { departedAt: null },
+              },
+              select: { id: true, participantId: true },
+            });
+            if (session === null) {
+              return { ok: false, error: { code: "UNAUTHORIZED" } } as const;
+            }
+
+            const expiresAt = new Date(issuedAt.getTime() + input.ttlSeconds * 1_000);
+            const inserted = await transaction.$queryRaw<readonly { expiresAt: Date }[]>`
+              INSERT INTO "realtime_tickets" (
+                "token_hash",
+                "lobby_id",
+                "participant_id",
+                "participant_session_id",
+                "issued_at",
+                "expires_at"
+              ) VALUES (
+                ${new Uint8Array(input.ticketHash)},
+                ${input.lobbyId},
+                ${session.participantId},
+                ${session.id},
+                ${issuedAt},
+                ${expiresAt}
+              )
+              ON CONFLICT ("token_hash") DO NOTHING
+              RETURNING "expires_at" AS "expiresAt"
+            `;
+            return inserted.length === 1
+              ? ({ ok: true, expiresAt: inserted[0]!.expiresAt } as const)
+              : ({ ok: false, error: { code: "TICKET_HASH_COLLISION" } } as const);
+          },
+          {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+            maxWait: 5_000,
+            timeout: 10_000,
+          },
+        ),
+      this.retryOptions,
+    );
+  }
+
+  async consumeRealtimeTicket(input: {
+    readonly ticketHash: Uint8Array;
+  }): Promise<ConsumedRealtimeTicket | null> {
+    if (input.ticketHash.length !== 32) {
+      throw new RangeError("Realtime ticket hashes must contain exactly 32 bytes.");
+    }
+
+    return runTransactionWithRetry(
+      async () =>
+        this.prisma.$transaction(
+          async (transaction) => {
+            const now = this.currentLifecycleTime();
+            const consumed = await transaction.$queryRaw<
+              readonly {
+                lobbyId: string;
+                participantId: string;
+                participantSessionId: string;
+              }[]
+            >`
+              WITH consumed AS (
+                DELETE FROM "realtime_tickets"
+                      WHERE "token_hash" = ${new Uint8Array(input.ticketHash)}
+                  RETURNING "lobby_id",
+                            "participant_id",
+                            "participant_session_id",
+                            "expires_at"
+              )
+              SELECT consumed."lobby_id" AS "lobbyId",
+                     consumed."participant_id" AS "participantId",
+                     consumed."participant_session_id" AS "participantSessionId"
+                FROM consumed
+                JOIN "lobbies" lobby
+                  ON lobby."id" = consumed."lobby_id"
+                JOIN "participants" participant
+                  ON participant."lobby_id" = consumed."lobby_id"
+                 AND participant."id" = consumed."participant_id"
+                JOIN "participant_sessions" session
+                  ON session."lobby_id" = consumed."lobby_id"
+                 AND session."participant_id" = consumed."participant_id"
+                 AND session."id" = consumed."participant_session_id"
+               WHERE consumed."expires_at" > ${now}
+                 AND lobby."status" IN ('WAITING', 'ACTIVE')
+                 AND participant."departed_at" IS NULL
+                 AND session."status" = 'ACTIVE'
+            `;
+            return consumed[0] ?? null;
+          },
+          {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+            maxWait: 5_000,
+            timeout: 10_000,
+          },
+        ),
+      this.retryOptions,
+    );
+  }
+
   async expireParticipantRejoinWindows(lobbyId: string): Promise<number> {
     return runTransactionWithRetry(
       async () =>
@@ -1684,6 +1851,12 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
             });
             if (session === null) {
               return null;
+            }
+
+            if (session.status === "ACTIVE") {
+              await transaction.realtimeTicket.deleteMany({
+                where: { participantSessionId: session.id },
+              });
             }
 
             const disconnected =

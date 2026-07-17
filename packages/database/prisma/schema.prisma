@@ -91,6 +91,7 @@ model Lobby {
   lastEventSequence   BigInt               @default(0) @map("last_event_sequence")
   participants        Participant[]
   participantSessions ParticipantSession[]
+  realtimeTickets     RealtimeTicket[]
   presenceGenerations PresenceGeneration[]
   currentRound        Round?
   cards               Card[]
@@ -112,6 +113,7 @@ model Participant {
   departedAt          DateTime?            @map("departed_at") @db.Timestamptz(3)
   lobby               Lobby                @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
   sessions            ParticipantSession[]
+  realtimeTickets     RealtimeTicket[]
   presenceGenerations PresenceGeneration[]
   cards               Card[]
   commandResults      CommandResult[]
@@ -122,19 +124,36 @@ model Participant {
 }
 
 model ParticipantSession {
-  id             String        @id @db.VarChar(128)
-  lobbyId        String        @map("lobby_id") @db.VarChar(128)
-  participantId  String        @map("participant_id") @db.VarChar(128)
-  tokenHash      Bytes         @unique(map: "participant_sessions_token_hash_key") @map("token_hash") @db.ByteA
-  status         SessionStatus
-  issuedAt       DateTime      @map("issued_at") @db.Timestamptz(3)
-  disconnectedAt DateTime?     @map("disconnected_at") @db.Timestamptz(3)
-  rejoinUntil    DateTime?     @map("rejoin_until") @db.Timestamptz(3)
-  departedAt     DateTime?     @map("departed_at") @db.Timestamptz(3)
-  lobby          Lobby         @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
-  participant    Participant   @relation(fields: [lobbyId, participantId], references: [lobbyId, id], onDelete: Cascade)
+  id              String           @id @db.VarChar(128)
+  lobbyId         String           @map("lobby_id") @db.VarChar(128)
+  participantId   String           @map("participant_id") @db.VarChar(128)
+  tokenHash       Bytes            @unique(map: "participant_sessions_token_hash_key") @map("token_hash") @db.ByteA
+  status          SessionStatus
+  issuedAt        DateTime         @map("issued_at") @db.Timestamptz(3)
+  disconnectedAt  DateTime?        @map("disconnected_at") @db.Timestamptz(3)
+  rejoinUntil     DateTime?        @map("rejoin_until") @db.Timestamptz(3)
+  departedAt      DateTime?        @map("departed_at") @db.Timestamptz(3)
+  lobby           Lobby            @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
+  participant     Participant      @relation(fields: [lobbyId, participantId], references: [lobbyId, id], onDelete: Cascade)
+  realtimeTickets RealtimeTicket[]
 
+  @@unique([lobbyId, participantId, id], map: "participant_sessions_lobby_participant_id_key")
   @@map("participant_sessions")
+}
+
+model RealtimeTicket {
+  tokenHash            Bytes              @id @map("token_hash") @db.ByteA
+  lobbyId              String             @map("lobby_id") @db.VarChar(128)
+  participantId        String             @map("participant_id") @db.VarChar(128)
+  participantSessionId String             @map("participant_session_id") @db.VarChar(128)
+  issuedAt             DateTime           @map("issued_at") @db.Timestamptz(3)
+  expiresAt            DateTime           @map("expires_at") @db.Timestamptz(3)
+  lobby                Lobby              @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
+  participant          Participant        @relation(fields: [lobbyId, participantId], references: [lobbyId, id], onDelete: Cascade)
+  participantSession   ParticipantSession @relation(fields: [lobbyId, participantId, participantSessionId], references: [lobbyId, participantId, id], onDelete: Cascade)
+
+  @@index([expiresAt], map: "realtime_tickets_expires_at_idx")
+  @@map("realtime_tickets")
 }
 
 model PresenceGeneration {

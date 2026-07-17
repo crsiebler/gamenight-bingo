@@ -17,6 +17,10 @@ export const CallIdSchema = opaqueId().brand<"CallId">();
 export const PatternIdSchema = opaqueId().brand<"PatternId">();
 export const ThemeIdSchema = opaqueId().brand<"ThemeId">();
 export const CommandIdSchema = opaqueId().brand<"CommandId">();
+export const RealtimeTicketSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/)
+  .brand<"RealtimeTicket">();
 
 export const LobbyCodeSchema = z
   .string()
@@ -44,6 +48,7 @@ export type CallId = z.infer<typeof CallIdSchema>;
 export type PatternId = z.infer<typeof PatternIdSchema>;
 export type ThemeId = z.infer<typeof ThemeIdSchema>;
 export type CommandId = z.infer<typeof CommandIdSchema>;
+export type RealtimeTicket = z.infer<typeof RealtimeTicketSchema>;
 export type LobbyCode = z.infer<typeof LobbyCodeSchema>;
 export type IsoTimestamp = z.infer<typeof IsoTimestampSchema>;
 export type ActiveLobbyEventSequence = z.infer<typeof ActiveLobbyEventSequenceSchema>;

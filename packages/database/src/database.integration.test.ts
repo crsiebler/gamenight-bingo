@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 import { Pool } from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
@@ -10,6 +10,7 @@ import {
   connectDatabase,
   type CommandTransactionRepositories,
   type CommandTransactionRequest,
+  type ConsumedRealtimeTicket,
   type CreateActiveLobbyResult,
   type DurableLobbyState,
   type JsonObject,
@@ -447,6 +448,29 @@ describeDatabase("PostgreSQL durable game state", () => {
     }
 
     throw new Error("Timed out waiting for concurrent participant reservations to block.");
+  }
+
+  async function waitForBlockedRealtimeTicketConsumers(
+    expectedCount: number,
+    timeoutMs = 5_000,
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      const result = await pool.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count
+           FROM pg_stat_activity
+          WHERE datname = current_database()
+            AND pid <> pg_backend_pid()
+            AND wait_event_type = 'Lock'
+            AND query LIKE '%DELETE FROM "realtime_tickets"%'`,
+      );
+      if (result.rows[0]?.count === expectedCount) return;
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    throw new Error("Timed out waiting for concurrent realtime ticket consumption.");
   }
 
   function commandRequest(
@@ -1057,6 +1081,188 @@ describeDatabase("PostgreSQL durable game state", () => {
         issuedAt: new Date("2026-07-17T08:04:00.000Z"),
       }),
     ).rejects.toBeDefined();
+  });
+
+  test("issues hash-only realtime tickets from an active scoped session", async () => {
+    const issuedAt = new Date("2026-07-17T12:00:00.000Z");
+    const connection = await connectWithLifecycleClock(() => issuedAt);
+    const state = createLobbyState();
+    const otherState = createLobbyState();
+    await createPersistedLobby(connection, state);
+    await createPersistedLobby(connection, otherState);
+    const ticket = randomBytes(32).toString("base64url");
+    const ticketHash = new Uint8Array(createHash("sha256").update(ticket, "ascii").digest());
+
+    await expect(
+      connection.lobbyStates.issueRealtimeTicket({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: state.sessions[0]!.tokenHash,
+        ticketHash,
+        ttlSeconds: 60,
+      }),
+    ).resolves.toEqual({ ok: true, expiresAt: new Date("2026-07-17T12:01:00.000Z") });
+    const stored = await pool.query<{
+      token_hash: Buffer;
+      lobby_id: string;
+      participant_id: string;
+      participant_session_id: string;
+      issued_at: Date;
+      expires_at: Date;
+    }>(
+      `SELECT token_hash, lobby_id, participant_id, participant_session_id, issued_at, expires_at
+         FROM realtime_tickets
+        WHERE token_hash = $1`,
+      [Buffer.from(ticketHash)],
+    );
+    expect(stored.rows).toEqual([
+      {
+        token_hash: Buffer.from(ticketHash),
+        lobby_id: state.lobby.id,
+        participant_id: state.sessions[0]!.participantId,
+        participant_session_id: state.sessions[0]!.id,
+        issued_at: issuedAt,
+        expires_at: new Date("2026-07-17T12:01:00.000Z"),
+      },
+    ]);
+    expect(JSON.stringify(stored.rows)).not.toContain(ticket);
+
+    await expect(
+      connection.lobbyStates.issueRealtimeTicket({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: otherState.sessions[0]!.tokenHash,
+        ticketHash: new Uint8Array(randomBytes(32)),
+        ttlSeconds: 60,
+      }),
+    ).resolves.toEqual({ ok: false, error: { code: "UNAUTHORIZED" } });
+  });
+
+  test("atomically consumes one ticket once and derives its persisted scope", async () => {
+    const now = new Date("2026-07-17T12:00:00.000Z");
+    const firstConnection = await connectWithLifecycleClock(() => now);
+    const secondConnection = await connectWithLifecycleClock(() => now);
+    const state = createLobbyState();
+    await createPersistedLobby(firstConnection, state);
+    const ticketHash = new Uint8Array(randomBytes(32));
+    await firstConnection.lobbyStates.issueRealtimeTicket({
+      lobbyId: state.lobby.id,
+      sessionTokenHash: state.sessions[0]!.tokenHash,
+      ticketHash,
+      ttlSeconds: 60,
+    });
+
+    const lock = await pool.connect();
+    const consumers: Promise<ConsumedRealtimeTicket | null>[] = [];
+    let transactionOpen = false;
+    let consumed: (ConsumedRealtimeTicket | null)[];
+
+    try {
+      await lock.query("BEGIN");
+      transactionOpen = true;
+      await lock.query(`SELECT token_hash FROM realtime_tickets WHERE token_hash = $1 FOR UPDATE`, [
+        Buffer.from(ticketHash),
+      ]);
+      consumers.push(
+        firstConnection.lobbyStates.consumeRealtimeTicket({ ticketHash }),
+        secondConnection.lobbyStates.consumeRealtimeTicket({ ticketHash }),
+      );
+      await waitForBlockedRealtimeTicketConsumers(2);
+      await lock.query("COMMIT");
+      transactionOpen = false;
+      consumed = await Promise.all(consumers);
+    } finally {
+      if (transactionOpen) await lock.query("ROLLBACK").catch(() => undefined);
+      lock.release();
+      await Promise.allSettled(consumers);
+    }
+
+    expect(consumed.filter((result) => result !== null)).toEqual([
+      {
+        lobbyId: state.lobby.id,
+        participantId: state.sessions[0]!.participantId,
+        participantSessionId: state.sessions[0]!.id,
+      },
+    ]);
+    await expect(
+      firstConnection.lobbyStates.consumeRealtimeTicket({ ticketHash }),
+    ).resolves.toBeNull();
+  });
+
+  test("expires tickets at the exact deadline and accepts a fresh reconnect ticket", async () => {
+    let now = new Date("2026-07-17T12:00:00.000Z");
+    const connection = await connectWithLifecycleClock(() => now);
+    const state = createLobbyState();
+    await createPersistedLobby(connection, state);
+    const expiredHash = new Uint8Array(randomBytes(32));
+    const abandonedHash = new Uint8Array(randomBytes(32));
+    await connection.lobbyStates.issueRealtimeTicket({
+      lobbyId: state.lobby.id,
+      sessionTokenHash: state.sessions[0]!.tokenHash,
+      ticketHash: expiredHash,
+      ttlSeconds: 60,
+    });
+    await connection.lobbyStates.issueRealtimeTicket({
+      lobbyId: state.lobby.id,
+      sessionTokenHash: state.sessions[0]!.tokenHash,
+      ticketHash: abandonedHash,
+      ttlSeconds: 60,
+    });
+    now = new Date("2026-07-17T12:01:00.000Z");
+    await expect(
+      connection.lobbyStates.consumeRealtimeTicket({ ticketHash: expiredHash }),
+    ).resolves.toBeNull();
+    await expect(
+      pool.query(`SELECT COUNT(*)::int AS count FROM realtime_tickets WHERE token_hash = $1`, [
+        Buffer.from(expiredHash),
+      ]),
+    ).resolves.toMatchObject({ rows: [{ count: 0 }] });
+
+    const reconnectHash = new Uint8Array(randomBytes(32));
+    await expect(
+      connection.lobbyStates.issueRealtimeTicket({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: state.sessions[0]!.tokenHash,
+        ticketHash: reconnectHash,
+        ttlSeconds: 60,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      pool.query(`SELECT COUNT(*)::int AS count FROM realtime_tickets WHERE token_hash = $1`, [
+        Buffer.from(abandonedHash),
+      ]),
+    ).resolves.toMatchObject({ rows: [{ count: 0 }] });
+    await expect(
+      connection.lobbyStates.consumeRealtimeTicket({ ticketHash: reconnectHash }),
+    ).resolves.toEqual({
+      lobbyId: state.lobby.id,
+      participantId: state.sessions[0]!.participantId,
+      participantSessionId: state.sessions[0]!.id,
+    });
+  });
+
+  test("does not revive a pre-disconnect ticket after the same session rejoins", async () => {
+    const now = new Date("2026-07-17T12:00:00.000Z");
+    const connection = await connectWithLifecycleClock(() => now);
+    const state = createLobbyState();
+    await createPersistedLobby(connection, state);
+    const session = state.sessions[0]!;
+    const ticketHash = new Uint8Array(randomBytes(32));
+    await connection.lobbyStates.issueRealtimeTicket({
+      lobbyId: state.lobby.id,
+      sessionTokenHash: session.tokenHash,
+      ticketHash,
+      ttlSeconds: 60,
+    });
+    await connection.lobbyStates.markParticipantSessionDisconnected({
+      lobbyId: state.lobby.id,
+      sessionId: session.id,
+      reconnectWindowSeconds: 120,
+    });
+    await connection.lobbyStates.rejoinParticipantSessionByTokenHash({
+      lobbyId: state.lobby.id,
+      tokenHash: session.tokenHash,
+    });
+
+    await expect(connection.lobbyStates.consumeRealtimeTicket({ ticketHash })).resolves.toBeNull();
   });
 
   test("returns a contract-valid actor-scoped snapshot without private aggregate data", async () => {

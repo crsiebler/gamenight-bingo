@@ -8,6 +8,7 @@ import {
   ParticipantIdSchema,
   ParticipantSessionIdSchema,
   PatternIdSchema,
+  RealtimeTicketSchema,
   SchemaVersionSchema,
   ThemeIdSchema,
 } from "./primitives.js";
@@ -30,6 +31,17 @@ export const JoinLobbyRequestSchema = z.strictObject({
 export const RejoinLobbyRequestSchema = z.strictObject({
   schemaVersion: SchemaVersionSchema,
   commandId: CommandIdSchema,
+});
+
+export const RealtimeTicketRequestSchema = z.strictObject({
+  schemaVersion: SchemaVersionSchema,
+});
+
+export const RealtimeTicketResponseSchema = z.strictObject({
+  schemaVersion: SchemaVersionSchema,
+  type: z.literal("realtime-ticket"),
+  ticket: RealtimeTicketSchema,
+  expiresAt: IsoTimestampSchema,
 });
 
 const lobbyEntryParticipantSchema = z.strictObject({
@@ -119,6 +131,8 @@ export const PatternCatalogResponseSchema = z.strictObject({
 export type CreateLobbyRequest = z.infer<typeof CreateLobbyRequestSchema>;
 export type JoinLobbyRequest = z.infer<typeof JoinLobbyRequestSchema>;
 export type RejoinLobbyRequest = z.infer<typeof RejoinLobbyRequestSchema>;
+export type RealtimeTicketRequest = z.infer<typeof RealtimeTicketRequestSchema>;
+export type RealtimeTicketResponse = z.infer<typeof RealtimeTicketResponseSchema>;
 export type LobbyEntryResponse = z.infer<typeof LobbyEntryResponseSchema>;
 export type SameDeviceSessionStatusResponse = z.infer<typeof SameDeviceSessionStatusResponseSchema>;
 export type PatternCatalogEntry = z.infer<typeof PatternCatalogEntrySchema>;

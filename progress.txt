@@ -31,7 +31,7 @@ Next story: US-001
 - PostgreSQL-only partial indexes, checks, and composite foreign keys live in append-only migration SQL; the durable schema keeps one current round per lobby so round cards, marks, private draw order, calls, winners, events, and command results cascade without prior-round history.
 - Database integration tests require an explicitly approved, migrated PostgreSQL 16 `TEST_DATABASE_URL`; the generic Vitest run skips them when the variable is absent.
 - Serializable command transactions lock and scope work to one lobby, check persisted command results before mutation, and use bounded observable retries; callbacks may rerun only after rollback and must have no external effects, while only fresh active-lobby commits return a broadcastable event.
-- PostgreSQL concurrency tests must coordinate actual transaction overlap before asserting Serializable retries; observing the second command waiting on the lobby fence avoids flaky assumptions about `Promise.all` scheduling.
+- PostgreSQL concurrency tests must coordinate actual transaction overlap before asserting Serializable retries; observing the second command waiting on the lobby fence avoids flaky assumptions about `Promise.all` scheduling. Lock-coordination harnesses must roll back and release checked-out clients in `finally` blocks and await blocked operations during cleanup so synchronization failures cannot hang the suite.
 - Retry classification scans nested Prisma/adapter `cause`, `meta`, and `driverAdapterError` metadata before falling back to generic conflict codes; PostgreSQL `40P01` deadlocks take precedence over outer Prisma `P2034` wrappers so telemetry stays accurate.
 - Active lobby creation goes through `LobbyStateRepository.createActive`: generate each candidate outside retryable transactions, serialize PostgreSQL admission before counting waiting/active lobbies, and retry only active-code collisions so capacity cannot be oversubscribed.
 - Normalize usernames at the trusted reservation boundary by rejecting Unicode control/format characters, trimming and collapsing Unicode whitespace, applying NFC, enforcing the 128-character display/key limit, then lowercasing for lobby-scoped uniqueness; serialize reservations on the lobby row before checking names and configured capacity.
@@ -42,6 +42,7 @@ Next story: US-001
 - Next App Router API modules forward supported methods, unsupported methods, and unknown private catch-all paths to the shared versioned dispatcher so stable JSON errors and `no-store` headers survive the framework routing boundary.
 - Authoritative snapshot projections construct stage-specific fields only for stages that require them; an open co-winner window may contain confirmed winners before a settled result exists.
 - Framework-routing guarantees require live Next request coverage under an approved migrated `TEST_DATABASE_URL`; dispatcher unit tests and route-source assertions do not prove unsupported methods or catch-all resources retain stable errors and private cache headers.
+- Realtime tickets use 32 random bytes encoded as canonical unpadded base64url, persist only SHA-256 hashes bound to lobby/participant/session scope, and issue under the lobby fence from an active cookie session. Consumption burns the presented row whether valid or not and returns only authoritative identity for a valid unexpired active scope; issuance purges expired abandoned tickets, and session deactivation invalidates outstanding tickets so rejoin cannot revive them.
 
 Append-only iteration log
 -------------------------
@@ -2263,3 +2264,105 @@ Targeted re-review outcome for resumed US-027 at 2026-07-17 11:36:18 MST:
 - `code-reviewer`, `qa-expert`, and `security-engineer` reviewed the revised complete staged diff and returned empty actionable finding lists.
 - The reviewers confirmed the active-lobby 26-entry guard, pre-lookup unsupported-method rejection, and database-backed live Next route coverage fully resolve the initial findings without introducing a new critical, high, or medium issue.
 - No unresolved in-scope blocking findings remain. US-027 can be marked passing and committed after the final staged/unstaged consistency check.
+
+## 2026-07-17 12:06:32 MST - US-028
+- What was implemented
+  - Added strict v1 realtime-ticket request/response contracts and `POST /api/v1/lobbies/{code}/realtime-ticket` with origin protection, an independent bounded rate limit, scoped cookie authentication, collision retries, private caching, and secret-safe errors.
+  - Added an append-only PostgreSQL migration and repository operations that issue tickets from an active lobby/session under the lobby fence, persist only SHA-256 hashes and authoritative scope, atomically consume one ticket exactly once, purge expired abandoned rows, and invalidate tickets when sessions disconnect.
+  - Added a transport-neutral game-server authentication boundary that validates canonical ticket syntax, hashes immediately, and returns only the persisted lobby, participant, and participant-session identity for the later Socket.IO adapter.
+  - Added contract, HTTP, game-server, and PostgreSQL tests for canonical credentials, hash-only persistence, authorization, rate isolation, collision retry, exact expiry, concurrent single-use, reconnect renewal, scope derivation, and redaction.
+- Files changed: `AGENTS.md`, `apps/game-server/src/realtime-ticket.ts`, `apps/game-server/src/realtime-ticket.test.ts`, `apps/web/src/lobby-entry-http.ts`, `apps/web/src/lobby-entry-http.test.ts`, `apps/web/src/lobby-entry-runtime.ts`, `packages/contracts/src/v1/http.ts`, `packages/contracts/src/v1/primitives.ts`, `packages/database/prisma/schema.prisma`, `packages/database/prisma/migrations/20260717120000_add_realtime_tickets/migration.sql`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/database.integration.test.ts`, `packages/database/src/index.ts`, `tests/lobby-entry-contracts-v1.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-028 - Issue single-use realtime tickets`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run tests/lobby-entry-contracts-v1.test.ts` (expected fail before implementation because ticket contracts were absent; pass after implementation)
+  - `bunx vitest run apps/web/src/lobby-entry-http.test.ts` (expected fail before implementation with four missing endpoint/rate-limit behaviors; pass after implementation)
+  - `bunx vitest run apps/game-server/src/realtime-ticket.test.ts` (expected fail before implementation because the authentication boundary was absent; pass after implementation)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t 'realtime ticket|atomically consumes|expires tickets'` (expected fail before implementation with three missing repository behaviors; pass after migration and implementation)
+  - `DATABASE_URL=<approved local Compose database> bun run db:migrate:deploy` (pass; append-only realtime-ticket migration applied locally)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass after review remediation; typecheck, 22 Vitest files, and 366 tests)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun run format:check` (fails only on three pre-existing untracked US-018 browser-report files; intended tracked files pass)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `DATABASE_URL=<approved local Compose database> bun run --cwd apps/web build` (pass; all versioned API routes compiled)
+  - `bun install --frozen-lockfile` (pass; 371 installs checked with no changes)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `security-engineer`, `websocket-engineer`
+  - Used: `security-engineer`, `websocket-engineer` for credential threat modeling, hash-only persistence, atomic consume semantics, future Socket.IO boundary design, authorization/error behavior, and test coverage
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive `security-engineer`; targeted re-review by the same specialists planned after substantive fixes
+  - Findings: fixed stale expired-ticket retention, nondeterministic concurrent-consume coverage, missing valid cross-lobby denial coverage, incomplete reconnect renewal coverage, and pre-disconnect ticket revival before targeted re-review
+- Decisions (why):
+  - Implemented a transport-neutral game-server consume boundary but did not add Socket.IO or a long-lived runtime because US-030 owns that dependency and server lifecycle.
+  - Made issuance non-idempotent and omitted command IDs because every successful request must mint a fresh credential, while persisting or replaying plaintext would violate the hash-only requirement.
+  - Bound each ticket to lobby, participant, and participant session with composite foreign keys so the future adapter derives identity only from committed persistence and outstanding tickets cascade with scoped lifecycle deletion.
+  - Used one conditional PostgreSQL `DELETE ... RETURNING` for consumption because a check-then-delete sequence could admit concurrent replay across the separate web and game-server processes.
+- **Learnings for future iterations:**
+  - Socket.IO authentication in US-030 should call `consumeRealtimeTicketCredential`, use only its returned identity, pass the ticket through handshake auth rather than a URL, and require HTTP renewal for every reconnect.
+  - Ticket issuance and consumption sample the injected repository lifecycle clock inside retryable transactions; exact expiry is `now >= expiresAt`.
+  - Canonical unpadded base64url for 32 bytes is 43 characters and constrains the final character; length and alphabet checks alone accept noncanonical encodings.
+- Known issues / follow-ups:
+  - The unrelated untracked US-018 browser reports remain untouched and unstaged; root `bun run format:check` reports three of them while every tracked file passes Prettier.
+  - The actual Socket.IO connection lifecycle, handshake integration, and reconnect fetch flow remain intentionally assigned to US-030.
+- Next iteration start:
+  - If review passes, implement US-029 round-control HTTP APIs; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-028 at 2026-07-17 12:19:00 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced five deduplicated blocking findings: expired/abandoned ticket retention, unsynchronized consume concurrency coverage, missing valid cross-lobby scope denial, incomplete renewal-flow coverage, and pre-disconnect ticket revival after same-session rejoin.
+- Added failing PostgreSQL regressions for expired-row deletion and disconnect/rejoin revival, then changed consumption to atomically delete every presented ticket before returning identity only for a valid active scope.
+- Purged expired abandoned ticket rows during issuance and invalidated outstanding session tickets in the same transaction that disconnects or expires the participant session.
+- Coordinated two consumers behind a real ticket-row lock before release, used a valid second-lobby session for scope denial, and added HTTP/game-server renewal tests proving distinct credentials, replay rejection, and fresh reconnect acceptance.
+- Post-fix checks: focused HTTP, game-server, and PostgreSQL tests pass; the PostgreSQL-enabled root suite passes with typecheck, 22 files, and 366 tests; lint, tracked-tree Prettier, Playwright, Next production build, and whitespace checks pass.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` because the substantive fixes affected all three original specialist areas.
+
+Targeted re-review outcome for US-028 at 2026-07-17 12:20:00 MST:
+- `code-reviewer` and `security-engineer` returned empty actionable finding lists and confirmed the expired-ticket cleanup, burn-on-presentation behavior, scope enforcement, and disconnect/rejoin invalidation fixes.
+- `qa-expert` identified one remaining medium blocker: if the deterministic concurrent-consume wait or commit fails, the checked-out PostgreSQL client can retain its transaction and ticket-row lock because release/rollback are not protected by `try/finally`, which can hang pending consumers and teardown instead of producing an isolated test failure.
+- The next iteration must wrap the row-lock setup/release in failure-safe rollback and client release, ensure pending consumers settle on synchronization failure, rerun all checks, and restart the complete staged review loop.
+- Per the one-targeted-re-review limit, no further implementation changes or commit are permitted in this iteration. `US-028` remains `passes: false`, and `prd.json` remains unchanged.
+
+## 2026-07-17 12:28:37 MST - US-028
+- What was implemented
+  - Resumed the single-use realtime-ticket story and made its deterministic concurrent-consume PostgreSQL harness failure-safe.
+  - Wrapped the checked-out row-lock transaction in `try/finally`, rolled back an open transaction before release, and awaited both blocked consumers during cleanup so a synchronization or commit failure cannot hang the suite.
+  - Added the reusable failure-safe lock-coordination convention to root guidance and Codebase Patterns.
+- Files changed: `AGENTS.md`, `apps/game-server/src/realtime-ticket.ts`, `apps/game-server/src/realtime-ticket.test.ts`, `apps/web/src/lobby-entry-http.ts`, `apps/web/src/lobby-entry-http.test.ts`, `apps/web/src/lobby-entry-runtime.ts`, `packages/contracts/src/v1/http.ts`, `packages/contracts/src/v1/primitives.ts`, `packages/database/prisma/schema.prisma`, `packages/database/prisma/migrations/20260717120000_add_realtime_tickets/migration.sql`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/database.integration.test.ts`, `packages/database/src/index.ts`, `tests/lobby-entry-contracts-v1.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-028 - Issue single-use realtime tickets`
+- Auto approval: `enabled`
+- Checks:
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "atomically consumes one ticket once"` (pass; 1 focused PostgreSQL test)
+  - `bunx vitest run apps/game-server/src/realtime-ticket.test.ts apps/web/src/lobby-entry-http.test.ts tests/lobby-entry-contracts-v1.test.ts` (pass; 3 files and 45 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass; typecheck, 22 Vitest files, and 366 tests)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `DATABASE_URL=<approved local Compose database> bun run --cwd apps/web build` (pass; all versioned API routes compiled)
+  - `bun install --frozen-lockfile` (pass; 371 installs checked with no changes)
+  - `git diff --check && git diff --cached --check` (pass)
+- Implementation agents:
+  - Recommended: `security-engineer`, `websocket-engineer`
+  - Used: skipped in this resumed iteration because both recommended agents already advised US-028 and the remaining work directly addressed the concrete prior QA finding
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive `security-engineer`
+  - Findings: none; all specialists returned empty actionable finding lists
+- Decisions (why):
+  - Kept the remediation inside the integration test because the production atomic-consume behavior already passed correctness and security review; the outstanding defect was failure isolation in the lock-coordination harness.
+  - Awaited the individual consumer promises with `Promise.allSettled` during cleanup because `Promise.all` may reject before every blocked operation settles.
+  - Did not add a synthetic test of the test harness because the change is a behavior-preserving test refactor; the real focused PostgreSQL concurrency test is the meaningful validation.
+- **Learnings for future iterations:**
+  - Checked-out PostgreSQL clients used as deterministic lock barriers need rollback and release in `finally`, even when the normal path commits successfully.
+  - Cleanup must await every operation blocked behind a test-owned lock so assertion failures remain isolated and pool teardown cannot hang.
+- Known issues / follow-ups:
+  - The unrelated untracked browser-report artifacts remain untouched and unstaged; tracked files pass Prettier.
+  - Socket.IO handshake wiring and reconnect lifecycle integration remain intentionally assigned to US-030.
+- Next iteration start:
+  - If review passes, implement US-029 round-control HTTP APIs; otherwise resume any recorded blocking finding.
+---
+
+Review outcome for resumed US-028 at 2026-07-17 12:28:37 MST:
+- `code-reviewer`, `qa-expert`, and `security-engineer` reviewed the complete restaged high-risk diff and returned empty actionable finding lists.
+- The reviewers confirmed the failure-safe PostgreSQL lock cleanup resolves the prior QA blocker without changing the already-reviewed issuance, expiry, burn-on-presentation, scope, renewal, or redaction behavior.
+- Residual risk is limited to actual Socket.IO handshake and browser reconnect integration intentionally assigned to US-030. No in-scope critical, high, or medium findings remain; US-028 can be marked passing and committed.

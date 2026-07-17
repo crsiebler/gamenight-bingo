@@ -23,7 +23,7 @@ if (databaseUrl === undefined || databaseUrl.length === 0) {
 }
 
 const rateLimiter = createInMemoryRateLimiter(
-  { create: 10, join: 30, rejoin: 30, status: 60, snapshot: 60 },
+  { create: 10, join: 30, rejoin: 30, ticket: 30, status: 60, snapshot: 60 },
   60_000,
 );
 const trustedProxySecret = runtimeConfig.trustedProxySecret;
@@ -46,6 +46,7 @@ const handler =
       nextLobbyCode: () => generateLobbyCode((length) => new Uint8Array(randomBytes(length))),
       maxPlayersPerLobby: runtimeConfig.maxPlayersPerLobby,
       maxActiveLobbies: runtimeConfig.maxActiveLobbies,
+      realtimeTicketTtlSeconds: runtimeConfig.realtimeTicketTtlSeconds,
     }),
   );
 runtimeGlobal.lobbyEntryHandler = handler;
