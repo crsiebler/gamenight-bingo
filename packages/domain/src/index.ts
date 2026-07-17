@@ -1,5 +1,6 @@
 export { FREE_BINGO_CELL, generateBingoCards, isBingoCardCellSatisfied } from "./bingo-card.js";
 export { commitNextDrawPosition, generateDrawOrder } from "./draw-order.js";
+export { generateLobbyCode, normalizeLobbyCodeEntry } from "./lobby-code.js";
 export { createWaitingRound, expireInactiveLobby, transitionRound } from "./state-machine.js";
 export type { BingoCard, BingoCardCell } from "./bingo-card.js";
 export type { DrawOrder, DrawPositionResult } from "./draw-order.js";

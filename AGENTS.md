@@ -268,6 +268,9 @@ then refactor while green.
   application packages import only database repository interfaces.
 - Design constraints for scoped uniqueness, command idempotency, monotonic event
   sequences, and cascade deletion rather than relying only on application checks.
+- Create lobbies through `LobbyStateRepository.createActive`; it serializes
+  admission, enforces the configured waiting/active lobby limit, and retries
+  generated-code collisions before exposing the code as a locator.
 - PostgreSQL-only partial indexes, checks, and composite foreign keys live in
   append-only migration SQL because Prisma schema syntax cannot represent them;
   inspect generated migrations so later schema changes do not drop those guards.

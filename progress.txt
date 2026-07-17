@@ -33,6 +33,7 @@ Next story: US-001
 - Serializable command transactions lock and scope work to one lobby, check persisted command results before mutation, and use bounded observable retries; callbacks may rerun only after rollback and must have no external effects, while only fresh active-lobby commits return a broadcastable event.
 - PostgreSQL concurrency tests must coordinate actual transaction overlap before asserting Serializable retries; observing the second command waiting on the lobby fence avoids flaky assumptions about `Promise.all` scheduling.
 - Retry classification scans nested Prisma/adapter `cause`, `meta`, and `driverAdapterError` metadata before falling back to generic conflict codes; PostgreSQL `40P01` deadlocks take precedence over outer Prisma `P2034` wrappers so telemetry stays accurate.
+- Active lobby creation goes through `LobbyStateRepository.createActive`: generate each candidate outside retryable transactions, serialize PostgreSQL admission before counting waiting/active lobbies, and retry only active-code collisions so capacity cannot be oversubscribed.
 
 Append-only iteration log
 -------------------------
@@ -1745,3 +1746,59 @@ Targeted re-review outcome for US-022 at 2026-07-17 02:47:10 MST:
 - The durable-event/broadcast-candidate equality gap is resolved, and no new test-reliability issue was introduced.
 - Residual risk is limited to future Prisma/adapter error-wrapper shapes that may require additional SQLSTATE traversal coverage; all currently supported wrappers and required project checks pass.
 - No in-scope critical, high, or medium findings remain. US-022 can be marked passing and committed.
+
+## 2026-07-17 03:02:11 MST - US-023
+- What was implemented
+  - Added secure six-character lobby-code generation from the exact unambiguous uppercase Base32 alphabet using injected cryptographic random bytes and unbiased bounded selection.
+  - Added case-insensitive entry normalization while leaving canonical format validation strict, so normalization does not turn codes into authentication credentials or accept invalid characters.
+  - Replaced unrestricted durable lobby creation with an atomic `createActive` repository path that serializes admission, enforces the configured waiting/active limit, retries active-code collisions, and permits completed-code reuse.
+  - Added active-only locator lookup that returns only a lobby ID and no participant authority or private state.
+- Files changed: `AGENTS.md`, `packages/domain/src/random.ts`, `packages/domain/src/lobby-code.ts`, `packages/domain/src/index.ts`, `tests/lobby-code.test.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/index.ts`, `packages/database/src/database.integration.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-023 - Generate secure lobby codes`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run tests/lobby-code.test.ts` (expected fail before implementation: 4 failures because the lobby-code API did not exist; pass after implementation with 4 tests)
+  - `TEST_DATABASE_URL=... bunx vitest run packages/database/src/database.integration.test.ts` (expected fail before implementation: 4 failures because atomic active-lobby creation and locator lookup did not exist; pass after implementation and review remediation with 20 tests)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (expected fail only on three pre-existing untracked US-018 report files)
+  - Tracked tree plus intended new-file Prettier check (pass)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `TEST_DATABASE_URL=... bun run test` (pass after review remediation; 17 Vitest files and 262 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: none
+  - Used: `backend-developer` after inspection showed the story crossed domain randomness and concurrent PostgreSQL admission; guidance informed the policy-aware API and test risks
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and secure-randomness/data-integrity specialist `security-engineer`; targeted re-review by the same specialists planned after substantive fixes
+  - Findings: Unicode case-folding and late active-code unique-race findings fixed before targeted re-review
+- Decisions (why):
+  - Kept code generation and case normalization in the framework-independent domain while injecting `nextCode` into the database repository so Prisma remains confined and runtime crypto wiring stays with later adapters.
+  - Generated each candidate before entering the retryable Serializable transaction so transaction retries reuse one candidate rather than consuming entropy or changing callback behavior.
+  - Serialized all lobby admissions with one PostgreSQL transaction advisory lock because no parent row exists to lock before the first lobby and capacity must remain correct under concurrent creation.
+  - Returned only an active lobby ID from code lookup because the code is a locator; later session credentials must independently authorize every private operation.
+  - Added no migration because the committed partial unique index and code-format check already enforce active-code persistence constraints.
+- **Learnings for future iterations:**
+  - The active-code partial unique index deliberately releases codes when a lobby becomes completed or abandoned; repository lookup and capacity counting must use the same waiting/active status set.
+  - Random values and other nondeterministic inputs must be prepared outside retryable transaction callbacks, while admission checks and complete aggregate insertion stay inside the serialized transaction.
+- Known issues / follow-ups:
+  - Root `bun run format:check` still scans three pre-existing untracked US-018 report files; they remain untouched and unstaged, while every tracked and intended new file passes Prettier.
+  - HTTP create/join authorization and rate limiting remain intentionally assigned to US-027; a lobby code grants no authority.
+- Next iteration start:
+  - If review passes, implement US-024 username normalization, stable validation, uniqueness, and participant-limit enforcement; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-023 at 2026-07-17 03:10:46 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced two deduplicated blocking medium findings: Unicode uppercasing could transform invalid input into a valid ASCII code, and a late active-code unique violation could escape the outer candidate retry loop.
+- Added a failing Unicode regression first, then restricted normalization to ASCII lowercase characters so invalid non-ASCII input remains invalid for strict contract parsing.
+- A coordinated same-candidate creator regression passed against existing Serializable retry behavior; a stricter late-commit race then failed with Prisma `P2002`, proving the unique-index path could bypass candidate retry.
+- Added narrow Prisma collision classification for only the Lobby `code` field, allowing that rolled-back transaction to advance to the next candidate while unrelated aggregate uniqueness errors continue to propagate.
+- Post-fix checks: focused domain and database regressions pass, `bun run lint` passes, tracked/intended Prettier passes, `bun run typecheck` passes, the full PostgreSQL-enabled suite passes with 262 tests, Playwright smoke passes, and staged/unstaged whitespace checks pass.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` review because the fixes address findings from all three specialist areas.
+
+Targeted re-review outcome for US-023 at 2026-07-17 03:10:46 MST:
+- `code-reviewer`, `qa-expert`, and `security-engineer` reviewed the revised complete staged diff and returned empty actionable finding lists.
+- The ASCII-only normalization and narrow late active-code collision retry resolve both initial findings without masking unrelated integrity failures.
+- Residual risk is limited to runtime cryptographic wiring plus HTTP authorization/rate limiting intentionally assigned to later stories, and the bounded 128-candidate exhaustion path is not separately integration-tested.
+- No in-scope critical, high, or medium findings remain. US-023 can be marked passing and committed.

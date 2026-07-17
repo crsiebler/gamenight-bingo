@@ -3,7 +3,7 @@ export type CryptographicRandomBytes = (length: number) => Uint8Array;
 const BYTE_VALUE_COUNT = 256;
 const MAX_RANDOM_INDEX_ATTEMPTS = 256;
 
-function randomIndex(maxExclusive: number, randomBytes: CryptographicRandomBytes): number {
+export function randomIndex(maxExclusive: number, randomBytes: CryptographicRandomBytes): number {
   const unbiasedLimit = BYTE_VALUE_COUNT - (BYTE_VALUE_COUNT % maxExclusive);
 
   for (let attempt = 0; attempt < MAX_RANDOM_INDEX_ATTEMPTS; attempt += 1) {

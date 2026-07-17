@@ -8,8 +8,10 @@ import {
   connectDatabase,
   type CommandTransactionRepositories,
   type CommandTransactionRequest,
+  type CreateActiveLobbyResult,
   type DurableLobbyState,
   type JsonObject,
+  type NewActiveLobbyState,
   type TransactionRetryEvent,
 } from "./index.js";
 
@@ -281,6 +283,38 @@ function createLobbyState(
   };
 }
 
+function omitLobbyCode(state: DurableLobbyState): NewActiveLobbyState {
+  const status = state.lobby.status;
+  if (status !== "waiting" && status !== "active") {
+    throw new Error("The test lobby must be active.");
+  }
+  return {
+    ...state,
+    lobby: {
+      id: state.lobby.id,
+      status,
+      themeId: state.lobby.themeId,
+      createdAt: state.lobby.createdAt,
+      lastActivityAt: state.lobby.lastActivityAt,
+      ...(state.lobby.endedAt === undefined ? {} : { endedAt: state.lobby.endedAt }),
+      lastEventSequence: state.lobby.lastEventSequence,
+    },
+  };
+}
+
+function scriptedCodes(codes: readonly string[]): () => string {
+  let index = 0;
+
+  return () => {
+    const code = codes[index];
+    if (code === undefined) {
+      throw new Error("Lobby code test sequence exhausted.");
+    }
+    index += 1;
+    return code;
+  };
+}
+
 describeDatabase("PostgreSQL durable game state", () => {
   const connections: Awaited<ReturnType<typeof connectDatabase>>[] = [];
   let pool: Pool;
@@ -289,7 +323,7 @@ describeDatabase("PostgreSQL durable game state", () => {
     if (testDatabaseUrl === undefined) {
       return;
     }
-    pool = new Pool({ connectionString: testDatabaseUrl, max: 1 });
+    pool = new Pool({ connectionString: testDatabaseUrl, max: 2 });
   });
 
   afterAll(async () => {
@@ -311,6 +345,19 @@ describeDatabase("PostgreSQL durable game state", () => {
     });
     connections.push(connection);
     return connection;
+  }
+
+  async function createPersistedLobby(
+    connection: Awaited<ReturnType<typeof connectDatabase>>,
+    state: DurableLobbyState,
+  ): Promise<void> {
+    const result = await connection.lobbyStates.createActive(omitLobbyCode(state), {
+      maxActiveLobbies: Number.MAX_SAFE_INTEGER,
+      nextCode: () => state.lobby.code,
+    });
+    if (!result.ok) {
+      throw new Error(result.error.message);
+    }
   }
 
   async function waitForBlockedCommandFence(timeoutMs = 5_000): Promise<void> {
@@ -338,6 +385,30 @@ describeDatabase("PostgreSQL durable game state", () => {
     throw new Error("Timed out waiting for a concurrent command to block on the lobby fence.");
   }
 
+  async function waitForBlockedLobbyAdmissions(
+    expectedCount: number,
+    timeoutMs = 5_000,
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      const result = await pool.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count
+           FROM pg_stat_activity
+          WHERE datname = current_database()
+            AND wait_event = 'advisory'
+            AND query LIKE '%pg_advisory_xact_lock%'`,
+      );
+      if (result.rows[0]?.count === expectedCount) {
+        return;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    throw new Error("Timed out waiting for concurrent lobby admissions to block.");
+  }
+
   function commandRequest(
     state: DurableLobbyState,
     commandId: string,
@@ -358,7 +429,7 @@ describeDatabase("PostgreSQL durable game state", () => {
     const expected = createLobbyState();
     const firstConnection = await connect();
 
-    await firstConnection.lobbyStates.create(expected);
+    await createPersistedLobby(firstConnection, expected);
     await firstConnection.disconnect();
     connections.splice(connections.indexOf(firstConnection), 1);
 
@@ -368,14 +439,8 @@ describeDatabase("PostgreSQL durable game state", () => {
     expect(restored).toEqual(expected);
   });
 
-  test("enforces active-code and aggregate scoped uniqueness", async () => {
+  test("enforces aggregate scoped uniqueness", async () => {
     const connection = await connect();
-    const activeCode = randomLobbyCode();
-    await connection.lobbyStates.create(createLobbyState({ code: activeCode }));
-
-    await expect(
-      connection.lobbyStates.create(createLobbyState({ code: activeCode })),
-    ).rejects.toBeDefined();
 
     for (const invalidState of [
       createLobbyState({ duplicateUsername: true }),
@@ -387,18 +452,210 @@ describeDatabase("PostgreSQL durable game state", () => {
       createLobbyState({ graceWithoutDeadline: true }),
       createLobbyState({ automaticWithoutInterval: true }),
     ]) {
-      await expect(connection.lobbyStates.create(invalidState)).rejects.toBeDefined();
+      await expect(createPersistedLobby(connection, invalidState)).rejects.toBeDefined();
     }
 
-    await expect(connection.lobbyStates.create(createLobbyState())).resolves.toBeUndefined();
+    await expect(createPersistedLobby(connection, createLobbyState())).resolves.toBeUndefined();
+  });
+
+  test("retries active-code collisions and resolves codes only as active lobby locators", async () => {
+    const connection = await connect();
+    const existing = createLobbyState();
+    const created = createLobbyState();
+    const availableCode = randomLobbyCode();
+    await createPersistedLobby(connection, existing);
+    const activeCount = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM lobbies WHERE status IN ('WAITING', 'ACTIVE')`,
+    );
+
+    await expect(
+      connection.lobbyStates.createActive(omitLobbyCode(created), {
+        maxActiveLobbies: Number(activeCount.rows[0]!.count) + 1,
+        nextCode: scriptedCodes([existing.lobby.code, availableCode]),
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      lobbyId: created.lobby.id,
+      code: availableCode,
+    });
+    await expect(connection.lobbyStates.findActiveLobbyIdByCode(availableCode)).resolves.toBe(
+      created.lobby.id,
+    );
+
+    await pool.query(`UPDATE lobbies SET status = 'COMPLETED' WHERE id = $1`, [created.lobby.id]);
+    await expect(connection.lobbyStates.findActiveLobbyIdByCode(availableCode)).resolves.toBeNull();
+  });
+
+  test("enforces the configured active-lobby limit without inserting", async () => {
+    const connection = await connect();
+    const activeCount = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM lobbies WHERE status IN ('WAITING', 'ACTIVE')`,
+    );
+    const state = createLobbyState();
+
+    await expect(
+      connection.lobbyStates.createActive(omitLobbyCode(state), {
+        maxActiveLobbies: Number(activeCount.rows[0]!.count),
+        nextCode: () => state.lobby.code,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "ACTIVE_LOBBY_LIMIT_REACHED",
+        message: "The active lobby limit has been reached.",
+      },
+    });
+    await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toBeNull();
+  });
+
+  test("never exceeds the active-lobby limit under concurrent creation", async () => {
+    const connection = await connect();
+    const activeCount = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM lobbies WHERE status IN ('WAITING', 'ACTIVE')`,
+    );
+    const countBefore = Number(activeCount.rows[0]!.count);
+    const first = createLobbyState();
+    const second = createLobbyState();
+
+    const results = await Promise.all([
+      connection.lobbyStates.createActive(omitLobbyCode(first), {
+        maxActiveLobbies: countBefore + 1,
+        nextCode: () => first.lobby.code,
+      }),
+      connection.lobbyStates.createActive(omitLobbyCode(second), {
+        maxActiveLobbies: countBefore + 1,
+        nextCode: () => second.lobby.code,
+      }),
+    ]);
+    const countAfter = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM lobbies WHERE status IN ('WAITING', 'ACTIVE')`,
+    );
+
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(results.filter((result) => !result.ok)).toEqual([
+      {
+        ok: false,
+        error: {
+          code: "ACTIVE_LOBBY_LIMIT_REACHED",
+          message: "The active lobby limit has been reached.",
+        },
+      },
+    ]);
+    expect(Number(countAfter.rows[0]!.count)).toBe(countBefore + 1);
+  });
+
+  test("retries the losing candidate when concurrent creators choose the same code", async () => {
+    const firstConnection = await connect();
+    const secondConnection = await connect();
+    const first = createLobbyState();
+    const second = createLobbyState();
+    const sharedCode = randomLobbyCode();
+    const firstFallback = randomLobbyCode();
+    const secondFallback = randomLobbyCode();
+    const activeCount = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM lobbies WHERE status IN ('WAITING', 'ACTIVE')`,
+    );
+    const blocker = await pool.connect();
+    let firstCreation: Promise<CreateActiveLobbyResult> | undefined;
+    let secondCreation: Promise<CreateActiveLobbyResult> | undefined;
+
+    try {
+      await blocker.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+      await blocker.query("SELECT pg_advisory_xact_lock(17742, 23001)");
+      firstCreation = firstConnection.lobbyStates.createActive(omitLobbyCode(first), {
+        maxActiveLobbies: Number(activeCount.rows[0]!.count) + 2,
+        nextCode: scriptedCodes([sharedCode, firstFallback]),
+      });
+      secondCreation = secondConnection.lobbyStates.createActive(omitLobbyCode(second), {
+        maxActiveLobbies: Number(activeCount.rows[0]!.count) + 2,
+        nextCode: scriptedCodes([sharedCode, secondFallback]),
+      });
+      await waitForBlockedLobbyAdmissions(2);
+      await blocker.query("COMMIT");
+    } finally {
+      await blocker.query("ROLLBACK");
+      blocker.release();
+    }
+
+    const results = await Promise.all([firstCreation!, secondCreation!]);
+    expect(results).toEqual([
+      { ok: true, lobbyId: first.lobby.id, code: expect.any(String) },
+      { ok: true, lobbyId: second.lobby.id, code: expect.any(String) },
+    ]);
+    const committedCodes = results.map((result) => (result.ok ? result.code : null));
+    expect(committedCodes).toContain(sharedCode);
+    expect(committedCodes).toSatisfy(
+      (codes: unknown[]) => codes.includes(firstFallback) || codes.includes(secondFallback),
+    );
+    expect(new Set(committedCodes).size).toBe(2);
+  });
+
+  test("retries an active-code unique race that commits after its transaction snapshot", async () => {
+    const connection = await connect();
+    const state = createLobbyState();
+    const racedCode = randomLobbyCode();
+    const fallbackCode = randomLobbyCode();
+    const activeCount = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM lobbies WHERE status IN ('WAITING', 'ACTIVE')`,
+    );
+    const blocker = await pool.connect();
+    let creation: Promise<CreateActiveLobbyResult> | undefined;
+
+    try {
+      await blocker.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+      await blocker.query("SELECT pg_advisory_xact_lock(17742, 23001)");
+      creation = connection.lobbyStates.createActive(omitLobbyCode(state), {
+        maxActiveLobbies: Number(activeCount.rows[0]!.count) + 2,
+        nextCode: scriptedCodes([racedCode, fallbackCode]),
+      });
+      await waitForBlockedLobbyAdmissions(1);
+      await pool.query(
+        `INSERT INTO lobbies (
+           id, code, status, theme_id, created_at, last_activity_at, last_event_sequence
+         ) VALUES ($1, $2, 'ACTIVE', 'theme-race', $3, $3, 0)`,
+        [`lobby-code-race-${randomUUID()}`, racedCode, new Date("2026-07-17T08:00:00.000Z")],
+      );
+      await blocker.query("COMMIT");
+    } finally {
+      await blocker.query("ROLLBACK");
+      blocker.release();
+    }
+
+    await expect(creation).resolves.toEqual({
+      ok: true,
+      lobbyId: state.lobby.id,
+      code: fallbackCode,
+    });
+  });
+
+  test("allows completed lobby codes to be reused without consuming active capacity", async () => {
+    const connection = await connect();
+    const completed = createLobbyState();
+    await createPersistedLobby(connection, completed);
+    await pool.query(`UPDATE lobbies SET status = 'COMPLETED' WHERE id = $1`, [completed.lobby.id]);
+    const activeCount = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM lobbies WHERE status IN ('WAITING', 'ACTIVE')`,
+    );
+    const replacement = createLobbyState();
+
+    await expect(
+      connection.lobbyStates.createActive(omitLobbyCode(replacement), {
+        maxActiveLobbies: Number(activeCount.rows[0]!.count) + 1,
+        nextCode: () => completed.lobby.code,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      lobbyId: replacement.lobby.id,
+      code: completed.lobby.code,
+    });
   });
 
   test("rejects cards owned by a participant from another lobby", async () => {
     const connection = await connect();
     const firstLobby = createLobbyState();
     const secondLobby = createLobbyState();
-    await connection.lobbyStates.create(firstLobby);
-    await connection.lobbyStates.create(secondLobby);
+    await createPersistedLobby(connection, firstLobby);
+    await createPersistedLobby(connection, secondLobby);
 
     await expect(
       pool.query(
@@ -419,7 +676,7 @@ describeDatabase("PostgreSQL durable game state", () => {
   test("rejects null card data rather than accepting an unknown check result", async () => {
     const connection = await connect();
     const state = createLobbyState();
-    await connection.lobbyStates.create(state);
+    await createPersistedLobby(connection, state);
     const participantId = `participant-null-card-${randomUUID()}`;
     await pool.query(
       `INSERT INTO participants (
@@ -507,7 +764,7 @@ describeDatabase("PostgreSQL durable game state", () => {
   test("keeps exactly one current round and no prior-round result history model", async () => {
     const connection = await connect();
     const state = createLobbyState();
-    await connection.lobbyStates.create(state);
+    await createPersistedLobby(connection, state);
 
     const modelResult = await pool.query<{ table_name: string }>(
       `SELECT table_name
@@ -544,7 +801,7 @@ describeDatabase("PostgreSQL durable game state", () => {
     const request = commandRequest(state, `command-public-${randomUUID()}`);
     const activityAt = new Date("2026-07-17T09:00:00.000Z");
     let mutationInvocations = 0;
-    await connection.lobbyStates.create(state);
+    await createPersistedLobby(connection, state);
 
     const execute = () =>
       connection.commandTransactions.execute(request, async ({ lobbies }) => {
@@ -599,7 +856,7 @@ describeDatabase("PostgreSQL durable game state", () => {
     const state = createLobbyState();
     const request = commandRequest(state, `command-private-${randomUUID()}`);
     const activityAt = new Date("2026-07-17T09:01:00.000Z");
-    await connection.lobbyStates.create(state);
+    await createPersistedLobby(connection, state);
 
     const committed = await connection.commandTransactions.execute(request, async ({ lobbies }) => {
       await lobbies.recordActivity(activityAt);
@@ -632,7 +889,7 @@ describeDatabase("PostgreSQL durable game state", () => {
     const request = commandRequest(state, `command-race-${randomUUID()}`);
     const activityAt = new Date("2026-07-17T09:02:00.000Z");
     let mutationInvocations = 0;
-    await setupConnection.lobbyStates.create(state);
+    await createPersistedLobby(setupConnection, state);
 
     const mutate = async ({ lobbies }: CommandTransactionRepositories) => {
       mutationInvocations += 1;
@@ -681,7 +938,7 @@ describeDatabase("PostgreSQL durable game state", () => {
     const firstMutationRelease = new Promise<void>((resolve) => {
       releaseFirstMutation = resolve;
     });
-    await setupConnection.lobbyStates.create(state);
+    await createPersistedLobby(setupConnection, state);
 
     const firstResult = firstConnection.commandTransactions.execute(request, async () => {
       mutationInvocations += 1;
@@ -724,7 +981,7 @@ describeDatabase("PostgreSQL durable game state", () => {
     const state = createLobbyState();
     const commandId = `command-mismatch-${randomUUID()}`;
     const firstRequest = commandRequest(state, commandId, "first-command");
-    await connection.lobbyStates.create(state);
+    await createPersistedLobby(connection, state);
     await connection.commandTransactions.execute(firstRequest, async () => ({
       deliveryScope: "participant-private",
       result: { accepted: true },
@@ -743,7 +1000,7 @@ describeDatabase("PostgreSQL durable game state", () => {
     const state = createLobbyState();
     const setupConnection = await connect();
     const commandConnections = await Promise.all(Array.from({ length: 4 }, async () => connect()));
-    await setupConnection.lobbyStates.create(state);
+    await createPersistedLobby(setupConnection, state);
 
     const results = await Promise.all(
       commandConnections.map(async (connection, index) => {
@@ -780,7 +1037,7 @@ describeDatabase("PostgreSQL durable game state", () => {
     const connection = await connect();
     const state = createLobbyState();
     const request = commandRequest(state, `command-failure-${randomUUID()}`);
-    await connection.lobbyStates.create(state);
+    await createPersistedLobby(connection, state);
 
     await expect(
       connection.commandTransactions.execute(request, async ({ lobbies }) => {
@@ -804,7 +1061,7 @@ describeDatabase("PostgreSQL durable game state", () => {
       participantId: `missing-participant-${randomUUID()}`,
     };
     const activityAt = new Date("2026-07-17T09:05:00.000Z");
-    await connection.lobbyStates.create(state);
+    await createPersistedLobby(connection, state);
 
     await expect(
       connection.commandTransactions.execute(request, async ({ lobbies }) => {

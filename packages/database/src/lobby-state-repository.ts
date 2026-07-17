@@ -162,9 +162,38 @@ export interface DurableLobbyState {
   readonly commandResults: readonly DurableCommandResult[];
 }
 
+export type NewActiveLobbyState = Omit<DurableLobbyState, "lobby"> & {
+  readonly lobby: Omit<DurableLobby, "code" | "status"> & {
+    readonly status: "waiting" | "active";
+  };
+};
+
+export interface CreateActiveLobbyOptions {
+  readonly maxActiveLobbies: number;
+  readonly nextCode: () => string;
+}
+
+export type CreateActiveLobbyResult =
+  | {
+      readonly ok: true;
+      readonly lobbyId: string;
+      readonly code: string;
+    }
+  | {
+      readonly ok: false;
+      readonly error: {
+        readonly code: "ACTIVE_LOBBY_LIMIT_REACHED";
+        readonly message: "The active lobby limit has been reached.";
+      };
+    };
+
 export interface LobbyStateRepository {
-  create(state: DurableLobbyState): Promise<void>;
+  createActive(
+    state: NewActiveLobbyState,
+    options: CreateActiveLobbyOptions,
+  ): Promise<CreateActiveLobbyResult>;
   findById(lobbyId: string): Promise<DurableLobbyState | null>;
+  findActiveLobbyIdByCode(code: string): Promise<string | null>;
 }
 
 export interface CommandTransactionRequest<Result extends JsonObject = JsonObject> {
@@ -316,6 +345,37 @@ function toJsonObject(value: Prisma.JsonValue): JsonObject {
   return value as JsonObject;
 }
 
+function isActiveLobbyCodeCollision(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  const prismaError = error as { readonly code?: unknown; readonly meta?: unknown };
+  if (
+    prismaError.code !== "P2002" ||
+    typeof prismaError.meta !== "object" ||
+    prismaError.meta === null
+  ) {
+    return false;
+  }
+  const meta = prismaError.meta as {
+    readonly modelName?: unknown;
+    readonly driverAdapterError?: unknown;
+  };
+  if (meta.modelName !== "Lobby") {
+    return false;
+  }
+
+  const adapterError = meta.driverAdapterError as
+    | {
+        readonly cause?: {
+          readonly constraint?: { readonly fields?: unknown };
+        };
+      }
+    | undefined;
+  const fields = adapterError?.cause?.constraint?.fields;
+  return Array.isArray(fields) && fields.length === 1 && fields[0] === "code";
+}
+
 function toDurableCommandResult<Result extends JsonObject>(
   command: {
     readonly participantId: string;
@@ -378,168 +438,256 @@ function assertAggregate(state: DurableLobbyState): void {
 }
 
 class PrismaLobbyStateRepository implements LobbyStateRepository {
-  constructor(private readonly prisma: GeneratedPrismaClient) {}
+  constructor(
+    private readonly prisma: GeneratedPrismaClient,
+    private readonly retryOptions: TransactionRetryOptions,
+  ) {}
 
-  async create(state: DurableLobbyState): Promise<void> {
+  private async insert(
+    transaction: Prisma.TransactionClient,
+    state: DurableLobbyState,
+  ): Promise<void> {
     assertAggregate(state);
 
-    await this.prisma.$transaction(async (transaction) => {
-      await transaction.lobby.create({
+    await transaction.lobby.create({
+      data: {
+        id: state.lobby.id,
+        code: state.lobby.code,
+        status: lobbyStatuses.toDatabase(state.lobby.status),
+        themeId: state.lobby.themeId,
+        createdAt: state.lobby.createdAt,
+        lastActivityAt: state.lobby.lastActivityAt,
+        endedAt: state.lobby.endedAt ?? null,
+        lastEventSequence: state.lobby.lastEventSequence,
+      },
+    });
+
+    await transaction.participant.createMany({
+      data: state.participants.map((participant) => ({
+        id: participant.id,
+        lobbyId: state.lobby.id,
+        username: participant.username,
+        normalizedUsername: participant.normalizedUsername,
+        role: participantRoles.toDatabase(participant.role),
+        roundEligibility: roundEligibilities.toDatabase(participant.roundEligibility),
+        joinedAt: participant.joinedAt,
+        departedAt: participant.departedAt,
+      })),
+    });
+
+    await transaction.participantSession.createMany({
+      data: state.sessions.map((session) => ({
+        id: session.id,
+        lobbyId: state.lobby.id,
+        participantId: session.participantId,
+        tokenHash: new Uint8Array(session.tokenHash),
+        status: sessionStatuses.toDatabase(session.status),
+        issuedAt: session.issuedAt,
+        disconnectedAt: session.disconnectedAt,
+        rejoinUntil: session.rejoinUntil,
+        departedAt: session.departedAt,
+      })),
+    });
+
+    await transaction.presenceGeneration.createMany({
+      data: state.presenceGenerations.map((presence) => ({
+        lobbyId: state.lobby.id,
+        participantId: presence.participantId,
+        generation: presence.generation,
+        status: presenceStatuses.toDatabase(presence.status),
+        connectionCount: presence.connectionCount,
+        changedAt: presence.changedAt,
+        graceEndsAt: presence.graceEndsAt,
+        absentSince: presence.absentSince,
+        departedAt: presence.departedAt,
+        overridden: presence.overridden,
+        endedAt: presence.endedAt,
+      })),
+    });
+
+    if (state.round !== null) {
+      const round = state.round;
+      await transaction.round.create({
         data: {
-          id: state.lobby.id,
-          code: state.lobby.code,
-          status: lobbyStatuses.toDatabase(state.lobby.status),
-          themeId: state.lobby.themeId,
-          createdAt: state.lobby.createdAt,
-          lastActivityAt: state.lobby.lastActivityAt,
-          endedAt: state.lobby.endedAt ?? null,
-          lastEventSequence: state.lobby.lastEventSequence,
+          id: round.id,
+          lobbyId: state.lobby.id,
+          initialPatternId: round.initialPatternId,
+          currentPatternId: round.currentPatternId,
+          stage: roundStages.toDatabase(round.stage),
+          callMode: callModes.toDatabase(round.callMode),
+          callIntervalSeconds: round.callIntervalSeconds,
+          createdAt: round.createdAt,
+          startedAt: round.startedAt,
+          activeAt: round.activeAt,
+          pausedAt: round.pausedAt,
+          pauseReason:
+            round.pauseReason === null ? null : pauseReasons.toDatabase(round.pauseReason),
+          nextCallAt: round.nextCallAt,
+          coWinnerTriggeringCallId: round.coWinnerTriggeringCallId,
+          coWinnerOpenedAt: round.coWinnerOpenedAt,
+          coWinnerClosesAt: round.coWinnerClosesAt,
+          resultSettledAt: round.resultSettledAt,
+          endedAt: round.endedAt,
         },
       });
 
-      await transaction.participant.createMany({
-        data: state.participants.map((participant) => ({
-          id: participant.id,
-          lobbyId: state.lobby.id,
-          username: participant.username,
-          normalizedUsername: participant.normalizedUsername,
-          role: participantRoles.toDatabase(participant.role),
-          roundEligibility: roundEligibilities.toDatabase(participant.roundEligibility),
-          joinedAt: participant.joinedAt,
-          departedAt: participant.departedAt,
+      await transaction.drawPosition.createMany({
+        data: round.drawOrder.map((draw) => ({
+          roundId: round.id,
+          position: draw.position,
+          ball: draw.ball,
         })),
       });
-
-      await transaction.participantSession.createMany({
-        data: state.sessions.map((session) => ({
-          id: session.id,
+      await transaction.card.createMany({
+        data: round.cards.map((card) => ({
+          id: card.id,
           lobbyId: state.lobby.id,
-          participantId: session.participantId,
-          tokenHash: new Uint8Array(session.tokenHash),
-          status: sessionStatuses.toDatabase(session.status),
-          issuedAt: session.issuedAt,
-          disconnectedAt: session.disconnectedAt,
-          rejoinUntil: session.rejoinUntil,
-          departedAt: session.departedAt,
+          roundId: round.id,
+          participantId: card.participantId,
+          cells: [...card.cells],
+          createdAt: card.createdAt,
         })),
       });
-
-      await transaction.presenceGeneration.createMany({
-        data: state.presenceGenerations.map((presence) => ({
-          lobbyId: state.lobby.id,
-          participantId: presence.participantId,
-          generation: presence.generation,
-          status: presenceStatuses.toDatabase(presence.status),
-          connectionCount: presence.connectionCount,
-          changedAt: presence.changedAt,
-          graceEndsAt: presence.graceEndsAt,
-          absentSince: presence.absentSince,
-          departedAt: presence.departedAt,
-          overridden: presence.overridden,
-          endedAt: presence.endedAt,
+      await transaction.call.createMany({
+        data: round.calls.map((call) => ({
+          id: call.id,
+          roundId: round.id,
+          position: call.position,
+          ball: call.ball,
+          calledAt: call.calledAt,
         })),
       });
+      await transaction.mark.createMany({
+        data: round.cards.flatMap((card) =>
+          card.marks.map((mark) => ({
+            id: mark.id,
+            roundId: round.id,
+            cardId: card.id,
+            ball: mark.ball,
+            markedAt: mark.markedAt,
+          })),
+        ),
+      });
+      await transaction.coWinner.createMany({
+        data: round.coWinners.map((winner) => ({
+          lobbyId: state.lobby.id,
+          roundId: round.id,
+          participantId: winner.participantId,
+          cardId: winner.cardId,
+          triggeringCallId: winner.triggeringCallId,
+          confirmedAt: winner.confirmedAt,
+        })),
+      });
+    }
 
-      if (state.round !== null) {
-        const round = state.round;
-        await transaction.round.create({
-          data: {
-            id: round.id,
-            lobbyId: state.lobby.id,
-            initialPatternId: round.initialPatternId,
-            currentPatternId: round.currentPatternId,
-            stage: roundStages.toDatabase(round.stage),
-            callMode: callModes.toDatabase(round.callMode),
-            callIntervalSeconds: round.callIntervalSeconds,
-            createdAt: round.createdAt,
-            startedAt: round.startedAt,
-            activeAt: round.activeAt,
-            pausedAt: round.pausedAt,
-            pauseReason:
-              round.pauseReason === null ? null : pauseReasons.toDatabase(round.pauseReason),
-            nextCallAt: round.nextCallAt,
-            coWinnerTriggeringCallId: round.coWinnerTriggeringCallId,
-            coWinnerOpenedAt: round.coWinnerOpenedAt,
-            coWinnerClosesAt: round.coWinnerClosesAt,
-            resultSettledAt: round.resultSettledAt,
-            endedAt: round.endedAt,
-          },
-        });
+    await transaction.activeLobbyEvent.createMany({
+      data: state.events.map((event) => ({
+        lobbyId: state.lobby.id,
+        sequence: event.sequence,
+        roundId: event.roundId,
+        eventType: event.eventType,
+        schemaVersion: event.schemaVersion,
+        payload: toInputJson(event.payload),
+        createdAt: event.createdAt,
+      })),
+    });
+    await transaction.commandResult.createMany({
+      data: state.commandResults.map((command) => ({
+        lobbyId: state.lobby.id,
+        participantId: command.participantId,
+        commandId: command.commandId,
+        roundId: command.roundId,
+        commandType: command.commandType,
+        deliveryScope: deliveryScopes.toDatabase(command.deliveryScope),
+        eventSequence: command.eventSequence,
+        result: toInputJson(command.result),
+        createdAt: command.createdAt,
+      })),
+    });
+  }
 
-        await transaction.drawPosition.createMany({
-          data: round.drawOrder.map((draw) => ({
-            roundId: round.id,
-            position: draw.position,
-            ball: draw.ball,
-          })),
-        });
-        await transaction.card.createMany({
-          data: round.cards.map((card) => ({
-            id: card.id,
-            lobbyId: state.lobby.id,
-            roundId: round.id,
-            participantId: card.participantId,
-            cells: [...card.cells],
-            createdAt: card.createdAt,
-          })),
-        });
-        await transaction.call.createMany({
-          data: round.calls.map((call) => ({
-            id: call.id,
-            roundId: round.id,
-            position: call.position,
-            ball: call.ball,
-            calledAt: call.calledAt,
-          })),
-        });
-        await transaction.mark.createMany({
-          data: round.cards.flatMap((card) =>
-            card.marks.map((mark) => ({
-              id: mark.id,
-              roundId: round.id,
-              cardId: card.id,
-              ball: mark.ball,
-              markedAt: mark.markedAt,
-            })),
-          ),
-        });
-        await transaction.coWinner.createMany({
-          data: round.coWinners.map((winner) => ({
-            lobbyId: state.lobby.id,
-            roundId: round.id,
-            participantId: winner.participantId,
-            cardId: winner.cardId,
-            triggeringCallId: winner.triggeringCallId,
-            confirmedAt: winner.confirmedAt,
-          })),
-        });
+  async createActive(
+    state: NewActiveLobbyState,
+    options: CreateActiveLobbyOptions,
+  ): Promise<CreateActiveLobbyResult> {
+    if (!Number.isSafeInteger(options.maxActiveLobbies) || options.maxActiveLobbies < 1) {
+      throw new RangeError("The active lobby limit must be a positive safe integer.");
+    }
+
+    for (let attempt = 0; attempt < 128; attempt += 1) {
+      const code = options.nextCode();
+      if (!/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/.test(code)) {
+        throw new RangeError(
+          "Generated lobby codes must use the canonical six-character alphabet.",
+        );
       }
 
-      await transaction.activeLobbyEvent.createMany({
-        data: state.events.map((event) => ({
-          lobbyId: state.lobby.id,
-          sequence: event.sequence,
-          roundId: event.roundId,
-          eventType: event.eventType,
-          schemaVersion: event.schemaVersion,
-          payload: toInputJson(event.payload),
-          createdAt: event.createdAt,
-        })),
-      });
-      await transaction.commandResult.createMany({
-        data: state.commandResults.map((command) => ({
-          lobbyId: state.lobby.id,
-          participantId: command.participantId,
-          commandId: command.commandId,
-          roundId: command.roundId,
-          commandType: command.commandType,
-          deliveryScope: deliveryScopes.toDatabase(command.deliveryScope),
-          eventSequence: command.eventSequence,
-          result: toInputJson(command.result),
-          createdAt: command.createdAt,
-        })),
-      });
-    });
+      let result: "collision" | "created" | "limit-reached";
+      try {
+        result = await runTransactionWithRetry(
+          async () =>
+            this.prisma.$transaction(
+              async (transaction) => {
+                // There is no parent row to lock before the first lobby, so admissions share one lock.
+                await transaction.$queryRaw`
+                  SELECT pg_advisory_xact_lock(17742, 23001)::text AS "lock"
+                `;
+
+                const activeLobbyCount = await transaction.lobby.count({
+                  where: { status: { in: ["WAITING", "ACTIVE"] } },
+                });
+                if (activeLobbyCount >= options.maxActiveLobbies) {
+                  return "limit-reached" as const;
+                }
+
+                const collision = await transaction.lobby.findFirst({
+                  where: {
+                    code,
+                    status: { in: ["WAITING", "ACTIVE"] },
+                  },
+                  select: { id: true },
+                });
+                if (collision !== null) {
+                  return "collision" as const;
+                }
+
+                await this.insert(transaction, {
+                  ...state,
+                  lobby: { ...state.lobby, code },
+                });
+                return "created" as const;
+              },
+              {
+                isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+                maxWait: 5_000,
+                timeout: 10_000,
+              },
+            ),
+          this.retryOptions,
+        );
+      } catch (error) {
+        if (isActiveLobbyCodeCollision(error)) {
+          continue;
+        }
+        throw error;
+      }
+
+      if (result === "collision") {
+        continue;
+      }
+      if (result === "limit-reached") {
+        return {
+          ok: false,
+          error: {
+            code: "ACTIVE_LOBBY_LIMIT_REACHED",
+            message: "The active lobby limit has been reached.",
+          },
+        };
+      }
+      return { ok: true, lobbyId: state.lobby.id, code };
+    }
+
+    throw new Error("Unable to generate a unique active lobby code.");
   }
 
   async findById(lobbyId: string): Promise<DurableLobbyState | null> {
@@ -681,6 +829,18 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
         createdAt: command.createdAt,
       })),
     };
+  }
+
+  async findActiveLobbyIdByCode(code: string): Promise<string | null> {
+    const lobby = await this.prisma.lobby.findFirst({
+      where: {
+        code,
+        status: { in: ["WAITING", "ACTIVE"] },
+      },
+      select: { id: true },
+    });
+
+    return lobby?.id ?? null;
   }
 }
 
@@ -832,7 +992,7 @@ export async function connectDatabase(
   await prisma.$connect();
 
   return {
-    lobbyStates: new PrismaLobbyStateRepository(prisma),
+    lobbyStates: new PrismaLobbyStateRepository(prisma, options.transactionRetry ?? {}),
     commandTransactions: new PrismaCommandTransactionRepository(
       prisma,
       options.transactionRetry ?? {},
