@@ -6,8 +6,8 @@ four supplied pattern PDFs. Each source PDF has one page. A reference such as
 
 Runtime canonical data lives in `packages/patterns/src/catalog.ts`. The core
 section below is generated and tested from the runtime catalog so the two
-representations cannot diverge. Later catalog stories add the remaining letter,
-number, and Christmas exact entries to that canonical runtime data.
+representations cannot diverge. Later catalog stories add the remaining number
+and Christmas exact entries to that canonical runtime data.
 
 ## Mask Notation
 
@@ -71,6 +71,31 @@ A transformed pattern must have its own explicitly sourced catalog entry.
 | `shape-kite` | Kite | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d22` | 1 | `a346e4fe365308d8` |
 | `shape-smiley-face` | Smiley Face | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d23` | 1 | `9d9330f89afea90d` |
 | `shape-block-of-nine` | Block of Nine | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d24` | 1 | `f82f4f5710a22688` |
+| `letter-a` | A | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d01` | 1 | `be5fa6600e0b9ad9` |
+| `letter-b` | B | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d02` | 1 | `6bc5b56b6fb72e45` |
+| `letter-c` | C | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d03` | 1 | `447d52f434f3bfaa` |
+| `letter-d` | D | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d04` | 1 | `74845e8e6d214029` |
+| `letter-e` | E | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d05` | 1 | `8dbe4f7abba629f5` |
+| `letter-f` | F | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d06` | 1 | `fb3c18fa49a6dd0a` |
+| `letter-g` | G | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d07` | 1 | `c28be1c100ae11bc` |
+| `letter-h` | H | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d08` | 1 | `b0f578218342c4ee` |
+| `letter-i` | I | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d09` | 1 | `52e0f1d5e8fde80e` |
+| `letter-j` | J | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d10` | 1 | `af4a6f3469a62bd2` |
+| `letter-k` | K | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d11` | 1 | `1728c67ccdb91c0c` |
+| `letter-l` | L | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d12` | 1 | `c731885dff9ed766` |
+| `letter-m` | M | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d13` | 1 | `c4ebda77038e32d2` |
+| `letter-n` | N | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d14` | 1 | `b4d0c5c805fd8b4e` |
+| `letter-o` | O | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d15` | 1 | `b2d9fba56458c581` |
+| `letter-p` | P | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d16` | 1 | `d75cc4ab9369aaf9` |
+| `letter-q` | Q | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d17` | 1 | `6931c726086b85fc` |
+| `letter-r` | R | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d18` | 1 | `8206b9737fcce207` |
+| `letter-s` | S | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d19` | 1 | `b612fd21c71706d6` |
+| `letter-t` | T | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d20` | 1 | `1482c1277c36f406` |
+| `letter-u` | U | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d21` | 1 | `366522df50677fb6` |
+| `letter-v` | V | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d22` | 1 | `96906d6efbe28546` |
+| `letter-w` | W | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d23` | 1 | `4543681cd80301da` |
+| `letter-x` | X | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d24` | 1 | `72e71d8ab21ee4a6` |
+| `letter-y` | Y | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d25` | 1 | `46ba1505f11510e2` |
 <!-- END GENERATED CORE PATTERNS -->
 <!-- prettier-ignore-end -->
 
@@ -182,6 +207,39 @@ rule or existing runtime entry rather than becoming exact selectable patterns.
 
 The source ends at Y; it contains no Z diagram. Q and W use the confirmed masks
 shown above without rotation, reflection, translation, or typographic cleanup.
+
+### Letter Cell Review Records
+
+Each record confirms that all 25 source cells were checked against the PDF and
+that the canonical runtime mask matches the source inventory above.
+
+| Reference | Source name | Runtime ID | Review             | Cells reviewed |
+| --------- | ----------- | ---------- | ------------------ | -------------: |
+| `p1/d01`  | A           | `letter-a` | `exact-mask-match` |          25/25 |
+| `p1/d02`  | B           | `letter-b` | `exact-mask-match` |          25/25 |
+| `p1/d03`  | C           | `letter-c` | `exact-mask-match` |          25/25 |
+| `p1/d04`  | D           | `letter-d` | `exact-mask-match` |          25/25 |
+| `p1/d05`  | E           | `letter-e` | `exact-mask-match` |          25/25 |
+| `p1/d06`  | F           | `letter-f` | `exact-mask-match` |          25/25 |
+| `p1/d07`  | G           | `letter-g` | `exact-mask-match` |          25/25 |
+| `p1/d08`  | H           | `letter-h` | `exact-mask-match` |          25/25 |
+| `p1/d09`  | I           | `letter-i` | `exact-mask-match` |          25/25 |
+| `p1/d10`  | J           | `letter-j` | `exact-mask-match` |          25/25 |
+| `p1/d11`  | K           | `letter-k` | `exact-mask-match` |          25/25 |
+| `p1/d12`  | L           | `letter-l` | `exact-mask-match` |          25/25 |
+| `p1/d13`  | M           | `letter-m` | `exact-mask-match` |          25/25 |
+| `p1/d14`  | N           | `letter-n` | `exact-mask-match` |          25/25 |
+| `p1/d15`  | O           | `letter-o` | `exact-mask-match` |          25/25 |
+| `p1/d16`  | P           | `letter-p` | `exact-mask-match` |          25/25 |
+| `p1/d17`  | Q           | `letter-q` | `exact-mask-match` |          25/25 |
+| `p1/d18`  | R           | `letter-r` | `exact-mask-match` |          25/25 |
+| `p1/d19`  | S           | `letter-s` | `exact-mask-match` |          25/25 |
+| `p1/d20`  | T           | `letter-t` | `exact-mask-match` |          25/25 |
+| `p1/d21`  | U           | `letter-u` | `exact-mask-match` |          25/25 |
+| `p1/d22`  | V           | `letter-v` | `exact-mask-match` |          25/25 |
+| `p1/d23`  | W           | `letter-w` | `exact-mask-match` |          25/25 |
+| `p1/d24`  | X           | `letter-x` | `exact-mask-match` |          25/25 |
+| `p1/d25`  | Y           | `letter-y` | `exact-mask-match` |          25/25 |
 
 ### `docs/number-bingo-patterns.pdf`
 

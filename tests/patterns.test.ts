@@ -73,6 +73,34 @@ const expectedShapePatterns = [
   ["shape-block-of-nine", "Block of Nine", "p1/d24", "###../###../###../...../....."],
 ] as const;
 
+const expectedLetterPatterns = [
+  ["letter-a", "A", "p1/d01", "#####/#...#/#####/#...#/#...#"],
+  ["letter-b", "B", "p1/d02", "####./#...#/####./#...#/####."],
+  ["letter-c", "C", "p1/d03", "#####/#..../#..../#..../#####"],
+  ["letter-d", "D", "p1/d04", "####./#...#/#...#/#...#/####."],
+  ["letter-e", "E", "p1/d05", "#####/#..../####./#..../#####"],
+  ["letter-f", "F", "p1/d06", "#####/#..../#####/#..../#...."],
+  ["letter-g", "G", "p1/d07", "#####/#..../#.###/#...#/#####"],
+  ["letter-h", "H", "p1/d08", "#...#/#...#/#####/#...#/#...#"],
+  ["letter-i", "I", "p1/d09", "#####/..#../..#../..#../#####"],
+  ["letter-j", "J", "p1/d10", "#####/....#/....#/....#/#####"],
+  ["letter-k", "K", "p1/d11", "#...#/#..#./###../#..#./#...#"],
+  ["letter-l", "L", "p1/d12", "#..../#..../#..../#..../#####"],
+  ["letter-m", "M", "p1/d13", "#...#/##.##/#.#.#/#...#/#...#"],
+  ["letter-n", "N", "p1/d14", "#...#/##..#/#.#.#/#..##/#...#"],
+  ["letter-o", "O", "p1/d15", "#####/#...#/#...#/#...#/#####"],
+  ["letter-p", "P", "p1/d16", "####./#...#/####./#..../#...."],
+  ["letter-q", "Q", "p1/d17", "#####/#...#/#...#/#..##/#####"],
+  ["letter-r", "R", "p1/d18", "####./#...#/####./#..#./#...#"],
+  ["letter-s", "S", "p1/d19", "#####/#..../#####/....#/#####"],
+  ["letter-t", "T", "p1/d20", "#####/..#../..#../..#../..#.."],
+  ["letter-u", "U", "p1/d21", "#...#/#...#/#...#/#...#/#####"],
+  ["letter-v", "V", "p1/d22", "#...#/#...#/.#.#./.#.#./..#.."],
+  ["letter-w", "W", "p1/d23", "#...#/#...#/#.#.#/##.##/#...#"],
+  ["letter-x", "X", "p1/d24", "#...#/.#.#./..#../.#.#./#...#"],
+  ["letter-y", "Y", "p1/d25", "#...#/.#.#./..#../..#../..#.."],
+] as const;
+
 function catalogPattern(id: string) {
   const pattern = patternCatalog.find((candidate) => candidate.id === id);
   expect(pattern, id).toBeDefined();
@@ -279,6 +307,41 @@ describe("canonical core pattern catalog", () => {
     expect(shapeSelections.filter((pattern) => pattern.name === "Two Lines")).toHaveLength(1);
     expect(shapeSelections.filter((pattern) => pattern.name === "Blackout")).toHaveLength(1);
     expect(shapeSelections.some((pattern) => pattern.name === "Full House")).toBe(false);
+  });
+
+  test("encodes A through Y with category-specific stable IDs and source masks", () => {
+    const letters = patternCatalog.filter((pattern) => pattern.category === "letter");
+
+    expect(
+      letters.map((pattern) => [
+        pattern.id,
+        pattern.name,
+        pattern.source.references[0],
+        pattern.masks[0],
+      ]),
+    ).toEqual(expectedLetterPatterns);
+    expect(letters.some((pattern) => pattern.name === "Z")).toBe(false);
+
+    for (const letter of letters) {
+      expect(letter).toMatchObject({
+        category: "letter",
+        version: 1,
+        mode: "exact",
+        source: {
+          file: "letter-bingo-patterns.pdf",
+          alias: null,
+        },
+      });
+      expect(letter.source.references).toHaveLength(1);
+      expect(letter.masks).toHaveLength(1);
+    }
+  });
+
+  test("keeps Letter O and Letter X independent from identical shape masks", () => {
+    expect(catalogPattern("letter-o").masks).toEqual(catalogPattern("shape-outside-edge").masks);
+    expect(catalogPattern("letter-x").masks).toEqual(catalogPattern("shape-x").masks);
+    expect(catalogPattern("letter-o").id).not.toBe(catalogPattern("shape-outside-edge").id);
+    expect(catalogPattern("letter-x").id).not.toBe(catalogPattern("shape-x").id);
   });
 
   test("is deeply immutable", () => {

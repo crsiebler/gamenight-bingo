@@ -69,7 +69,7 @@ interface CatalogRow {
   mask: string;
 }
 
-interface ShapeReviewRow {
+interface SourceReviewRow {
   reference: string;
   sourceName: string;
   runtimeId: string;
@@ -120,8 +120,10 @@ function parseCatalogRows(markdown: string): CatalogRow[] {
 
 const rows = parseCatalogRows(catalog);
 
-function parseShapeReviewRows(markdown: string): ShapeReviewRow[] {
-  const section = markdown.match(/### Shape Cell Review Records\n([\s\S]*?)(?=\n#{2,3} |$)/)?.[1];
+function parseSourceReviewRows(markdown: string, category: string): SourceReviewRow[] {
+  const section = markdown.match(
+    new RegExp(`### ${category} Cell Review Records\\n([\\s\\S]*?)(?=\\n#{2,3} |$)`),
+  )?.[1];
   if (!section) return [];
 
   return section
@@ -137,12 +139,13 @@ function parseShapeReviewRows(markdown: string): ShapeReviewRow[] {
       reference: reference!,
       sourceName: sourceName!,
       runtimeId: runtimeId!,
-      review: review as ShapeReviewRow["review"],
+      review: review as SourceReviewRow["review"],
       cellsReviewed: cellsReviewed!,
     }));
 }
 
-const shapeReviewRows = parseShapeReviewRows(catalog);
+const shapeReviewRows = parseSourceReviewRows(catalog, "Shape");
+const letterReviewRows = parseSourceReviewRows(catalog, "Letter");
 
 const expectedShapeReviewMappings = [
   ["p1/d01", "Bunny Ears", "shape-bunny-ears", "exact-mask-match"],
@@ -171,6 +174,15 @@ const expectedShapeReviewMappings = [
   ["p1/d24", "Block of Nine", "shape-block-of-nine", "exact-mask-match"],
   ["p1/d25", "Two Lines", "standard-two-lines", "flexible-rule-example"],
 ] as const;
+
+const expectedLetterReviewMappings = "ABCDEFGHIJKLMNOPQRSTUVWXY"
+  .split("")
+  .map((letter, index) => [
+    `p1/d${String(index + 1).padStart(2, "0")}`,
+    letter,
+    `letter-${letter.toLowerCase()}`,
+    "exact-mask-match",
+  ]);
 
 function generatedSection(markdown: string): string | undefined {
   return markdown.match(
@@ -252,6 +264,39 @@ describe("canonical pattern catalog documentation", () => {
       } else {
         expect(runtimePattern!.source.references).toContain(review.reference);
       }
+    }
+  });
+
+  test("records source-to-runtime parity for every reviewed letter diagram", () => {
+    expect(letterReviewRows).toHaveLength(25);
+    expect(
+      letterReviewRows.map(({ reference, sourceName, runtimeId, review }) => [
+        reference,
+        sourceName,
+        runtimeId,
+        review,
+      ]),
+    ).toEqual(expectedLetterReviewMappings);
+    expect(letterReviewRows.every((row) => row.cellsReviewed === "25/25")).toBe(true);
+
+    for (const review of letterReviewRows) {
+      const source = rows.find(
+        (row) =>
+          row.sourceFile === "letter-bingo-patterns.pdf" && row.reference === review.reference,
+      );
+      const runtimePattern = patternCatalog.find((pattern) => pattern.id === review.runtimeId);
+
+      expect(source, review.reference).toBeDefined();
+      expect(runtimePattern, review.runtimeId).toBeDefined();
+      expect(runtimePattern).toMatchObject({
+        name: review.sourceName,
+        category: "letter",
+        source: {
+          file: "letter-bingo-patterns.pdf",
+          references: [review.reference],
+        },
+        masks: [source!.mask],
+      });
     }
   });
 

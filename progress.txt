@@ -24,6 +24,7 @@ Next story: US-001
 - Exact generated Markdown parity blocks use `prettier-ignore` markers around the generated boundaries so formatting cannot silently rewrite canonical generator output.
 - Source review records map every PDF diagram to its runtime ID and disposition (`exact-mask-match`, `flexible-rule-example`, or `source-alias`), record all 25 cells reviewed, and parity-test exact records against canonical runtime masks without duplicating masks in the review table.
 - Pattern preview galleries derive a normalized model from `patternCatalog`; flexible-rule source examples live with the canonical pattern source, committed JSON goldens cover every runtime selection, and standalone generated HTML is parity-tested and isolated from Prettier with an exact-node ignore marker.
+- Category preview pages reuse the source-filtered canonical preview model and shared renderer while exposing category-specific creation/generation functions, committed goldens, and standalone HTML paths.
 
 Append-only iteration log
 -------------------------
@@ -1252,3 +1253,59 @@ Review outcome for US-015 at 2026-07-16 23:50:21 MST:
 - The visible mode-label coverage and isolated non-Two-Lines schema fixture resolve the prior targeted-review findings.
 - Residual risk is limited to manual rather than image-based source-PDF comparison and browser verification outside Chromium; neither is required by this story.
 - No in-scope critical, high, or medium findings remain. US-015 can be marked passing and committed.
+
+## 2026-07-17 00:02:41 MST - US-016
+- What was implemented
+  - Encoded canonical exact letter patterns A through Y with stable `letter-*` IDs, source references, and the documented masks, including confirmed Q and W masks.
+  - Preserved Letter O and Letter X as independent runtime selections despite masks matching Shape Outside Edge and Shape X, and documented/rendered that the source contains no Z.
+  - Added source-linked letter preview modeling, a responsive standalone HTML gallery, a reviewed JSON golden, catalog/documentation parity, and focused DOM/catalog coverage.
+- Files changed: `packages/patterns/src/catalog.ts`, `packages/patterns/src/index.ts`, `packages/patterns/src/previews.ts`, `docs/bingo-pattern-catalog.md`, `docs/letter-pattern-previews.html`, `tests/fixtures/patterns/letter-previews.v1.json`, `tests/pattern-catalog-doc.test.ts`, `tests/pattern-letter-previews.test.tsx`, `tests/patterns.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-016 - Encode, preview, and test letters`
+- Auto approval: `disabled`
+- Checks:
+  - `bunx vitest run tests/patterns.test.ts tests/pattern-letter-previews.test.tsx` (expected fail before implementation: six failures for missing letter entries and preview API)
+  - `bunx vitest run tests/pattern-catalog-doc.test.ts` (expected fail during review remediation: no letter source-review records existed)
+  - `bunx vitest run tests/pattern-letter-previews.test.tsx tests/pattern-shape-previews.test.tsx tests/patterns.test.ts tests/pattern-catalog-doc.test.ts` (pass after remediation; 4 files and 40 tests)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (pass)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `bun run test` (pass after remediation; 10 Vitest files and 189 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `git diff --check` (pass)
+  - Browser verification with `dev-browser` at 390px touch and 1440px desktop (pass; 25 entries, 25 thumbnails, no Z entry, no horizontal overflow, no console warnings/errors)
+  - Lighthouse mobile snapshot (pass; accessibility 100 and best practices 100)
+- Implementation agents:
+  - Recommended: none
+  - Used: skipped because the prior shape implementation established a clear category pattern and standard mode budgets at most one optional adviser
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, `ui-designer`, and `ux-researcher`; targeted re-review by `code-reviewer` and `qa-expert` planned after substantive documentation/test fixes
+  - Findings: fixed missing letter source-review parity and the stale catalog introduction before targeted re-review
+- Decisions (why):
+  - Reused one source-filtered preview model and shared semantic renderer while retaining category-specific public functions because number and Christmas stories need the same presentation without coupling their committed outputs.
+  - Kept exact letter masks in the canonical runtime catalog and generated documentation/previews from that source so visual artifacts cannot become a second mask authority.
+  - Used stable `letter-*` IDs rather than deduplicating identical masks because category identity is part of the product contract.
+  - Kept the standalone gallery framework-independent because application runtime/UI foundation stories remain dependency ordered for later work.
+- **Learnings for future iterations:**
+  - Number and Christmas preview stories can add category-specific wrappers over the shared source-preview renderer without changing the existing shape or letter outputs.
+  - Category identity must be preserved even when masks match across sources; masks are gameplay geometry, not catalog identity.
+  - Generated core documentation must be refreshed whenever runtime catalog entries change or the parity test will fail.
+- Known issues / follow-ups:
+  - Number and Christmas catalog entries, goldens, and preview pages remain intentionally assigned to US-017 and US-018.
+  - Local browser screenshot and Lighthouse report artifacts are untracked and excluded from the candidate story because they are verification outputs rather than maintained product artifacts.
+- Next iteration start:
+  - If review passes, implement US-017 number encoding, source-linked previews, and golden fixtures; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-016 at 2026-07-17 00:10:21 MST:
+- The initial `code-reviewer`, `qa-expert`, `ui-designer`, and `ux-researcher` pass produced one blocking medium finding: letter runtime masks were not directly parity-tested against completed source review records for all 25 PDF diagrams.
+- Added a failing documentation test first, then added A-Y cell-review records that map every source reference/name to its category-specific runtime ID and assert source mask, source reference, category, and runtime mask parity.
+- Fixed the QA review's specific low stale-documentation finding by updating the catalog introduction to state that only number and Christmas runtime entries remain.
+- Post-fix checks: focused 40 tests, workspace boundaries, lint, formatting, typecheck, all 189 Vitest tests, Playwright smoke, and staged/unstaged whitespace checks pass.
+- Targeted re-review: pending `code-reviewer` and `qa-expert` review because their findings received substantive documentation/test fixes; UI/UX specialists are not repeated because their initial findings lists were empty and rendered output did not change.
+
+Targeted re-review outcome for US-016 at 2026-07-17 00:10:21 MST:
+- `code-reviewer` and `qa-expert` reviewed the revised complete staged diff and returned empty actionable finding lists.
+- Both specialists confirmed that the A-Y review records and direct source-inventory-to-runtime assertions resolve the original parity gap without introducing brittle or tautological coverage.
+- Residual risk is limited to manual rather than automated image-level comparison against the source PDF and browser verification outside Chromium; neither is required by this story.
+- No in-scope critical, high, or medium findings remain. US-016 can be marked passing and committed.

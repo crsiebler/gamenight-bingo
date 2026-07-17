@@ -208,6 +208,22 @@ function exactShape(id: string, name: string, reference: string, mask: string) {
   } as const;
 }
 
+function exactLetter(letter: string, reference: string, mask: string) {
+  return {
+    id: `letter-${letter.toLowerCase()}`,
+    name: letter,
+    category: "letter",
+    version: 1,
+    mode: "exact",
+    source: {
+      file: "letter-bingo-patterns.pdf",
+      references: [reference],
+      alias: null,
+    },
+    masks: [mask],
+  } as const;
+}
+
 export const patternCatalog = deepFreeze(
   PatternCatalogSchema.parse([
     {
@@ -279,5 +295,30 @@ export const patternCatalog = deepFreeze(
     exactShape("kite", "Kite", "p1/d22", "...##/...##/..#../.#.../#...."),
     exactShape("smiley-face", "Smiley Face", "p1/d23", "...../.#.#./..#../#...#/.###."),
     exactShape("block-of-nine", "Block of Nine", "p1/d24", "###../###../###../...../....."),
+    exactLetter("A", "p1/d01", "#####/#...#/#####/#...#/#...#"),
+    exactLetter("B", "p1/d02", "####./#...#/####./#...#/####."),
+    exactLetter("C", "p1/d03", "#####/#..../#..../#..../#####"),
+    exactLetter("D", "p1/d04", "####./#...#/#...#/#...#/####."),
+    exactLetter("E", "p1/d05", "#####/#..../####./#..../#####"),
+    exactLetter("F", "p1/d06", "#####/#..../#####/#..../#...."),
+    exactLetter("G", "p1/d07", "#####/#..../#.###/#...#/#####"),
+    exactLetter("H", "p1/d08", "#...#/#...#/#####/#...#/#...#"),
+    exactLetter("I", "p1/d09", "#####/..#../..#../..#../#####"),
+    exactLetter("J", "p1/d10", "#####/....#/....#/....#/#####"),
+    exactLetter("K", "p1/d11", "#...#/#..#./###../#..#./#...#"),
+    exactLetter("L", "p1/d12", "#..../#..../#..../#..../#####"),
+    exactLetter("M", "p1/d13", "#...#/##.##/#.#.#/#...#/#...#"),
+    exactLetter("N", "p1/d14", "#...#/##..#/#.#.#/#..##/#...#"),
+    exactLetter("O", "p1/d15", "#####/#...#/#...#/#...#/#####"),
+    exactLetter("P", "p1/d16", "####./#...#/####./#..../#...."),
+    exactLetter("Q", "p1/d17", "#####/#...#/#...#/#..##/#####"),
+    exactLetter("R", "p1/d18", "####./#...#/####./#..#./#...#"),
+    exactLetter("S", "p1/d19", "#####/#..../#####/....#/#####"),
+    exactLetter("T", "p1/d20", "#####/..#../..#../..#../..#.."),
+    exactLetter("U", "p1/d21", "#...#/#...#/#...#/#...#/#####"),
+    exactLetter("V", "p1/d22", "#...#/#...#/.#.#./.#.#./..#.."),
+    exactLetter("W", "p1/d23", "#...#/#...#/#.#.#/##.##/#...#"),
+    exactLetter("X", "p1/d24", "#...#/.#.#./..#../.#.#./#...#"),
+    exactLetter("Y", "p1/d25", "#...#/.#.#./..#../..#../..#.."),
   ]),
 );

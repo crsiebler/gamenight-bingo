@@ -12,9 +12,12 @@ export {
 export { generateCorePatternDocumentation } from "./documentation.js";
 export { PatternCardStateSchema, matchesPattern, type PatternCardState } from "./matcher.js";
 export {
+  createLetterPatternPreviews,
   createShapePatternPreviews,
+  generateLetterPatternPreviewHtml,
   generateShapePatternPreviewHtml,
   type PatternPreview,
   type PatternPreviewClassification,
+  type PatternPreviewSourceFile,
   type PatternPreviewThumbnail,
 } from "./previews.js";

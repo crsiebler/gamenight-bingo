@@ -1,6 +1,7 @@
 import type { PatternDefinition } from "./catalog.js";
 
 export type PatternPreviewClassification = "exact" | "flexible-rule-example" | "source-alias";
+export type PatternPreviewSourceFile = Exclude<PatternDefinition["source"]["file"], null>;
 
 export interface PatternPreviewThumbnail {
   readonly reference: string;
@@ -13,25 +14,18 @@ export interface PatternPreview {
   readonly name: string;
   readonly mode: PatternDefinition["mode"];
   readonly source: {
-    readonly file: "shapes-bingo-patterns.pdf";
+    readonly file: PatternPreviewSourceFile;
     readonly alias: string | null;
   };
   readonly thumbnails: readonly PatternPreviewThumbnail[];
 }
 
-export function createShapePatternPreviews(
+function createSourcePatternPreviews(
   patterns: readonly PatternDefinition[],
+  sourceFile: PatternPreviewSourceFile,
 ): PatternPreview[] {
   return patterns
-    .filter(
-      (
-        pattern,
-      ): pattern is PatternDefinition & {
-        readonly source: PatternDefinition["source"] & {
-          readonly file: "shapes-bingo-patterns.pdf";
-        };
-      } => pattern.source.file === "shapes-bingo-patterns.pdf",
-    )
+    .filter((pattern) => pattern.source.file === sourceFile)
     .map((pattern) => {
       const examples = pattern.source.examples ?? [];
       let thumbnails: PatternPreviewThumbnail[];
@@ -63,12 +57,24 @@ export function createShapePatternPreviews(
         name: pattern.name,
         mode: pattern.mode,
         source: {
-          file: pattern.source.file,
+          file: sourceFile,
           alias: pattern.source.alias,
         },
         thumbnails,
       };
     });
+}
+
+export function createShapePatternPreviews(
+  patterns: readonly PatternDefinition[],
+): PatternPreview[] {
+  return createSourcePatternPreviews(patterns, "shapes-bingo-patterns.pdf");
+}
+
+export function createLetterPatternPreviews(
+  patterns: readonly PatternDefinition[],
+): PatternPreview[] {
+  return createSourcePatternPreviews(patterns, "letter-bingo-patterns.pdf");
 }
 
 function escapeHtml(value: string): string {
@@ -111,7 +117,16 @@ function renderPreview(preview: PatternPreview): string {
 </article>`;
 }
 
-export function generateShapePatternPreviewHtml(previews: readonly PatternPreview[]): string {
+interface PatternPreviewPageContent {
+  readonly documentTitle: string;
+  readonly heading: string;
+  readonly description: string;
+}
+
+function generatePatternPreviewHtml(
+  previews: readonly PatternPreview[],
+  content: PatternPreviewPageContent,
+): string {
   const cards = previews.map(renderPreview).join("\n");
 
   return `<!doctype html>
@@ -120,7 +135,7 @@ export function generateShapePatternPreviewHtml(previews: readonly PatternPrevie
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GameNight Bingo shape pattern previews</title>
+<title>${escapeHtml(content.documentTitle)}</title>
 <style>
 :root { color-scheme: light; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #f3eddf; color: #17233b; }
 * { box-sizing: border-box; }
@@ -150,9 +165,28 @@ figcaption span { color: #9c3d2f; font-size: .75rem; font-weight: 800; text-tran
 </style>
 </head>
 <body>
-<header class="page-header"><p class="eyebrow">Canonical review sheet</p><h1>Shape pattern previews</h1><p>Generated from the versioned runtime catalog. Each thumbnail preserves its source orientation; # marks a required cell and . marks another cell. The free center is always satisfied during play.</p></header>
+<header class="page-header"><p class="eyebrow">Canonical review sheet</p><h1>${escapeHtml(content.heading)}</h1><p>${escapeHtml(content.description)}</p></header>
 <main class="gallery">${cards}</main>
 </body>
 </html>
 `;
+}
+
+const sharedDescription =
+  "Generated from the versioned runtime catalog. Each thumbnail preserves its source orientation; # marks a required cell and . marks another cell. The free center is always satisfied during play.";
+
+export function generateShapePatternPreviewHtml(previews: readonly PatternPreview[]): string {
+  return generatePatternPreviewHtml(previews, {
+    documentTitle: "GameNight Bingo shape pattern previews",
+    heading: "Shape pattern previews",
+    description: sharedDescription,
+  });
+}
+
+export function generateLetterPatternPreviewHtml(previews: readonly PatternPreview[]): string {
+  return generatePatternPreviewHtml(previews, {
+    documentTitle: "GameNight Bingo letter pattern previews",
+    heading: "Letter pattern previews",
+    description: `${sharedDescription} The source catalog ends at Y and contains no Z diagram.`,
+  });
 }
