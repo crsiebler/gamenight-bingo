@@ -13,6 +13,7 @@ import {
   type JsonObject,
   type NewActiveLobbyState,
   type NewLobbyParticipant,
+  type NewParticipantSession,
   type ReserveParticipantResult,
   type TransactionRetryEvent,
 } from "./index.js";
@@ -586,6 +587,115 @@ describeDatabase("PostgreSQL durable game state", () => {
         message: "That username is already in use.",
       },
     });
+  });
+
+  test("issues and resolves a hash-only session within one active lobby", async () => {
+    const connection = await connect();
+    const firstLobby = createLobbyState();
+    const secondLobby = createLobbyState();
+    await createPersistedLobby(connection, firstLobby);
+    await createPersistedLobby(connection, secondLobby);
+    const participant = newParticipant(firstLobby.lobby.id, "Session Player");
+    await connection.lobbyStates.reserveParticipant(participant, { maxPlayersPerLobby: 3 });
+    const tokenHash = new Uint8Array(randomBytes(32));
+    const session: NewParticipantSession = {
+      id: `session-${randomUUID()}`,
+      lobbyId: firstLobby.lobby.id,
+      participantId: participant.id,
+      tokenHash,
+      issuedAt: new Date("2026-07-17T08:04:00.000Z"),
+    };
+
+    await expect(connection.lobbyStates.createParticipantSession(session)).resolves.toBe("created");
+    await expect(
+      connection.lobbyStates.findParticipantSessionByTokenHash({
+        lobbyId: firstLobby.lobby.id,
+        tokenHash,
+      }),
+    ).resolves.toEqual({
+      sessionId: session.id,
+      lobbyId: firstLobby.lobby.id,
+      participantId: participant.id,
+      username: "Session Player",
+      role: "player",
+      status: "active",
+    });
+    await expect(
+      connection.lobbyStates.findParticipantSessionByTokenHash({
+        lobbyId: secondLobby.lobby.id,
+        tokenHash,
+      }),
+    ).resolves.toBeNull();
+
+    const stored = await connection.lobbyStates.findById(firstLobby.lobby.id);
+    expect(stored?.sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: session.id,
+          participantId: participant.id,
+          tokenHash,
+          status: "active",
+        }),
+      ]),
+    );
+  });
+
+  test("rejects session issuance outside the active lobby participant scope", async () => {
+    const connection = await connect();
+    const firstLobby = createLobbyState();
+    const secondLobby = createLobbyState();
+    await createPersistedLobby(connection, firstLobby);
+    await createPersistedLobby(connection, secondLobby);
+    const tokenHash = new Uint8Array(randomBytes(32));
+
+    await expect(
+      connection.lobbyStates.createParticipantSession({
+        id: `session-${randomUUID()}`,
+        lobbyId: firstLobby.lobby.id,
+        participantId: secondLobby.participants[0]!.id,
+        tokenHash,
+        issuedAt: new Date("2026-07-17T08:04:00.000Z"),
+      }),
+    ).resolves.toBe("scope-not-found");
+
+    await pool.query(`UPDATE lobbies SET status = 'COMPLETED' WHERE id = $1`, [
+      firstLobby.lobby.id,
+    ]);
+    await expect(
+      connection.lobbyStates.createParticipantSession({
+        id: `session-${randomUUID()}`,
+        lobbyId: firstLobby.lobby.id,
+        participantId: firstLobby.participants[0]!.id,
+        tokenHash,
+        issuedAt: new Date("2026-07-17T08:04:00.000Z"),
+      }),
+    ).resolves.toBe("scope-not-found");
+  });
+
+  test("reports only exact token-hash uniqueness collisions", async () => {
+    const connection = await connect();
+    const state = createLobbyState();
+    await createPersistedLobby(connection, state);
+    const existing = state.sessions[0]!;
+
+    await expect(
+      connection.lobbyStates.createParticipantSession({
+        id: `session-${randomUUID()}`,
+        lobbyId: state.lobby.id,
+        participantId: state.participants[0]!.id,
+        tokenHash: existing.tokenHash,
+        issuedAt: new Date("2026-07-17T08:04:00.000Z"),
+      }),
+    ).resolves.toBe("token-hash-collision");
+    await expect(
+      connection.lobbyStates.createParticipantSession({
+        id: existing.id,
+        lobbyId: state.lobby.id,
+        participantId: state.participants[0]!.id,
+        tokenHash: new Uint8Array(randomBytes(32)),
+        issuedAt: new Date("2026-07-17T08:04:00.000Z"),
+      }),
+    ).rejects.toBeDefined();
   });
 
   test("scopes normalized username reservations to one lobby", async () => {

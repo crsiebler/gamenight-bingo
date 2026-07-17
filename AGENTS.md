@@ -242,6 +242,10 @@ then refactor while green.
 
 - Store opaque participant session tokens only as cryptographic hashes. Cookies
   must be Secure, HttpOnly, SameSite, and scoped to the active lobby flow.
+- Generate participant session credentials from 32 cryptographically secure
+  bytes, encode them as unpadded base64url, and persist only the SHA-256 digest
+  of the encoded token. Authenticate through a narrow lobby-and-hash lookup,
+  never by loading a full lobby aggregate or trusting a client participant ID.
 - Do not fingerprint devices or collect unnecessary device attributes.
 - Never log cookies, realtime tickets, secrets, future draw positions, private
   cards, or full private snapshots.

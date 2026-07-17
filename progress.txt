@@ -35,6 +35,7 @@ Next story: US-001
 - Retry classification scans nested Prisma/adapter `cause`, `meta`, and `driverAdapterError` metadata before falling back to generic conflict codes; PostgreSQL `40P01` deadlocks take precedence over outer Prisma `P2034` wrappers so telemetry stays accurate.
 - Active lobby creation goes through `LobbyStateRepository.createActive`: generate each candidate outside retryable transactions, serialize PostgreSQL admission before counting waiting/active lobbies, and retry only active-code collisions so capacity cannot be oversubscribed.
 - Normalize usernames at the trusted reservation boundary by rejecting Unicode control/format characters, trimming and collapsing Unicode whitespace, applying NFC, enforcing the 128-character display/key limit, then lowercasing for lobby-scoped uniqueness; serialize reservations on the lobby row before checking names and configured capacity.
+- Participant session credentials use 32 injected cryptographic bytes encoded as unpadded base64url; hash the exact encoded token with SHA-256 before persistence, return it only through a Secure/HttpOnly/SameSite=Strict lobby-path cookie, and resolve identity through a narrow active-lobby plus hash lookup rather than a full aggregate or client-supplied participant ID.
 
 Append-only iteration log
 -------------------------
@@ -1859,3 +1860,49 @@ Targeted re-review outcome for US-024 at 2026-07-17 03:28:27 MST:
 - Deterministic concurrency, exact persistence, lobby scoping, trusted canonicalization, Unicode validation, schema-length alignment, and the absolute product limit are covered.
 - The initial code review's low `prd.json` bookkeeping observation is resolved by staging the required post-review passing-status update now; it was not an implementation defect.
 - No in-scope critical, high, or medium findings remain. US-024 can be marked passing and committed.
+
+## 2026-07-17 03:44:39 MST - US-025
+- What was implemented
+  - Added a framework-neutral web session service that generates 256-bit unpadded base64url credentials, hashes the exact token with SHA-256, persists only the digest, and returns a Secure HttpOnly SameSite=Strict cookie scoped to the canonical active-lobby API path.
+  - Added missing/malformed-cookie handling that requires a new participant and recognized-session resolution that derives the prior participant only from a lobby-scoped persisted hash lookup.
+  - Added Prisma-confined session issuance and narrow identity lookup for non-departed participants in waiting/active lobbies, with exact hash-collision handling and no schema migration because the existing hash-length, uniqueness, ownership, and cascade constraints already satisfy persistence requirements.
+- Files changed: `AGENTS.md`, `apps/web/src/participant-session.ts`, `apps/web/src/participant-session.test.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/index.ts`, `packages/database/src/database.integration.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-025 - Issue same-device lobby sessions`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/participant-session.test.ts` (expected fail before implementation because the session service module was absent; pass after implementation with 6 tests)
+  - `TEST_DATABASE_URL=... bunx vitest run packages/database/src/database.integration.test.ts` (expected fail before implementation because session repository methods were absent; pass after implementation with 29 tests)
+  - `bun run lint` (pass)
+  - `bun run format:check` (fail only on three pre-existing untracked US-018 browser report artifacts after intended files were formatted)
+  - Intended-file Prettier check (pass after formatting)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `TEST_DATABASE_URL=... bun run test` (pass; 19 Vitest files and 284 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `git diff --check && git diff --cached --check` (pass)
+- Implementation agents:
+  - Recommended: `security-engineer`
+  - Used: `security-engineer` for credential entropy/encoding/hash, cookie scope, persistence lookup, collision behavior, migration assessment, and security-test guidance
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive specialist `security-engineer`
+  - Findings: none; all three specialists returned empty actionable finding lists
+- Decisions (why):
+  - Kept credential/cookie behavior in a framework-neutral `apps/web` service because Next.js endpoints land in US-027, while Prisma persistence remains confined to `packages/database`.
+  - Used 32 random bytes, unpadded base64url, and SHA-256 because a uniformly random 256-bit bearer credential does not need a password KDF; the plaintext exists only in the returned cookie descriptor.
+  - Used a `__Secure-` cookie with no Domain, no persistent expiry, SameSite=Strict, and a per-lobby API path because `__Host-` would require the broader root path and the product has not defined persistent cookie retention.
+  - Added no migration because the committed schema already enforces a 32-byte unique digest, lobby/participant ownership, lifecycle consistency, and lobby-owned cascade deletion.
+- **Learnings for future iterations:**
+  - Hash the encoded credential rather than raw entropy so issuance and cookie resolution use one canonical representation, and reject malformed/noncanonical tokens before querying persistence.
+  - Session authentication should return only the scoped identity projection needed by adapters; loading `findById` would unnecessarily expose all session hashes and private lobby state to an authentication path.
+  - Generate credentials outside retryable persistence callbacks, classify only the exact token-hash unique violation as a regenerable collision, and let unrelated integrity failures propagate.
+- Known issues / follow-ups:
+  - Root `bun run format:check` still scans three pre-existing untracked US-018 report files; they remain untouched and unstaged, while every intended story file passes Prettier.
+  - US-026 owns disconnect timestamps, the two-minute rejoin window, departed-slot invalidation, and active-round new-join eligibility.
+- Next iteration start:
+  - If review passes, implement US-026 two-minute same-device rejoin behavior; otherwise resume any recorded blocking finding.
+---
+
+Initial review outcome for US-025 at 2026-07-17 03:50:12 MST:
+- `code-reviewer`, `qa-expert`, and `security-engineer` reviewed the complete staged candidate and returned empty actionable finding lists.
+- Residual risk is limited to intentionally deferred disconnect/rejoin/departure behavior in US-026 and HTTP cookie serialization, secure entropy wiring, CSRF/origin controls, rate limits, and private caching in US-027.
+- Destructive cascade execution was not run because repository policy prohibits DELETE without separate confirmation; the existing exact foreign-key edge and delete-rule integration coverage confirms session ownership by the lobby.
+- No in-scope critical, high, or medium findings remain. US-025 can be marked passing and committed.

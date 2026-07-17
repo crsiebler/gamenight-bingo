@@ -183,6 +183,25 @@ export interface NewLobbyParticipant {
   readonly joinedAt: Date;
 }
 
+export interface NewParticipantSession {
+  readonly id: string;
+  readonly lobbyId: string;
+  readonly participantId: string;
+  readonly tokenHash: Uint8Array;
+  readonly issuedAt: Date;
+}
+
+export interface RecognizedParticipantSession {
+  readonly sessionId: string;
+  readonly lobbyId: string;
+  readonly participantId: string;
+  readonly username: string;
+  readonly role: ParticipantRole;
+  readonly status: "active" | "disconnected";
+}
+
+export type CreateParticipantSessionResult = "created" | "scope-not-found" | "token-hash-collision";
+
 export interface ReserveParticipantOptions {
   readonly maxPlayersPerLobby: number;
 }
@@ -233,8 +252,13 @@ export interface LobbyStateRepository {
     participant: NewLobbyParticipant,
     options: ReserveParticipantOptions,
   ): Promise<ReserveParticipantResult>;
+  createParticipantSession(session: NewParticipantSession): Promise<CreateParticipantSessionResult>;
   findById(lobbyId: string): Promise<DurableLobbyState | null>;
   findActiveLobbyIdByCode(code: string): Promise<string | null>;
+  findParticipantSessionByTokenHash(input: {
+    readonly lobbyId: string;
+    readonly tokenHash: Uint8Array;
+  }): Promise<RecognizedParticipantSession | null>;
 }
 
 export interface CommandTransactionRequest<Result extends JsonObject = JsonObject> {
@@ -415,6 +439,41 @@ function isActiveLobbyCodeCollision(error: unknown): boolean {
     | undefined;
   const fields = adapterError?.cause?.constraint?.fields;
   return Array.isArray(fields) && fields.length === 1 && fields[0] === "code";
+}
+
+function isParticipantSessionTokenHashCollision(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  const prismaError = error as { readonly code?: unknown; readonly meta?: unknown };
+  if (
+    prismaError.code !== "P2002" ||
+    typeof prismaError.meta !== "object" ||
+    prismaError.meta === null
+  ) {
+    return false;
+  }
+  const meta = prismaError.meta as {
+    readonly modelName?: unknown;
+    readonly driverAdapterError?: unknown;
+  };
+  if (meta.modelName !== "ParticipantSession") {
+    return false;
+  }
+
+  const adapterError = meta.driverAdapterError as
+    | {
+        readonly cause?: {
+          readonly constraint?: { readonly fields?: unknown };
+        };
+      }
+    | undefined;
+  const fields = adapterError?.cause?.constraint?.fields;
+  return (
+    Array.isArray(fields) &&
+    fields.length === 1 &&
+    (fields[0] === "tokenHash" || fields[0] === "token_hash")
+  );
 }
 
 function toDurableCommandResult<Result extends JsonObject>(
@@ -825,6 +884,62 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
     );
   }
 
+  async createParticipantSession(
+    session: NewParticipantSession,
+  ): Promise<CreateParticipantSessionResult> {
+    if (session.tokenHash.length !== 32) {
+      throw new RangeError("Participant session token hashes must contain exactly 32 bytes.");
+    }
+
+    try {
+      return await runTransactionWithRetry(
+        async () =>
+          this.prisma.$transaction(
+            async (transaction) => {
+              const participant = await transaction.participant.findFirst({
+                where: {
+                  id: session.participantId,
+                  lobbyId: session.lobbyId,
+                  departedAt: null,
+                  lobby: { status: { in: ["WAITING", "ACTIVE"] } },
+                },
+                select: { id: true },
+              });
+              if (participant === null) {
+                return "scope-not-found" as const;
+              }
+
+              await transaction.participantSession.create({
+                data: {
+                  id: session.id,
+                  lobbyId: session.lobbyId,
+                  participantId: session.participantId,
+                  tokenHash: new Uint8Array(session.tokenHash),
+                  status: "ACTIVE",
+                  issuedAt: session.issuedAt,
+                  disconnectedAt: null,
+                  rejoinUntil: null,
+                  departedAt: null,
+                },
+              });
+              return "created" as const;
+            },
+            {
+              isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+              maxWait: 5_000,
+              timeout: 10_000,
+            },
+          ),
+        this.retryOptions,
+      );
+    } catch (error) {
+      if (isParticipantSessionTokenHashCollision(error)) {
+        return "token-hash-collision";
+      }
+      throw error;
+    }
+  }
+
   async findById(lobbyId: string): Promise<DurableLobbyState | null> {
     const lobby = await this.prisma.lobby.findUnique({
       where: { id: lobbyId },
@@ -976,6 +1091,44 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
     });
 
     return lobby?.id ?? null;
+  }
+
+  async findParticipantSessionByTokenHash(input: {
+    readonly lobbyId: string;
+    readonly tokenHash: Uint8Array;
+  }): Promise<RecognizedParticipantSession | null> {
+    if (input.tokenHash.length !== 32) {
+      throw new RangeError("Participant session token hashes must contain exactly 32 bytes.");
+    }
+
+    const session = await this.prisma.participantSession.findFirst({
+      where: {
+        lobbyId: input.lobbyId,
+        tokenHash: new Uint8Array(input.tokenHash),
+        status: { in: ["ACTIVE", "DISCONNECTED"] },
+        lobby: { status: { in: ["WAITING", "ACTIVE"] } },
+        participant: { departedAt: null },
+      },
+      select: {
+        id: true,
+        lobbyId: true,
+        participantId: true,
+        status: true,
+        participant: { select: { username: true, role: true } },
+      },
+    });
+    if (session === null || session.status === "DEPARTED") {
+      return null;
+    }
+
+    return {
+      sessionId: session.id,
+      lobbyId: session.lobbyId,
+      participantId: session.participantId,
+      username: session.participant.username,
+      role: participantRoles.fromDatabase(session.participant.role),
+      status: session.status === "ACTIVE" ? "active" : "disconnected",
+    };
   }
 }
 
