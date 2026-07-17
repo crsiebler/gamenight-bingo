@@ -111,6 +111,9 @@ unexpected package directories matched by them.
 The server remains authoritative. Never move validation of calls, marks,
 winners, presence, timers, permissions, or progression into a browser-only
 path. Never expose another participant's card or any future draw position.
+Domain transitions return discriminated result errors for expected state
+rejections; reserve thrown `RangeError`s for malformed internal values such as
+invalid counts, timestamps, or durations.
 
 ## State And Realtime Invariants
 
