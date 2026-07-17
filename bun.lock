@@ -44,6 +44,9 @@
     "packages/contracts": {
       "name": "@gamenight-bingo/contracts",
       "version": "0.0.0",
+      "dependencies": {
+        "zod": "4.0.1",
+      },
     },
     "packages/database": {
       "name": "@gamenight-bingo/database",
@@ -596,6 +599,8 @@
     "yaml": ["yaml@2.9.0", "", { "bin": { "yaml": "bin.mjs" } }, "sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA=="],
 
     "yocto-queue": ["yocto-queue@0.1.0", "", {}, "sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q=="],
+
+    "zod": ["zod@4.0.1", "", {}, "sha512-3ayMCwqt0I18sfM+jC4t06mieo1n5B7jeH7GtPvCmzSfnecxO8+qBLtD56wOLccc3TJOMHUhiaG36ck6dtmKeQ=="],
 
     "@eslint-community/eslint-utils/eslint-visitor-keys": ["eslint-visitor-keys@3.4.3", "", {}, "sha512-wpc+LXeiyiisxPlEkUzU6svyS1frIO3Mgxj1fdy7Pm8Ygzguax2N3Fa/D/ag1WqbOprdI+uY6wMUl8/a2G+iag=="],
 

@@ -14,9 +14,10 @@ Next story: US-001
 - Boundary parsing must use the source file's actual script kind and fail closed on syntax errors; workspace checks also require real `tsc` scripts without strictness downgrades, prohibit shared/domain module aliases, `rootDirs`, and `moduleSuffixes`, constrain relative source and root/nested package-resolution targets to `packages/domain/src`, and reject source/reference symlinks across TypeScript declaration and JavaScript-extension resolution candidates plus escaping absolute, file-URL, relative, type-reference, file-reference, and AMD dependency paths.
 - Workspace typechecks must cover every discovered `src` file without inherited or implicit exclusions, verified against TypeScript's parsed effective file set, and must reject all parsed configuration diagnostics while retaining effective `noEmit` with `outDir`/`declarationDir` outside `src`; domain source also rejects JavaScript and `@ts-nocheck`. Shared/domain TypeScript configuration cannot inherit or synthesize implicit module imports, and domain bare imports plus package-valued type/AMD directives must be Node built-ins, self-references, or declared dependencies without traversal segments and validated against forbidden runtime or type-package aliases.
 - Keep intentional ESLint, Prettier, TypeScript, Vitest, React Testing Library, and Playwright failures under `tests/fixtures/quality`; normal checks exclude them, while `bun run test:quality-tooling` requires each tool to fail for its expected diagnostic rather than accepting any nonzero exit.
-- Vitest discovery is limited to repository `apps`, `packages`, and `tests` paths, with TS tests running in Node and TSX tests in jsdom; Playwright owns `tests/e2e` and remains a separate `bun run test:e2e` command.
+- Vitest discovery is limited to repository `apps`, `packages`, and `tests` paths, explicitly excludes nested `node_modules` reached through Bun workspace links, runs TS tests in Node and TSX tests in jsdom, and leaves `tests/e2e` to the separate `bun run test:e2e` command.
 - Runtime entry points pass `process.env` to `parseRuntimeConfig` from `packages/contracts`; downstream and domain code consume the immutable parsed type rather than reading environment state directly, and startup subprocess tests isolate environment/module state.
 - After workspace dependency manifests change, run `bun install` to refresh `bun.lock`, then verify reproducibility with `bun install --frozen-lockfile`.
+- Versioned Zod wire contracts live under `packages/contracts/src/v1`; every nested object is strict, top-level messages carry `schemaVersion`, identifiers and active-lobby sequences are branded, client commands contain intent rather than authoritative state, and authorized snapshots structurally omit credentials, foreign cards, future draws, prior-round history, and active event history. Lobby-wide sequences belong only on messages delivered to every authorized lobby consumer; private-only events omit them, acknowledgements declare their scope, and snapshot refinements enforce cross-object roster/state consistency.
 
 Append-only iteration log
 -------------------------
@@ -760,3 +761,166 @@ Review remediation for US-008 at 2026-07-16 17:56:36 MST:
 - The PRD completion-state finding was discarded because Ralph explicitly requires `passes: true` only after the staged specialist review passes; `prd.json` is intentionally added during final metadata staging.
 - Post-fix checks: focused runtime configuration suite (40 tests pass), `bun run test` (48 tests pass), `bun run lint` (pass), `bun run format:check` (pass), and staged/unstaged diff checks (pass).
 - Targeted re-review: `qa-expert` returned an empty actionable finding list and confirmed the inclusive-boundary gap is resolved with no residual risk in the remediation scope.
+
+## 2026-07-16 18:12:46 MST - US-009
+- What was implemented
+  - Added a versioned Zod v1 contract surface with strict branded primitives and schemas for lobby/round state, safe participant-session projections, cards, marks, calls, presence, timers, co-winner windows/results, authorized snapshots, mutation/realtime commands, sequenced events, acknowledgements, and safe errors.
+  - Modeled manual versus automatic calling as an exact discriminated union and covered create/start/pause/resume/call-next/continue/end/mark/absence-override mutations plus heartbeat and full-snapshot resync without event-history or chat commands.
+  - Added malformed-payload tests for unknown/private fields, invalid identifiers/timestamps/sequences/cards/configuration, missing command IDs, duplicate winners, unsupported commands, and internal error detail.
+  - Added Zod as the contracts runtime dependency and prevented Vitest from collecting dependency source tests through Bun workspace links.
+- Files changed: `AGENTS.md`, `bun.lock`, `packages/contracts/package.json`, `packages/contracts/src/index.ts`, `packages/contracts/src/v1/commands.ts`, `packages/contracts/src/v1/events.ts`, `packages/contracts/src/v1/game-state.ts`, `packages/contracts/src/v1/index.ts`, `packages/contracts/src/v1/primitives.ts`, `tests/contracts-v1.test.ts`, `vitest.config.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-009 - Define shared contracts`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run tests/contracts-v1.test.ts` (expected fail before implementation: 50 tests failed because the v1 schemas were absent; expected fail for the added create-round case; review-remediation regressions failed in 9 focused areas; pass after implementation with 63 tests)
+  - `bun install --frozen-lockfile` (pass; 246 installs checked with no changes)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run lint` (initial fail on one unused test binding; pass after correction)
+  - `bun run format:check` (initial fail on new files; pass after formatting)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `bun run test` (initial fail because custom Vitest globs collected Zod source tests through nested workspace links; pass after review remediation with 4 files and 111 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `api-designer`, `typescript-pro`
+  - Used: `api-designer`, `typescript-pro` for strict versioning, schema organization, authority/privacy boundaries, Zod branding, and malformed-payload coverage guidance
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and parsing/dependency/privacy-triggered `security-engineer`; targeted re-review by the same specialists planned after substantive fixes
+  - Findings: initial created-round, timestamp ordering, round-end typing, call-position bound, snapshot consistency/privacy, private-event routing, collection bound, and safe-error findings fixed; targeted re-review pending
+- Decisions (why):
+  - Used strict discriminated wire objects with inferred types instead of handwritten interfaces so runtime validation and compile-time shapes cannot drift.
+  - Kept state-transition rules, persistence records, actor identity, server timestamps, winner calculation, and future draw positions out of client commands because later domain/application stories own those authoritative behaviors.
+  - Represented co-winner windows with authoritative timestamps rather than hard-coding 2000 ms into the wire schema because the validated runtime setting is configurable.
+  - Required positive safe event sequences while leaving cross-message monotonicity to the persistence and client sequence processors that can observe multiple messages.
+- **Learnings for future iterations:**
+  - `z.strictObject` must be applied to every nested wire object; outer strictness does not prevent private or authoritative fields from being silently stripped inside nested projections.
+  - Bun workspace links can make dependency source tests appear beneath repository `apps` and `packages` globs, so custom Vitest project exclusions must explicitly include nested `node_modules`.
+  - Snapshot privacy is strongest when foreign cards, credentials, future draws, prior-round results, and active event history are absent from the schema rather than filtered after parsing.
+- Known issues / follow-ups:
+  - Cross-message sequence monotonicity, command authorization, state transitions, and snapshot/entity consistency remain intentional application/domain responsibilities in later stories.
+- Next iteration start:
+  - If review passes, implement US-010 canonical pattern documentation; otherwise resume the recorded blocking finding.
+---
+
+Review remediation for US-009 at 2026-07-16 18:22:26 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced eight medium findings across created-round representation, temporal/event semantics, privacy boundaries, resource limits, and safe error content.
+- Added failing regressions before remediation for a waiting round, 75-call bounds, fractional/reversed co-winner timestamps, current-round/owner snapshot consistency, bounded collections, private event separation, ended-only round-end events, and secret-bearing error messages.
+- Added a waiting round variant, millisecond-precision UTC timestamps with instant comparisons, explicit ended-round event typing, and the 75-position call limit.
+- Bound participants/winners to 25, marks to 24, and calls to 75; added snapshot cross-field checks for lobby/session/self ownership, unique participants, current-round calls/cards, and own-card marks.
+- Split participant-private mark/near-win events from lobby-wide active events and restricted errors to allowlisted stable codes/messages and bounded validation issues.
+- Post-fix checks: focused contracts suite (63 tests pass), `bun run test:workspace-boundaries` (pass), `bun run lint` (pass), `bun run format:check` (pass), `bun run typecheck` (pass), `bun run test` (111 tests pass), `bun run test:e2e` (pass), and staged/unstaged diff checks (pass).
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` review because the fixes affected each original specialist area.
+
+Targeted re-review outcome for US-009 at 2026-07-16 18:25:27 MST:
+- `code-reviewer`, `qa-expert`, and `security-engineer` confirmed the original eight findings were materially addressed but identified three deduplicated medium blockers.
+- `SnapshotSchema` still needs to require its round's lobby ID to match the snapshot lobby, require an active lobby's round ID to match the supplied round, and reject an active lobby with no round.
+- Participant-private mark/near-win events currently use the lobby-wide event sequence, which creates apparent sequence gaps for clients that correctly do not receive those private events; the next iteration must use participant-scoped sequencing, omit sequencing where safe, or define a privacy-safe public event for every global sequence.
+- `ErrorIssueSchema.path` remains a free-text disclosure channel; replace it with allowlisted public path segments or omit it from public errors and add a secret-bearing-path regression.
+- Per the one-targeted-re-review limit, no further implementation changes or commit are permitted in this iteration. `US-009` remains `passes: false` and `prd.json` is unchanged.
+- Next iteration start: add failing regressions for lobby/round snapshot consistency, private-event sequence isolation, and safe validation paths; implement the narrow fixes, rerun all checks, and restart the complete staged review loop.
+
+## 2026-07-16 18:28:39 MST - US-009
+- What was implemented
+  - Resumed the shared-contract story and added regressions for snapshot lobby/round linkage, private-event sequence isolation, and secret-bearing validation paths.
+  - Required every supplied round to belong to the snapshot lobby, required active lobbies to include their matching round, and retained existing own-card/call consistency checks.
+  - Removed lobby-wide event sequences from participant-private mark and near-win messages so private delivery cannot create apparent gaps in the public active-lobby stream.
+  - Restricted validation issue paths to an allowlist of public v1 command fields instead of accepting arbitrary free text.
+- Files changed: `AGENTS.md`, `bun.lock`, `packages/contracts/package.json`, `packages/contracts/src/index.ts`, `packages/contracts/src/v1/commands.ts`, `packages/contracts/src/v1/events.ts`, `packages/contracts/src/v1/game-state.ts`, `packages/contracts/src/v1/index.ts`, `packages/contracts/src/v1/primitives.ts`, `tests/contracts-v1.test.ts`, `vitest.config.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-009 - Define shared contracts`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run tests/contracts-v1.test.ts` (expected fail before remediation: 5 failures for the three recorded review blockers; pass after implementation with 66 tests)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (initial fail on the amended contract test; pass after formatting)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `bun run test` (pass; 4 Vitest files and 114 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `git diff --check && git diff --cached --check` (pass)
+- Implementation agents:
+  - Recommended: `api-designer`, `typescript-pro`
+  - Used: skipped in this resumed iteration because both recommended agents already advised US-009 and the remaining work directly addressed concrete prior specialist findings
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and `security-engineer` planned for the complete restaged contract diff
+  - Findings: pending staged-diff review
+- Decisions (why):
+  - Omitted sequences from participant-private events rather than allocating a second sequence domain because these messages are ephemeral authorized projections and do not participate in the lobby-wide continuity contract.
+  - Used an explicit public error-path allowlist because free-form strings can disclose internal field names or values, while structured path expansion can remain versioned with future public contract fields.
+  - Enforced active-lobby linkage in snapshot refinement rather than changing the individual lobby or round schemas because each state remains valid independently and consistency is a cross-object snapshot invariant.
+- **Learnings for future iterations:**
+  - Lobby-wide monotonic sequences must appear only on messages delivered to every authorized stream consumer; participant-private projections need an isolated ordering model or no sequence.
+  - Safe error schemas must constrain field paths as well as codes and messages, because arbitrary path text is another disclosure channel.
+- Known issues / follow-ups:
+  - Cross-message sequence application, command authorization, transitions, and persistence remain owned by later stories.
+- Next iteration start:
+  - If review passes, implement US-010 canonical pattern documentation; otherwise resume the recorded blocking finding.
+---
+
+Review remediation for US-009 at 2026-07-16 18:36:04 MST:
+- The complete staged review used `code-reviewer`, `qa-expert`, and `security-engineer` and produced three deduplicated medium blockers: private-only acknowledgements still required a lobby-wide sequence, snapshot identity projections/references could contradict the participant roster, and error codes/messages could be paired inconsistently.
+- Added failing regressions first for mismatched participant presence, self/roster divergence, foreign host/timer/winner references, a private-only acknowledgement, and mismatched top-level and validation-issue error pairs; the focused suite failed in all 7 expected areas.
+- Made acknowledgement event sequences nullable for private-only committed results, while sequenced lobby events and normal acknowledgements still require positive branded sequences.
+- Bound presence to its participant summary; required the self projection to match its roster entry; and constrained host, disconnect-timer, and winner participant references to the authorized snapshot roster.
+- Coupled every stable public error code to its single safe message and every validation issue code to its supported safe-message set.
+- Post-fix checks: focused contracts suite (72 tests pass), `bun run lint` (pass), `bun run format:check` (pass), `bun run typecheck` (pass), `bun run test` (120 tests pass), `bun run test:e2e` (pass), and staged/unstaged diff checks (pass).
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` review because the substantive fixes address findings from all three specialists.
+
+Targeted re-review outcome for US-009 at 2026-07-16 18:38:47 MST:
+- `code-reviewer` returned no actionable findings; `qa-expert` and `security-engineer` identified two deduplicated medium blockers in the revised complete staged diff.
+- `CommandAckSchema` currently permits `eventSequence: null` for every command. The next iteration must make acknowledgement scope explicit so participant-private results require no lobby sequence while lobby-event acknowledgements require a positive branded sequence, with malformed coverage for a public acknowledgement using null.
+- Snapshot roster references need stronger semantic consistency: the designated lobby host must be the only participant with role `host`; a disconnect-grace timer must target matching grace presence generation/deadline; and winners must be round-eligible playing participants. Add failing malformed-payload regressions before tightening these refinements.
+- Per the one-targeted-re-review limit, no further implementation changes or commit are permitted in this iteration. `US-009` remains `passes: false` and `prd.json` remains unchanged.
+- Next iteration start: add the acknowledgement-scope and roster-semantic regressions, implement the narrow schema refinements, rerun all US-009 checks, and restart the complete staged review loop.
+
+## 2026-07-16 18:42:00 MST - US-009
+- What was implemented
+  - Resumed the shared-contract story and added regressions for explicit acknowledgement sequencing scope, unique host designation, disconnect-grace timer consistency, and winner round eligibility.
+  - Split acknowledgements into strict `active-lobby` and `participant-private` variants so public committed results require a positive lobby sequence while private-only results require `null`.
+  - Tightened snapshot refinement so the designated host is the only host, disconnect timers exactly match the target participant's grace generation/deadline, and winners are playing participants in the current round.
+  - Completed initial-review remediation by rejecting expired private snapshots, incompatible timer/round combinations, card/eligibility contradictions, incoherent call/mark histories, and stale co-winner call references.
+- Files changed: `AGENTS.md`, `bun.lock`, `packages/contracts/package.json`, `packages/contracts/src/index.ts`, `packages/contracts/src/v1/commands.ts`, `packages/contracts/src/v1/events.ts`, `packages/contracts/src/v1/game-state.ts`, `packages/contracts/src/v1/index.ts`, `packages/contracts/src/v1/primitives.ts`, `tests/contracts-v1.test.ts`, `vitest.config.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-009 - Define shared contracts`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run tests/contracts-v1.test.ts` (expected fail before implementation: 5 failures in the recorded acknowledgement and roster semantics; expected fail during review remediation: 10 failures across 4 deduplicated blockers; pass after implementation with 85 tests)
+  - `bun install --frozen-lockfile` (pass; 246 installs checked with no changes)
+  - `bun run lint` (pass)
+  - `bun run format:check` (initial remediation fail on the amended contract test; pass after formatting)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `bun run test` (pass after remediation; 4 Vitest files and 133 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `git diff --check && git diff --cached --check` (pass)
+- Implementation agents:
+  - Recommended: `api-designer`, `typescript-pro`
+  - Used: skipped in this resumed iteration because both recommended agents already advised US-009 and the remaining work directly addressed concrete prior specialist findings
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and parsing/privacy-triggered `security-engineer`; targeted re-review by the same specialists
+  - Findings: initial timer/state, card eligibility, call/mark coherence, and expired-snapshot privacy blockers fixed; targeted re-review returned no actionable findings
+- Decisions (why):
+  - Added an explicit acknowledgement `scope` discriminant instead of inferring delivery semantics from nullable data because callers and consumers need an unambiguous contract for sequence continuity.
+  - Compared disconnect timers to the participant's complete grace projection because roster membership alone cannot prove the timer is current or targets a participant actually in grace.
+  - Used `roundEligibility: "playing"` as the winner eligibility contract because waiting participants are present in snapshots but cannot win the active round.
+  - Enforced snapshot collection coherence at the wire boundary because a complete authoritative snapshot must not represent duplicate calls, fabricated daubs, stale winner triggers, or incompatible countdown state.
+  - Rejected expired lobbies from authorized snapshots rather than defining a minimal expiry payload because restoration of expired lobby data is explicitly out of scope.
+- **Learnings for future iterations:**
+  - A nullable sequence alone cannot express whether an acknowledgement is public or private; delivery scope should be a wire-level discriminant.
+  - Snapshot references must be checked semantically, not only for ID membership: role uniqueness, timer generation/deadline, and round eligibility are cross-object invariants.
+- Known issues / follow-ups:
+  - Cross-message sequence application, authorization, state transitions, and persistence remain owned by later stories.
+- Next iteration start:
+  - Implement US-010 canonical pattern documentation from all four supplied PDFs.
+---
+
+Review remediation for US-009 at 2026-07-16 18:51:03 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced four deduplicated medium blockers: timer/round contradictions, card/eligibility contradictions, incoherent call/mark histories with stale co-winner references, and expired snapshots retaining private state.
+- Added failing malformed-payload regressions before implementation; the focused suite failed in all 10 expected areas.
+- Required automatic timers to target active automatic rounds and co-winner timers to match the current round window; required co-winner windows/results to reference the latest contiguous unique call history.
+- Required playing participants to have their current-round card and waiting participants to have no card/marks; required marks to be unique, on-card, and called.
+- Rejected authorized snapshots for expired lobbies and isolated the participant collection-bound fixture so its valid 25-person baseline now passes before the 26th participant fails.
+- Post-fix checks: focused contracts suite (85 tests pass), `bun run lint` (pass), `bun run format:check` (pass after formatting), `bun run typecheck` (pass), `bun run test` (133 tests pass), `bun run test:e2e` (pass), and diff checks (pass).
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` because the substantive fixes address findings from all three specialists.
+
+Targeted re-review outcome for US-009 at 2026-07-16 18:52:00 MST:
+- `code-reviewer`, `qa-expert`, and `security-engineer` reviewed the revised complete staged diff and returned empty actionable finding lists with no residual risks.
+- The timer/round, eligibility/card, call/mark/co-winner, expired-snapshot privacy, and participant-bound fixture findings are resolved.
+- All in-scope blocking findings are resolved; US-009 can be marked passing and committed.

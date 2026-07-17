@@ -12,7 +12,7 @@ export default defineConfig({
             "packages/**/*.{test,spec}.ts",
             "tests/**/*.{test,spec}.ts",
           ],
-          exclude: ["tests/e2e/**", "tests/fixtures/**"],
+          exclude: ["**/node_modules/**", "tests/e2e/**", "tests/fixtures/**"],
         },
       },
       {
@@ -24,7 +24,7 @@ export default defineConfig({
             "packages/**/*.{test,spec}.tsx",
             "tests/**/*.{test,spec}.tsx",
           ],
-          exclude: ["tests/e2e/**", "tests/fixtures/**"],
+          exclude: ["**/node_modules/**", "tests/e2e/**", "tests/fixtures/**"],
           setupFiles: ["./tests/setup-dom.ts"],
         },
       },

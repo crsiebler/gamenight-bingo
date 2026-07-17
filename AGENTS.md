@@ -69,6 +69,12 @@ The planned workspace responsibilities are:
 - `packages/ui`: shared accessible presentation components.
 - `packages/test-support`: reusable fixtures, builders, and integration helpers.
 
+Versioned wire schemas live under `packages/contracts/src/v1` and use strict
+objects at every nested boundary. Put `schemaVersion` on top-level messages,
+parse opaque IDs through branded schemas, keep client commands intent-only, and
+shape snapshots so other cards, credentials, future draws, and event history
+cannot be represented.
+
 `packages/domain` must not import React, Next.js, Prisma, or Socket.IO. Keep
 database details behind repository interfaces. HTTP and realtime adapters must
 validate boundary contracts, authorize the actor, invoke application/domain
@@ -114,6 +120,10 @@ path. Never expose another participant's card or any future draw position.
   effects.
 - Assign active-lobby events a monotonic sequence. Clients apply sequences
   idempotently and request resynchronization when continuity is uncertain.
+- Put active-lobby sequences only on messages delivered to every authorized
+  lobby stream consumer. Participant-private messages use no lobby sequence,
+  and acknowledgements explicitly distinguish lobby-event from private-only
+  results so sequence requirements cannot be ambiguous.
 - Sequences order live activity; they are not a public event-history feature and
   are deleted with the lobby.
 - On reconnect, send a complete authorized snapshot unless transport-level
@@ -124,6 +134,9 @@ path. Never expose another participant's card or any future draw position.
 - A snapshot may include the participant's own card and marks plus current
   calls, stage, participants, call mode/timer, pause reason, and result. It must
   not include other cards, credentials, or uncalled draw positions.
+- Validate snapshot references as one authorized projection: lobby, round,
+  session, roster roles and presence, timers, own card/marks, calls, and winners
+  must agree with each other.
 - Reconnect never automatically resumes paused calling.
 
 ## HTTP Conventions
@@ -161,6 +174,9 @@ refactors. Keep the smallest useful cycle: failing test, minimal implementation,
 then refactor while green.
 
 - Use Vitest, not Bun's built-in test framework.
+- Keep `**/node_modules/**` in each custom Vitest project exclusion; Bun workspace
+  links can otherwise place dependency source tests under matching `apps` or
+  `packages` paths.
 - Keep intentional quality-tool violations under `tests/fixtures/quality`; normal
   checks exclude them, and `bun run test:quality-tooling` verifies each tool
   rejects its fixture for the expected reason.
