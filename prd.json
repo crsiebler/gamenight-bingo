@@ -110,7 +110,7 @@
         "Typecheck passes."
       ],
       "priority": 7,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @build-engineer, @test-automator. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {

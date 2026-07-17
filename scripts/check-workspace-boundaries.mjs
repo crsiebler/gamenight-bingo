@@ -55,7 +55,12 @@ const EXPECTED_WORKSPACES = new Map([
 
 export function isForbiddenDomainModule(specifier) {
   const canonicalSpecifier = specifier.replaceAll("\\", "/").toLowerCase();
-  const forbiddenTypePackages = ["@types/react", "@types/next", "@types/prisma", "@types/socket.io"];
+  const forbiddenTypePackages = [
+    "@types/react",
+    "@types/next",
+    "@types/prisma",
+    "@types/socket.io",
+  ];
   return (
     canonicalSpecifier === "react" ||
     canonicalSpecifier.startsWith("react/") ||
@@ -87,13 +92,19 @@ function aliasedPackageName(version) {
 export function findForbiddenDomainDependencies(packageJson) {
   const forbidden = new Set();
 
-  for (const section of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
+  for (const section of [
+    "dependencies",
+    "devDependencies",
+    "peerDependencies",
+    "optionalDependencies",
+  ]) {
     const dependencies = packageJson[section];
     if (!dependencies || typeof dependencies !== "object" || Array.isArray(dependencies)) continue;
 
     for (const [name, version] of Object.entries(dependencies)) {
       const alias = typeof version === "string" ? aliasedPackageName(version) : undefined;
-      if (isForbiddenDomainModule(name) || (alias && isForbiddenDomainModule(alias))) forbidden.add(name);
+      if (isForbiddenDomainModule(name) || (alias && isForbiddenDomainModule(alias)))
+        forbidden.add(name);
     }
   }
 
@@ -104,7 +115,8 @@ function moduleReference(node) {
   if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) return node.moduleSpecifier;
   if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference))
     return node.moduleReference.expression;
-  if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) return node.argument.literal;
+  if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument))
+    return node.argument.literal;
   if (ts.isJSDocImportTag(node)) return node.moduleSpecifier;
   return undefined;
 }
@@ -123,7 +135,10 @@ function unwrapTransparentExpression(expression) {
       expression = expression.expression;
       continue;
     }
-    if (ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.CommaToken) {
+    if (
+      ts.isBinaryExpression(expression) &&
+      expression.operatorToken.kind === ts.SyntaxKind.CommaToken
+    ) {
       expression = expression.right;
       continue;
     }
@@ -146,7 +161,10 @@ function markRecognizedLoaderExpression(expression, recognizedLoaderNodes) {
       expression = expression.expression;
       continue;
     }
-    if (ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.CommaToken) {
+    if (
+      ts.isBinaryExpression(expression) &&
+      expression.operatorToken.kind === ts.SyntaxKind.CommaToken
+    ) {
       expression = expression.right;
       continue;
     }
@@ -178,7 +196,10 @@ function staticMemberAccess(expression) {
 function staticStringValue(expression) {
   expression = unwrapTransparentExpression(expression);
   if (ts.isStringLiteralLike(expression)) return expression.text;
-  if (ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+  if (
+    ts.isBinaryExpression(expression) &&
+    expression.operatorToken.kind === ts.SyntaxKind.PlusToken
+  ) {
     const left = staticStringValue(expression.left);
     const right = staticStringValue(expression.right);
     if (left !== undefined && right !== undefined) return left + right;
@@ -190,7 +211,11 @@ function isCommonJsRequire(expression) {
   expression = unwrapTransparentExpression(expression);
   if (ts.isIdentifier(expression)) return expression.text === "require";
   const member = staticMemberAccess(expression);
-  return member?.name === "require" && ts.isIdentifier(member.receiver) && member.receiver.text === "module";
+  return (
+    member?.name === "require" &&
+    ts.isIdentifier(member.receiver) &&
+    member.receiver.text === "module"
+  );
 }
 
 function appliedArguments(kind, argumentsList) {
@@ -213,8 +238,7 @@ function commonJsBindFunction(expression, recognizedLoaderNodes) {
   }
   if (member && ["call", "apply"].includes(member.name)) {
     const bind = commonJsBindFunction(member.rawReceiver, recognizedLoaderNodes);
-    if (bind)
-      return (argumentsList) => bind(appliedArguments(member.name, argumentsList) ?? []);
+    if (bind) return (argumentsList) => bind(appliedArguments(member.name, argumentsList) ?? []);
   }
   if (ts.isCallExpression(expression)) {
     const invocationMember = staticMemberAccess(expression.expression);
@@ -281,7 +305,9 @@ function sourceScriptKind(fileName) {
 
 function isAbsoluteModuleSpecifier(specifier) {
   const normalized = specifier.replaceAll("\\", "/");
-  return normalized.startsWith("/") || /^file:/iu.test(normalized) || /^[a-z]:\//iu.test(normalized);
+  return (
+    normalized.startsWith("/") || /^file:/iu.test(normalized) || /^[a-z]:\//iu.test(normalized)
+  );
 }
 
 function modulePathCandidates(target) {
@@ -328,11 +354,16 @@ export function findDomainImportViolations(
   }
 
   function inspectDeclaredPackage(specifier, position) {
-    if (!allowedPackages || specifier.startsWith(".") || isAbsoluteModuleSpecifier(specifier)) return;
+    if (!allowedPackages || specifier.startsWith(".") || isAbsoluteModuleSpecifier(specifier))
+      return;
     const canonicalSpecifier = specifier.replaceAll("\\", "/");
     const segments = canonicalSpecifier.split("/");
     if (segments.some((segment) => segment === "." || segment === ".." || segment === "")) {
-      addViolation(position, `Package import path traversal is not allowed: "${specifier}".`, specifier);
+      addViolation(
+        position,
+        `Package import path traversal is not allowed: "${specifier}".`,
+        specifier,
+      );
       return;
     }
     if (isBuiltin(canonicalSpecifier) || isForbiddenDomainModule(canonicalSpecifier)) return;
@@ -352,7 +383,11 @@ export function findDomainImportViolations(
   ) {
     const normalized = specifier.replaceAll("\\", "/");
     if (isAbsoluteModuleSpecifier(normalized)) {
-      addViolation(position, "Absolute paths and file URLs are not allowed in domain imports.", specifier);
+      addViolation(
+        position,
+        "Absolute paths and file URLs are not allowed in domain imports.",
+        specifier,
+      );
       return;
     }
     if ((normalized.startsWith(".") || isRelativeReference) && domainRoot) {
@@ -362,18 +397,28 @@ export function findDomainImportViolations(
         try {
           const targetUrl = new URL(normalized, pathToFileURL(fileName));
           if (targetUrl.search || targetUrl.hash) {
-            addViolation(position, "Query strings and fragments are not allowed in domain imports.", specifier);
+            addViolation(
+              position,
+              "Query strings and fragments are not allowed in domain imports.",
+              specifier,
+            );
             return;
           }
           target = fileURLToPath(targetUrl);
         } catch {
-          addViolation(position, "Unsafe encoded path characters are not allowed in domain imports.", specifier);
+          addViolation(
+            position,
+            "Unsafe encoded path characters are not allowed in domain imports.",
+            specifier,
+          );
           return;
         }
       } else target = resolve(dirname(fileName), normalized);
 
       if (!isInside(sourceRoot, target)) addViolation(position, escapeMessage, specifier);
-      else if (modulePathCandidates(target).some((candidate) => findSymbolicLink(domainRoot, candidate)))
+      else if (
+        modulePathCandidates(target).some((candidate) => findSymbolicLink(domainRoot, candidate))
+      )
         addViolation(position, "Symbolic links are not allowed in domain imports.", specifier);
     }
   }
@@ -394,10 +439,15 @@ export function findDomainImportViolations(
     const kind = loader?.kind;
     const loaderArgument = loader?.argument;
     const declaredReference = moduleReference(node);
-    const reference = declaredReference ??
+    const reference =
+      declaredReference ??
       (loaderArgument && ts.isStringLiteralLike(loaderArgument) ? loaderArgument : undefined);
     if (reference && ts.isStringLiteralLike(reference) && isForbiddenDomainModule(reference.text))
-      addViolation(reference.getStart(sourceFile), `Forbidden domain import "${reference.text}".`, reference.text);
+      addViolation(
+        reference.getStart(sourceFile),
+        `Forbidden domain import "${reference.text}".`,
+        reference.text,
+      );
 
     if (reference && ts.isStringLiteralLike(reference))
       inspectDeclaredPackage(reference.text, reference.getStart(sourceFile));
@@ -415,7 +465,11 @@ export function findDomainImportViolations(
       );
 
     if (kind && (!loaderArgument || !ts.isStringLiteralLike(loaderArgument)))
-      addViolation(node.getStart(sourceFile), `A non-literal ${kind} is not allowed in domain code.`, undefined);
+      addViolation(
+        node.getStart(sourceFile),
+        `A non-literal ${kind} is not allowed in domain code.`,
+        undefined,
+      );
 
     if (isCommonJsRequire(node) && !recognizedLoaderNodes.has(node))
       addViolation(
@@ -506,13 +560,17 @@ export function collectDomainSourceFiles(
 ) {
   const files = [];
   if (inspect(directory)) {
-    errors.push(`Symbolic links are not allowed in packages/domain source: ${relative(root, directory) || "."}`);
+    errors.push(
+      `Symbolic links are not allowed in packages/domain source: ${relative(root, directory) || "."}`,
+    );
     return files;
   }
   for (const entry of readDirectory(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
     if (entry.isSymbolicLink())
-      errors.push(`Symbolic links are not allowed in packages/domain source: ${relative(root, path)}`);
+      errors.push(
+        `Symbolic links are not allowed in packages/domain source: ${relative(root, path)}`,
+      );
     else if (entry.isDirectory())
       files.push(...collectDomainSourceFiles(path, errors, readDirectory, root, inspect));
     else {
@@ -569,7 +627,11 @@ export function findWorkspaceSourceCoverageErrors(workspace, tsconfig) {
   return errors;
 }
 
-export function findEffectiveWorkspaceConfigurationErrors(workspace, workspaceRoot, compilerOptions) {
+export function findEffectiveWorkspaceConfigurationErrors(
+  workspace,
+  workspaceRoot,
+  compilerOptions,
+) {
   const errors = [];
   if (compilerOptions.noEmit !== true)
     errors.push(`${workspace}/tsconfig.json must enable noEmit after configuration inheritance.`);
@@ -577,7 +639,10 @@ export function findEffectiveWorkspaceConfigurationErrors(workspace, workspaceRo
   const sourceRoot = join(workspaceRoot, "src");
   for (const option of ["outDir", "declarationDir"]) {
     const outputDirectory = compilerOptions[option];
-    if (typeof outputDirectory === "string" && isInside(sourceRoot, resolve(workspaceRoot, outputDirectory)))
+    if (
+      typeof outputDirectory === "string" &&
+      isInside(sourceRoot, resolve(workspaceRoot, outputDirectory))
+    )
       errors.push(`${workspace}/tsconfig.json cannot place effective ${option} under src.`);
   }
   return errors;
@@ -634,7 +699,12 @@ function collectWorkspaceSourceFiles(directory) {
   return files;
 }
 
-export function findUncheckedWorkspaceSourceFiles(workspace, workspaceRoot, sourceFiles, checkedFiles) {
+export function findUncheckedWorkspaceSourceFiles(
+  workspace,
+  workspaceRoot,
+  sourceFiles,
+  checkedFiles,
+) {
   const checked = new Set(checkedFiles.map((path) => resolve(path)));
   return sourceFiles
     .filter((path) => !checked.has(resolve(path)))
@@ -681,7 +751,9 @@ export function findRootTypeScriptConfigurationErrors(tsconfig) {
     compilerOptions.types.length > 0 ||
     hasImplicitModuleImports(compilerOptions)
   )
-    errors.push("tsconfig.base.json cannot configure implicit module imports inherited by packages/domain.");
+    errors.push(
+      "tsconfig.base.json cannot configure implicit module imports inherited by packages/domain.",
+    );
   return errors;
 }
 
@@ -748,7 +820,9 @@ export function findDomainManifestConfigurationErrors(
   for (const target of browserTargets) {
     const normalized = target.replaceAll("\\", "/");
     if (!normalized.startsWith("."))
-      errors.push(`${manifestPath} browser target must be a relative domain source path: ${target}`);
+      errors.push(
+        `${manifestPath} browser target must be a relative domain source path: ${target}`,
+      );
   }
 
   const sourceRoot = join(domainRoot, "src");
@@ -767,7 +841,9 @@ export function findDomainManifestConfigurationErrors(
         `${manifestPath} package resolution target cannot leave packages/domain/src: ${target}`,
       );
     else if (
-      modulePathCandidates(resolvedTarget).some((candidate) => findSymbolicLink(domainRoot, candidate))
+      modulePathCandidates(resolvedTarget).some((candidate) =>
+        findSymbolicLink(domainRoot, candidate),
+      )
     )
       errors.push(`${manifestPath} package resolution target cannot use symbolic links: ${target}`);
   }
@@ -779,7 +855,8 @@ export function collectDomainPackageManifestFiles(directory, readDirectory = rea
   for (const entry of readDirectory(directory, { withFileTypes: true })) {
     if (entry.isSymbolicLink()) continue;
     const path = join(directory, entry.name);
-    if (entry.isDirectory()) manifests.push(...collectDomainPackageManifestFiles(path, readDirectory));
+    if (entry.isDirectory())
+      manifests.push(...collectDomainPackageManifestFiles(path, readDirectory));
     else if (entry.name === "package.json") manifests.push(path);
   }
   return manifests;
@@ -817,7 +894,8 @@ export function checkWorkspaceBoundaries() {
     const manifestPath = join(workspaceRoot, "package.json");
     const tsconfigPath = join(workspaceRoot, "tsconfig.json");
     for (const requiredPath of [manifestPath, tsconfigPath, join(workspaceRoot, "src/index.ts")])
-      if (!existsSync(requiredPath)) errors.push(`Missing required workspace file: ${relative(ROOT, requiredPath)}`);
+      if (!existsSync(requiredPath))
+        errors.push(`Missing required workspace file: ${relative(ROOT, requiredPath)}`);
 
     if (!existsSync(manifestPath)) continue;
     const manifest = readJson(manifestPath, errors);
@@ -825,23 +903,32 @@ export function checkWorkspaceBoundaries() {
     const tsconfig = existsSync(tsconfigPath) ? readJson(tsconfigPath, errors) : undefined;
     if (manifest.name !== expectedName)
       errors.push(`${workspace}/package.json must use package name "${expectedName}".`);
-    if (packageNames.has(manifest.name)) errors.push(`Duplicate workspace package name: ${manifest.name}`);
+    if (packageNames.has(manifest.name))
+      errors.push(`Duplicate workspace package name: ${manifest.name}`);
     packageNames.add(manifest.name);
     if (tsconfig) {
       errors.push(...findWorkspaceConfigurationErrors(workspace, manifest, tsconfig));
       errors.push(...findWorkspaceSourceCoverageErrors(workspace, tsconfig));
-      const parsedConfig = ts.getParsedCommandLineOfConfigFile(tsconfigPath, {}, {
-        ...ts.sys,
-        onUnRecoverableConfigFileDiagnostic(diagnostic) {
-          errors.push(
-            `${workspace}/tsconfig.json cannot be parsed: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")}`,
-          );
+      const parsedConfig = ts.getParsedCommandLineOfConfigFile(
+        tsconfigPath,
+        {},
+        {
+          ...ts.sys,
+          onUnRecoverableConfigFileDiagnostic(diagnostic) {
+            errors.push(
+              `${workspace}/tsconfig.json cannot be parsed: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")}`,
+            );
+          },
         },
-      });
+      );
       if (parsedConfig) {
         errors.push(
           ...findParsedTypeScriptConfigurationErrors(workspace, parsedConfig),
-          ...findEffectiveWorkspaceConfigurationErrors(workspace, workspaceRoot, parsedConfig.options),
+          ...findEffectiveWorkspaceConfigurationErrors(
+            workspace,
+            workspaceRoot,
+            parsedConfig.options,
+          ),
           ...findUncheckedWorkspaceSourceFiles(
             workspace,
             workspaceRoot,
@@ -858,7 +945,12 @@ export function checkWorkspaceBoundaries() {
   if (domainManifest) {
     errors.push(...findDomainManifestConfigurationErrors(domainManifest));
     if (typeof domainManifest.name === "string") allowedDomainPackages.add(domainManifest.name);
-    for (const section of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"])
+    for (const section of [
+      "dependencies",
+      "devDependencies",
+      "peerDependencies",
+      "optionalDependencies",
+    ])
       for (const dependency of Object.keys(domainManifest[section] ?? {}))
         allowedDomainPackages.add(dependency);
     for (const dependency of findForbiddenDomainDependencies(domainManifest))

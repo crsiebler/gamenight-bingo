@@ -1,0 +1,8 @@
+node_modules/
+coverage/
+playwright-report/
+test-results/
+tests/fixtures/quality/
+bun.lock
+docs/*.pdf
+progress.txt

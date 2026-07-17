@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 
 import * as boundaries from "./check-workspace-boundaries.mjs";
 
-const { findDomainImportViolations, findForbiddenDomainDependencies, isForbiddenDomainModule } = boundaries;
+const { findDomainImportViolations, findForbiddenDomainDependencies, isForbiddenDomainModule } =
+  boundaries;
 
 const forbiddenSpecifiers = [
   "react",
@@ -160,14 +161,14 @@ for (const parenthesizedLoad of [
   'require["call"](null, packageName);',
   'module.require["call"](module, packageName);',
   'module["require"]["call"](module, packageName);',
-  '(require as unknown as Function)(packageName);',
-  '(module.require!)(packageName);',
+  "(require as unknown as Function)(packageName);",
+  "(module.require!)(packageName);",
   '(module["require" satisfies string])(packageName);',
-  '(require<string>)(packageName);',
-  '(module.require<string>).call(module, packageName);',
+  "(require<string>)(packageName);",
+  "(module.require<string>).call(module, packageName);",
   '(module["require"]<string>).apply(module, [packageName]);',
-  '(0, require)(packageName);',
-  '(0, module.require).call(module, packageName);',
+  "(0, require)(packageName);",
+  "(0, module.require).call(module, packageName);",
   '(0, module["require"]).apply(module, [packageName]);',
   "require.apply(null, packageNames);",
   "module.require.apply(module, [packageName]);",
@@ -230,34 +231,26 @@ assert.match(
     'import "./shared/rules.ts";',
     domainFile,
     domainRoot,
-    (_root, target) => (target.includes("/shared") ? "/repo/packages/domain/src/shared" : undefined),
+    (_root, target) =>
+      target.includes("/shared") ? "/repo/packages/domain/src/shared" : undefined,
   )[0]?.message ?? "",
   /symbolic links are not allowed/i,
 );
 assert.match(
-  findDomainImportViolations(
-    'import "./shared/rules";',
-    domainFile,
-    domainRoot,
-    (_root, target) => (target.endsWith("/shared/rules.ts") ? target : undefined),
+  findDomainImportViolations('import "./shared/rules";', domainFile, domainRoot, (_root, target) =>
+    target.endsWith("/shared/rules.ts") ? target : undefined,
   )[0]?.message ?? "",
   /symbolic links are not allowed/i,
 );
 assert.match(
-  findDomainImportViolations(
-    'import "./shared";',
-    domainFile,
-    domainRoot,
-    (_root, target) => (target.endsWith("/shared/index.ts") ? target : undefined),
+  findDomainImportViolations('import "./shared";', domainFile, domainRoot, (_root, target) =>
+    target.endsWith("/shared/index.ts") ? target : undefined,
   )[0]?.message ?? "",
   /symbolic links are not allowed/i,
 );
 assert.match(
-  findDomainImportViolations(
-    'import "./shared/rules";',
-    domainFile,
-    domainRoot,
-    (_root, target) => (target.endsWith("/shared/rules.d.ts") ? target : undefined),
+  findDomainImportViolations('import "./shared/rules";', domainFile, domainRoot, (_root, target) =>
+    target.endsWith("/shared/rules.d.ts") ? target : undefined,
   )[0]?.message ?? "",
   /symbolic links are not allowed/i,
 );
@@ -280,7 +273,8 @@ assert.match(
   /cannot leave packages\/domain/i,
 );
 assert.match(
-  findDomainImportViolations('import "./safe%2fescape.js";', domainFile, domainRoot)[0]?.message ?? "",
+  findDomainImportViolations('import "./safe%2fescape.js";', domainFile, domainRoot)[0]?.message ??
+    "",
   /unsafe encoded path/i,
 );
 assert.match(
@@ -334,13 +328,8 @@ for (const undeclaredDirective of [
   '/// <amd-dependency path="framework" />',
 ]) {
   assert.match(
-    findDomainImportViolations(
-      undeclaredDirective,
-      domainFile,
-      domainRoot,
-      undefined,
-      new Set(),
-    )[0]?.message ?? "",
+    findDomainImportViolations(undeclaredDirective, domainFile, domainRoot, undefined, new Set())[0]
+      ?.message ?? "",
     /undeclared domain package import/i,
     undeclaredDirective,
   );
@@ -364,13 +353,8 @@ assert.deepEqual(
 );
 
 assert.match(
-  findDomainImportViolations(
-    'import "framework";',
-    domainFile,
-    domainRoot,
-    undefined,
-    new Set(),
-  )[0]?.message ?? "",
+  findDomainImportViolations('import "framework";', domainFile, domainRoot, undefined, new Set())[0]
+    ?.message ?? "",
   /undeclared domain package import/i,
 );
 assert.deepEqual(
@@ -403,9 +387,10 @@ for (const traversingImport of [
 }
 
 for (const section of ["devDependencies", "peerDependencies", "optionalDependencies"]) {
-  assert.deepEqual(findForbiddenDomainDependencies({ [section]: { framework: "npm:react@19.0.0" } }), [
-    "framework",
-  ]);
+  assert.deepEqual(
+    findForbiddenDomainDependencies({ [section]: { framework: "npm:react@19.0.0" } }),
+    ["framework"],
+  );
 }
 
 assert.deepEqual(
@@ -421,7 +406,11 @@ assert.deepEqual(
 assert.equal(typeof boundaries.findWorkspaceConfigurationErrors, "function");
 if (boundaries.findWorkspaceConfigurationErrors) {
   assert.deepEqual(
-    boundaries.findWorkspaceConfigurationErrors("apps/web", { scripts: {} }, { extends: "../../tsconfig.base.json" }),
+    boundaries.findWorkspaceConfigurationErrors(
+      "apps/web",
+      { scripts: {} },
+      { extends: "../../tsconfig.base.json" },
+    ),
     ["apps/web/package.json must define a typecheck script."],
   );
   assert.deepEqual(
@@ -535,9 +524,7 @@ if (boundaries.findWorkspaceSourceCoverageErrors) {
       files: ["src/index.ts"],
       exclude: ["src/private"],
     }),
-    [
-      "packages/domain/tsconfig.json cannot restrict source files with files or exclude.",
-    ],
+    ["packages/domain/tsconfig.json cannot restrict source files with files or exclude."],
   );
   assert.deepEqual(
     boundaries.findWorkspaceSourceCoverageErrors("packages/domain", { include: ["src/**/*"] }),
@@ -641,13 +628,17 @@ if (boundaries.findRootTypeScriptConfigurationErrors) {
         rootDirs: ["packages/domain/src", "packages/database/src"],
       },
     }),
-    ["tsconfig.base.json cannot configure module resolution redirects inherited by packages/domain."],
+    [
+      "tsconfig.base.json cannot configure module resolution redirects inherited by packages/domain.",
+    ],
   );
   assert.deepEqual(
     boundaries.findRootTypeScriptConfigurationErrors({
       compilerOptions: { strict: true, types: [], moduleSuffixes: [".native", ""] },
     }),
-    ["tsconfig.base.json cannot configure module resolution redirects inherited by packages/domain."],
+    [
+      "tsconfig.base.json cannot configure module resolution redirects inherited by packages/domain.",
+    ],
   );
   assert.deepEqual(
     boundaries.findRootTypeScriptConfigurationErrors({

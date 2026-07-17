@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"]
+  },
+  "include": [
+    "apps/*/src/**/*",
+    "packages/*/src/**/*",
+    "tests/**/*.ts",
+    "tests/**/*.tsx",
+    "*.config.ts"
+  ],
+  "exclude": ["tests/fixtures/quality/**/*"]
+}

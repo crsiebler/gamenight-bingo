@@ -18,9 +18,10 @@ The target is a TypeScript modular monolith with two runtime processes:
 - PostgreSQL: durable application truth, accessed through repositories.
 - Docker Compose: local PostgreSQL and an optional future-only Redis profile.
 
-The workspace now provides strict TypeScript and domain-boundary checks.
-Application runtimes and broader quality tooling land in later stories. Do not
-create placeholder behavior, scripts, or configuration ahead of their story.
+The workspace now provides strict TypeScript, domain-boundary, lint, formatting,
+Vitest, React Testing Library, and Playwright checks. Application runtimes land
+in later stories. Do not create placeholder behavior, scripts, or configuration
+ahead of their story.
 
 ## Commands
 
@@ -30,7 +31,11 @@ local service commands are:
 ```sh
 bun install --frozen-lockfile
 bun run test:workspace-boundaries
+bun run lint
+bun run format:check
 bun run typecheck
+bun run test
+bun run test:e2e
 docker compose up -d
 docker compose ps
 docker compose down
@@ -41,14 +46,11 @@ The default Compose stack starts only PostgreSQL. Web and game-server processes
 run through Bun outside Docker after their runtime implementation stories land.
 
 These are the remaining root command contracts after the relevant application
-and quality-tooling stories add them:
+stories add them:
 
 ```sh
 bun run dev:web
 bun run dev:game-server
-bun run lint
-bun run format:check
-bun run test
 ```
 
 Until a command exists, run the safest relevant validation for the files being
@@ -159,6 +161,9 @@ refactors. Keep the smallest useful cycle: failing test, minimal implementation,
 then refactor while green.
 
 - Use Vitest, not Bun's built-in test framework.
+- Keep intentional quality-tool violations under `tests/fixtures/quality`; normal
+  checks exclude them, and `bun run test:quality-tooling` verifies each tool
+  rejects its fixture for the expected reason.
 - Put pure rules under unit and property-based tests.
 - Test HTTP and realtime boundaries for contract parsing, authorization,
   idempotency, privacy, and stable errors.

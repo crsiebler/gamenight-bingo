@@ -8,9 +8,9 @@ outside the MVP.
 
 > [!IMPORTANT]
 > The repository is being rebuilt in dependency-ordered stories. It currently
-> includes the Bun workspace, strict TypeScript checks, source pattern PDFs, and
-> local Compose services. Framework runtimes and the broader quality-tooling
-> commands described below become executable as their later stories land.
+> includes the Bun workspace, strict TypeScript and quality checks, source
+> pattern PDFs, and local Compose services. Framework runtimes become executable
+> as their later stories land.
 
 ## MVP
 
@@ -126,13 +126,13 @@ secrets must fail startup with actionable errors that do not reveal secrets.
 
 The local Compose settings are configurable through the shell environment:
 
-| Variable | Default | Purpose |
-| --- | ---: | --- |
-| `POSTGRES_HOST_PORT` | `5432` | PostgreSQL port exposed on the host |
-| `POSTGRES_DB` | `gamenight_bingo` | Local PostgreSQL database name |
-| `POSTGRES_USER` | `gamenight_bingo` | Local PostgreSQL username |
-| `POSTGRES_PASSWORD` | `gamenight_bingo` | Local-only PostgreSQL password |
-| `REDIS_HOST_PORT` | `6379` | Redis host port when the `redis` profile is enabled |
+| Variable             |           Default | Purpose                                             |
+| -------------------- | ----------------: | --------------------------------------------------- |
+| `POSTGRES_HOST_PORT` |            `5432` | PostgreSQL port exposed on the host                 |
+| `POSTGRES_DB`        | `gamenight_bingo` | Local PostgreSQL database name                      |
+| `POSTGRES_USER`      | `gamenight_bingo` | Local PostgreSQL username                           |
+| `POSTGRES_PASSWORD`  | `gamenight_bingo` | Local-only PostgreSQL password                      |
+| `REDIS_HOST_PORT`    |            `6379` | Redis host port when the `redis` profile is enabled |
 
 For example, use `POSTGRES_HOST_PORT=55432 docker compose up -d` when port
 `5432` is occupied. The checked-in credentials are intentionally non-secret
@@ -144,15 +144,15 @@ intentional and explicitly approved.
 
 The confirmed application defaults are:
 
-| Variable | Default | Purpose |
-| --- | ---: | --- |
-| `MAX_PLAYERS_PER_LOBBY` | `25` | Maximum participants retained in one lobby |
-| `MAX_ACTIVE_LOBBIES` | `100` | Maximum concurrently active lobbies |
-| `LOBBY_IDLE_TTL_SECONDS` | `1800` | Inactive waiting/completed/abandoned lobby retention |
-| `PLAYER_RECONNECT_WINDOW_SECONDS` | `120` | Same-device prior-slot rejoin window |
-| `DISCONNECT_PAUSE_GRACE_SECONDS` | `10` | Delay before a persistent absence pauses calling |
-| `REALTIME_TICKET_TTL_SECONDS` | `60` | Lifetime of a single-use Socket.IO ticket |
-| `CO_WINNER_WINDOW_MS` | `2000` | Window for completions attributable to the latest call |
+| Variable                          | Default | Purpose                                                |
+| --------------------------------- | ------: | ------------------------------------------------------ |
+| `MAX_PLAYERS_PER_LOBBY`           |    `25` | Maximum participants retained in one lobby             |
+| `MAX_ACTIVE_LOBBIES`              |   `100` | Maximum concurrently active lobbies                    |
+| `LOBBY_IDLE_TTL_SECONDS`          |  `1800` | Inactive waiting/completed/abandoned lobby retention   |
+| `PLAYER_RECONNECT_WINDOW_SECONDS` |   `120` | Same-device prior-slot rejoin window                   |
+| `DISCONNECT_PAUSE_GRACE_SECONDS`  |    `10` | Delay before a persistent absence pauses calling       |
+| `REALTIME_TICKET_TTL_SECONDS`     |    `60` | Lifetime of a single-use Socket.IO ticket              |
+| `CO_WINNER_WINDOW_MS`             |  `2000` | Window for completions attributable to the latest call |
 
 Application database URLs, public origins, cookie secrets, and process ports are
 infrastructure-specific. Their names and defaults will be defined by the
@@ -246,21 +246,17 @@ active. Reconnect never automatically resumes paused calls.
 
 ## Checks And Tests
 
-Install the locked workspace dependencies and run the currently available
-checks from the repository root:
+Install the locked workspace dependencies and run checks from the repository
+root:
 
 ```sh
 bun install --frozen-lockfile
 bun run test:workspace-boundaries
-bun run typecheck
-```
-
-The quality-tooling story adds the remaining root checks:
-
-```sh
 bun run lint
 bun run format:check
+bun run typecheck
 bun run test
+bun run test:e2e
 ```
 
 Vitest, not Bun's built-in test framework, is the test runner. The complete
@@ -268,7 +264,9 @@ strategy includes unit/property tests, React Testing Library, isolated
 PostgreSQL integration tests, Socket.IO multi-client/restart tests, Playwright
 browser journeys, accessibility checks, and load/security suites. A contributor
 should run the narrow affected suite while developing and all required root
-checks before committing.
+checks before committing. The initial Playwright smoke test validates the runner
+without an application server or downloaded browser; browser-journey stories
+must install the required Playwright browsers before running their suites.
 
 ## Contributing
 

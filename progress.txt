@@ -13,6 +13,8 @@ Next story: US-001
 - Run `bun run test:workspace-boundaries` after workspace-manifest or domain-import changes; the TypeScript AST guard checks static, type-only, dynamic, direct CommonJS (including TypeScript-transparent and comma loader expressions), JSDoc, and triple-slash references with normalized path separators without matching ordinary comments or strings.
 - Boundary parsing must use the source file's actual script kind and fail closed on syntax errors; workspace checks also require real `tsc` scripts without strictness downgrades, prohibit shared/domain module aliases, `rootDirs`, and `moduleSuffixes`, constrain relative source and root/nested package-resolution targets to `packages/domain/src`, and reject source/reference symlinks across TypeScript declaration and JavaScript-extension resolution candidates plus escaping absolute, file-URL, relative, type-reference, file-reference, and AMD dependency paths.
 - Workspace typechecks must cover every discovered `src` file without inherited or implicit exclusions, verified against TypeScript's parsed effective file set, and must reject all parsed configuration diagnostics while retaining effective `noEmit` with `outDir`/`declarationDir` outside `src`; domain source also rejects JavaScript and `@ts-nocheck`. Shared/domain TypeScript configuration cannot inherit or synthesize implicit module imports, and domain bare imports plus package-valued type/AMD directives must be Node built-ins, self-references, or declared dependencies without traversal segments and validated against forbidden runtime or type-package aliases.
+- Keep intentional ESLint, Prettier, TypeScript, Vitest, React Testing Library, and Playwright failures under `tests/fixtures/quality`; normal checks exclude them, while `bun run test:quality-tooling` requires each tool to fail for its expected diagnostic rather than accepting any nonzero exit.
+- Vitest discovery is limited to repository `apps`, `packages`, and `tests` paths, with TS tests running in Node and TSX tests in jsdom; Playwright owns `tests/e2e` and remains a separate `bun run test:e2e` command.
 
 Append-only iteration log
 -------------------------
@@ -656,3 +658,55 @@ Targeted re-review outcome for US-006 at 2026-07-16 16:17:45 MST:
 - The original loader-suppression, workspace-glob, triple-slash path, parsed-config diagnostic, and manifest-target findings are resolved.
 - Residual risks are limited to intentionally unavailable US-007 tooling, injected rather than filesystem-managed symlink fixtures, and out-of-scope whole-program loader alias analysis.
 - All in-scope blocking findings are resolved; US-006 can be marked passing and committed.
+
+## 2026-07-16 17:31:53 MST - US-007
+- What was implemented
+  - Added pinned ESLint flat-config, Prettier/Tailwind, Vitest, React Testing Library, Playwright, Husky, and lint-staged tooling with executable root scripts and a real root TypeScript check.
+  - Preserved the required three-line Husky pre-commit hook exactly and added an executable-mode/content contract test.
+  - Added isolated invalid fixtures that prove ESLint, Prettier's Tailwind sorting, TypeScript, Vitest, React Testing Library, and Playwright reject the expected violations while normal checks remain green.
+  - Applied the initial Prettier baseline to tracked source/documentation and updated contributor guidance for the now-available checks.
+- Files changed: `.gitignore`, `.husky/pre-commit`, `.prettierignore`, `AGENTS.md`, `README.md`, `bun.lock`, `eslint.config.mjs`, `lint-staged.config.mjs`, `package.json`, `playwright.config.ts`, `prettier.config.mjs`, `scripts/check-workspace-boundaries.mjs`, `scripts/check-workspace-boundaries.test.mjs`, `tasks/prd-private-realtime-bingo.md`, `tests/**`, `tsconfig.json`, `vitest.config.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-007 - Configure quality tooling and Git hooks`
+- Auto approval: `enabled`
+- Checks:
+  - `bun run test:quality-tooling` (expected fail before implementation: script did not exist; pass after configuration with 7 checks)
+  - `bun install --frozen-lockfile` (pass; locked install and Husky prepare completed with no changes)
+  - `bun run test:workspace-boundaries` (pass through typecheck/test commands)
+  - `bun run lint` (pass)
+  - `bun run format:check` (pass after applying the initial formatting baseline)
+  - `npx lint-staged` (pass against all staged story files, including ignored violation fixtures)
+  - `npx tsc --noEmit` (pass; exact hook typecheck command)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `bun run test` (pass; complete typecheck plus 2 Vitest files and 8 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `build-engineer`, `test-automator`
+  - Used: `build-engineer`, `test-automator` for dependency/configuration shape, isolated fixture strategy, discovery boundaries, hook validation, and check recommendations
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and dependency/configuration-triggered `security-engineer`; targeted re-review by `qa-expert` and `security-engineer` planned after substantive fixes
+  - Findings: fixed lint-staged ignored-fixture warnings, TSX Playwright collection by Vitest, and missing workspace-specific typechecks in the hook path; the bare `npx` download risk is requirement-bound because the story mandates the exact hook text and local pinned binaries are installed before hooks run
+- Decisions (why):
+  - Kept React and jsdom dependencies as root development-only test tooling because US-007 explicitly requires React Testing Library configuration while product React runtimes remain later-story work.
+  - Used diagnostic-specific subprocess assertions for invalid fixtures so missing tools, collection failures, and unrelated configuration errors cannot satisfy the negative checks.
+  - Kept Playwright separate from Vitest and used a runner-only smoke because no application runtime or browser journey exists yet; browser binaries were not installed outside the worktree.
+  - Added a root `tsconfig.json` that checks repository source, tests, and typed configs because the mandated plain `npx tsc --noEmit` hook must not become a no-op.
+  - Made `bun run test` execute the complete root/workspace typecheck before Vitest so the exact hook still enforces each workspace's narrower ambient type environment.
+  - Preserved the exact required bare-`npx` hook commands despite the review's network-fallback concern because changing those bytes would violate the acceptance criterion; pinned local `lint-staged` and TypeScript binaries provide the normal resolution path.
+- **Learnings for future iterations:**
+  - Custom Vitest project `include` patterns must be rooted to repository-owned paths or dependency and `.opencode` tests can be collected despite normal defaults.
+  - Intentional failure fixtures should assert stable diagnostic markers, not merely nonzero status, and must stay outside normal lint, format, typecheck, Vitest, and Playwright discovery.
+  - A fixture TypeScript config that extends the root must explicitly override the root fixture exclusion while retaining inherited `noEmit`; otherwise it proves only a no-input configuration error or can emit generated JavaScript.
+  - Playwright tests that do not request a browser fixture can validate runner wiring before product browser journeys and browser installation are available.
+- Known issues / follow-ups:
+  - Browser-backed Playwright journeys and their required browser binaries remain owned by later frontend/test-suite stories.
+  - Product React/Next.js runtime dependencies and application scripts remain owned by later dependency-ordered stories.
+- Next iteration start:
+  - Implement US-008 runtime configuration defaults, overrides, validation, and startup tests without allowing domain code to read process environment directly.
+---
+
+Targeted re-review outcome for US-007 at 2026-07-16 17:38:11 MST:
+- `qa-expert` and `security-engineer` reviewed the revised complete staged diff and returned empty actionable finding lists.
+- The lint-staged fixture handling, Vitest/Playwright discovery separation, and complete workspace typecheck path are resolved.
+- Residual risks are limited to intentionally deferred browser-backed journeys, developer-local hook bypassability, and the requirement-bound bare `npx` fallback behavior.
+- All in-scope blocking findings are resolved; US-007 can be marked passing and committed.
