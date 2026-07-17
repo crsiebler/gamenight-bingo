@@ -25,6 +25,7 @@ Next story: US-001
 - Source review records map every PDF diagram to its runtime ID and disposition (`exact-mask-match`, `flexible-rule-example`, or `source-alias`), record all 25 cells reviewed, and parity-test exact records against canonical runtime masks without duplicating masks in the review table.
 - Pattern preview galleries derive a normalized model from `patternCatalog`; flexible-rule source examples live with the canonical pattern source, committed JSON goldens cover every runtime selection, and standalone generated HTML is parity-tested and isolated from Prettier with an exact-node ignore marker.
 - Category preview pages reuse the source-filtered canonical preview model and shared renderer while exposing category-specific creation/generation functions, committed goldens, and standalone HTML paths.
+- Complete pattern audits join all PDF inventory/review rows to runtime IDs, aliases, exact or flexible mask parity, approved identity/mask constraints, and the combined category preview goldens; mutation tests must prove each audit failure category remains fail-closed.
 
 Append-only iteration log
 -------------------------
@@ -1409,3 +1410,55 @@ Review outcome for US-018 at 2026-07-17 00:37:07 MST:
 - UI and UX specialists independently used `dev-browser` to verify the generated Christmas gallery at mobile and desktop widths.
 - Residual risk is limited to manual rather than pixel-automated PDF transcription, Chromium-only browser verification, and no real screen-reader pronunciation test for punctuation-heavy masks; these do not violate the story requirements.
 - No in-scope critical, high, or medium findings remain. US-018 can be marked passing and committed.
+
+## 2026-07-17 00:49:23 MST - US-019
+- What was implemented
+  - Added one fail-closed catalog audit that strictly parses and joins all 82 documented PDF diagrams and review dispositions to runtime source references, stable IDs, aliases, exact/flexible masks, approved masks, distinct category identities, and all committed preview goldens.
+  - Added mutation coverage proving the audit reports missing source mappings, invalid or collapsed IDs, alias mismatches, source/runtime parity changes, approved-mask changes, and missing golden entries.
+  - Added reusable repository guidance requiring the complete joined audit for future catalog changes.
+- Files changed: `AGENTS.md`, `packages/patterns/src/audit.ts`, `packages/patterns/src/index.ts`, `tests/pattern-catalog-audit.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-019 - Audit the complete pattern catalog`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run tests/pattern-catalog-audit.test.ts` (expected fail before implementation: 7 failures because the audit API did not exist; pass after implementation with 7 tests)
+  - Review-remediation regressions (expected fail: missing strict documentation parser and unknown dispositions were accepted; pass after implementation with 9 audit tests)
+  - Focused complete pattern suite (pass; 7 files and 61 tests)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (fail only because it scanned pre-existing untracked US-018 Lighthouse/DOM artifacts; no intended or tracked file failed)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `bun run test` (pass; 13 Vitest files and 210 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: none
+  - Used: skipped because the catalog, source-review, and golden-preview conventions were established and the standard-scope audit design was clear
+- Specialist review:
+  - Agents used: `code-reviewer` and `qa-expert`; targeted re-review by `qa-expert`
+  - Findings: fixed fail-open documentation ingestion, incidental constraint mutations, unknown disposition handling, and order-sensitive golden comparison; targeted re-review returned no actionable findings
+- Decisions (why):
+  - Implemented a pure audit over supplied catalog/source/golden data so mutation tests can independently prove each required failure mode without filesystem mocking or changing canonical runtime data.
+  - Parsed the existing human-reviewed source inventory and review records through a pure audit parser rather than creating another maintained mask source.
+  - Compared the combined four category goldens with previews derived from the runtime catalog so missing, extra, stale, or reordered entries fail one complete gate.
+  - Left unrelated untracked browser-verification artifacts unchanged and used the tracked-tree formatting check because modifying those files would violate story scope.
+- **Learnings for future iterations:**
+  - Category-local catalog and preview tests do not replace a complete joined audit; source mappings, aliases, runtime parity, identity constraints, and goldens must fail together when any link is removed or changed.
+  - Audit requirements such as approved masks and deliberately distinct IDs belong in independent test input so the audit can detect canonical catalog corruption instead of deriving every expectation from the value under test.
+- Known issues / follow-ups:
+  - Pre-existing untracked US-018 Lighthouse, DOM, and screenshot artifacts still cause root `bun run format:check` to scan three non-product report files; they remain intentionally untouched and unstaged.
+- Next iteration start:
+  - Implement US-020 domain state-machine behavior with failing transition tests first.
+---
+
+Review remediation for US-019 at 2026-07-17 00:57:20 MST:
+- The initial `code-reviewer` and `qa-expert` pass produced two blocking medium QA findings: documentation ingestion could silently skip malformed/unknown/unreviewed rows, and approved-mask/distinct-ID mutations could pass through incidental parity or duplicate-ID failures.
+- Added failing regressions first, then moved documentation inventory/review parsing into a strict pure parser that validates every table row, disposition, 25-cell review, duplicate, and bidirectional source/review key mapping.
+- Made runtime audit input reject unknown dispositions, isolated approved-mask and distinct-ID requirement mutations by exact issue message, and fixed the specific low order-sensitive golden comparison through recursive key canonicalization while preserving array order.
+- Discarded the low pre-review `prd.json` bookkeeping observation because Ralph requires that file to remain unstaged until review passes and then adds it to the final intended file set.
+- Post-fix checks: focused 61 pattern tests, lint, complete tracked-tree formatting, typecheck, all 210 Vitest tests, Playwright smoke, and staged/unstaged whitespace checks pass.
+- Targeted re-review: `qa-expert` returned an empty findings list with no residual risks; `code-reviewer` was not repeated because its only finding was expected post-review bookkeeping.
+
+Targeted re-review outcome for US-019 at 2026-07-17 00:57:20 MST:
+- `qa-expert` reviewed the revised complete staged diff and confirmed the strict parser, isolated constraint mutations, unknown-disposition rejection, and structural golden comparison resolve all initial QA findings.
+- No in-scope critical, high, or medium findings remain. US-019 can be marked passing and committed.

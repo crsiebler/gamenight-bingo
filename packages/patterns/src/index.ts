@@ -1,4 +1,13 @@
 export {
+  auditPatternCatalog,
+  parsePatternCatalogSourceDiagrams,
+  type PatternCatalogAuditInput,
+  type PatternCatalogAuditIssue,
+  type PatternCatalogAuditIssueCode,
+  type PatternCatalogSourceDiagram,
+  type PatternCatalogSourceDisposition,
+} from "./audit.js";
+export {
   PatternCatalogSchema,
   PatternCategorySchema,
   PatternDefinitionSchema,

@@ -196,6 +196,9 @@ then refactor while green.
   inactivity behavior; avoid wall-clock-dependent tests.
 - Run the narrow affected suite while developing and all available root checks
   before committing.
+- Pattern catalog changes must pass the complete audit that joins every source
+  diagram and review disposition to runtime IDs, aliases, masks, and committed
+  preview goldens; keep mutation coverage for each fail-closed audit category.
 
 ## UI Guidance
 
