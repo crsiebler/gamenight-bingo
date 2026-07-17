@@ -18,6 +18,7 @@ Next story: US-001
 - Runtime entry points pass `process.env` to `parseRuntimeConfig` from `packages/contracts`; downstream and domain code consume the immutable parsed type rather than reading environment state directly, and startup subprocess tests isolate environment/module state.
 - After workspace dependency manifests change, run `bun install` to refresh `bun.lock`, then verify reproducibility with `bun install --frozen-lockfile`.
 - Versioned Zod wire contracts live under `packages/contracts/src/v1`; every nested object is strict, top-level messages carry `schemaVersion`, identifiers and active-lobby sequences are branded, client commands contain intent rather than authoritative state, and authorized snapshots structurally omit credentials, foreign cards, future draws, prior-round history, and active event history. Lobby-wide sequences belong only on messages delivered to every authorized lobby consumer; private-only events omit them, acknowledgements declare their scope, and snapshot refinements enforce cross-object roster/state consistency.
+- `docs/bingo-pattern-catalog.md` inventories source diagrams as `p1/dNN` in reading order with exact, flexible-example, or alias modes and tested 5x5 source masks; when `packages/patterns/src/catalog.ts` lands, generate and parity-test the documentation from runtime canonical data rather than maintaining a second mask source.
 
 Append-only iteration log
 -------------------------
@@ -924,3 +925,48 @@ Targeted re-review outcome for US-009 at 2026-07-16 18:52:00 MST:
 - `code-reviewer`, `qa-expert`, and `security-engineer` reviewed the revised complete staged diff and returned empty actionable finding lists with no residual risks.
 - The timer/round, eligibility/card, call/mark/co-winner, expired-snapshot privacy, and participant-bound fixture findings are resolved.
 - All in-scope blocking findings are resolved; US-009 can be marked passing and committed.
+
+## 2026-07-16 19:09:50 MST - US-010
+- What was implemented
+  - Added the human-reviewable canonical pattern catalog with notation, center semantics, exact/flexible/alias classification, no-transform rules, source references, aliases, duplicates, and audit totals.
+  - Transcribed all 82 diagrams from the four supplied PDFs: 25 shapes, 25 letters, 20 numbers, and 12 Christmas patterns.
+  - Preserved the approved Q, W, and 10-19 masks exactly, mapped both Two Lines diagrams to one flexible rule, and documented Full House only as the source alias for Blackout.
+  - Added parser-based completeness and mask-format tests covering every source label/reference, classification totals, 5x5 syntax, approved masks, alias behavior, duplicate-mask identities, and future runtime parity guidance.
+- Files changed: `docs/bingo-pattern-catalog.md`, `tests/pattern-catalog-doc.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-010 - Document the canonical pattern catalog`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run tests/pattern-catalog-doc.test.ts` (expected fail before documentation: 11 failures because the catalog was absent; pass after implementation with 12 tests)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (pass)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `bun run test` (pass; 5 Vitest files and 145 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: none
+  - Used: `data-researcher` for an independent all-PDF inventory, mask transcription, duplicate analysis, and test recommendations because this was complex source-data review within the standard-mode budget
+- Specialist review:
+  - Agents used: `code-reviewer` and `qa-expert` for the complete staged test-sensitive diff
+  - Findings: no blocking findings; both specialists raised the same low bookkeeping observation about the post-review `prd.json` update, which the required Ralph sequence resolves before commit
+- Decisions (why):
+  - Used one inventory table per PDF with reading-order `p1/dNN` references because all PDFs are single-page grids and the convention makes completeness mechanically auditable.
+  - Recorded source-display masks even for flexible examples and the Full House alias so every source diagram is reviewable without incorrectly turning those diagrams into separate exact runtime rules.
+  - Kept runtime IDs and implementation out of this story because US-013 owns `packages/patterns/src/catalog.ts`; the documentation states that runtime data must later become canonical and generate this representation.
+  - Treated the catalog format as parsed documentation behavior and wrote the completeness test first because the acceptance criteria explicitly require documentation completeness and mask-format tests.
+  - Did not update `AGENTS.md` because its existing pattern guidance already prohibits second mask sources and implicit source-mask transformations.
+- **Learnings for future iterations:**
+  - The four source PDFs contain 82 diagrams total: 79 exact masks, two Two Lines flexible examples, and one Full House alias for Blackout.
+  - Shape Outside Edge/Letter O, Shape X/Letter X, Shape Cross/Christmas Cross, and Shape Checkerboard/Christmas Snow have duplicate masks but require separate category-specific identities.
+  - The letters PDF ends at Y, and the number PDF heading says “Letters + numbers” despite containing only 0-19.
+- Known issues / follow-ups:
+  - US-013 must make runtime canonical data the source for generated documentation parity; later catalog stories add stable IDs, previews, golden fixtures, and source review records.
+- Next iteration start:
+  - Implement US-011 valid card generation with injectable cryptographic randomness and unit/property-based invariant tests.
+---
+
+Review outcome for US-010 at 2026-07-16 19:09:50 MST:
+- `code-reviewer` and `qa-expert` reviewed the complete staged catalog, test, and progress diff against the four source PDFs.
+- Both specialists returned only the same low-severity observation that `progress.txt` listed `prd.json` before the required post-review metadata update; the finding is resolved by the mandated final staging sequence and requires no substantive change or re-review.
+- No in-scope critical, high, or medium findings remain. Residual risk is limited to future runtime/documentation parity, which US-013 explicitly owns.
