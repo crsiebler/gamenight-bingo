@@ -9,6 +9,7 @@ export default defineConfig([
     "**/node_modules/**",
     "**/coverage/**",
     "**/playwright-report/**",
+    "packages/database/generated/**",
     "**/test-results/**",
     "tests/fixtures/quality/**",
   ]),

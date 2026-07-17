@@ -1,0 +1,293 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum LobbyStatus {
+  WAITING
+  ACTIVE
+  COMPLETED
+  ABANDONED
+
+  @@map("lobby_status")
+}
+
+enum ParticipantRole {
+  HOST
+  PLAYER
+
+  @@map("participant_role")
+}
+
+enum RoundEligibility {
+  PLAYING
+  WAITING
+
+  @@map("round_eligibility")
+}
+
+enum SessionStatus {
+  ACTIVE
+  DISCONNECTED
+  DEPARTED
+
+  @@map("session_status")
+}
+
+enum PresenceStatus {
+  CONNECTED
+  GRACE
+  ABSENT
+  DEPARTED
+
+  @@map("presence_status")
+}
+
+enum RoundStage {
+  WAITING
+  ACTIVE
+  PAUSED
+  CO_WINNER_WINDOW
+  RESULT
+  ENDED
+
+  @@map("round_stage")
+}
+
+enum CallMode {
+  MANUAL
+  AUTOMATIC
+
+  @@map("call_mode")
+}
+
+enum PauseReason {
+  HOST_COMMAND
+  HOST_ABSENT
+  PARTICIPANT_ABSENT
+
+  @@map("pause_reason")
+}
+
+enum DeliveryScope {
+  ACTIVE_LOBBY
+  PARTICIPANT_PRIVATE
+
+  @@map("delivery_scope")
+}
+
+model Lobby {
+  id                  String               @id @db.VarChar(128)
+  code                String               @db.Char(6)
+  status              LobbyStatus
+  themeId             String               @map("theme_id") @db.VarChar(128)
+  createdAt           DateTime             @map("created_at") @db.Timestamptz(3)
+  lastActivityAt      DateTime             @map("last_activity_at") @db.Timestamptz(3)
+  endedAt             DateTime?            @map("ended_at") @db.Timestamptz(3)
+  lastEventSequence   BigInt               @default(0) @map("last_event_sequence")
+  participants        Participant[]
+  participantSessions ParticipantSession[]
+  presenceGenerations PresenceGeneration[]
+  currentRound        Round?
+  cards               Card[]
+  coWinners           CoWinner[]
+  activeLobbyEvents   ActiveLobbyEvent[]
+  commandResults      CommandResult[]
+
+  @@map("lobbies")
+}
+
+model Participant {
+  id                  String               @id @db.VarChar(128)
+  lobbyId             String               @map("lobby_id") @db.VarChar(128)
+  username            String               @db.VarChar(128)
+  normalizedUsername  String               @map("normalized_username") @db.VarChar(128)
+  role                ParticipantRole
+  roundEligibility    RoundEligibility     @map("round_eligibility")
+  joinedAt            DateTime             @map("joined_at") @db.Timestamptz(3)
+  departedAt          DateTime?            @map("departed_at") @db.Timestamptz(3)
+  lobby               Lobby                @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
+  sessions            ParticipantSession[]
+  presenceGenerations PresenceGeneration[]
+  cards               Card[]
+  commandResults      CommandResult[]
+
+  @@unique([lobbyId, normalizedUsername], map: "participants_lobby_username_key")
+  @@unique([lobbyId, id], map: "participants_lobby_id_id_key")
+  @@map("participants")
+}
+
+model ParticipantSession {
+  id             String        @id @db.VarChar(128)
+  lobbyId        String        @map("lobby_id") @db.VarChar(128)
+  participantId  String        @map("participant_id") @db.VarChar(128)
+  tokenHash      Bytes         @unique(map: "participant_sessions_token_hash_key") @map("token_hash") @db.ByteA
+  status         SessionStatus
+  issuedAt       DateTime      @map("issued_at") @db.Timestamptz(3)
+  disconnectedAt DateTime?     @map("disconnected_at") @db.Timestamptz(3)
+  rejoinUntil    DateTime?     @map("rejoin_until") @db.Timestamptz(3)
+  departedAt     DateTime?     @map("departed_at") @db.Timestamptz(3)
+  lobby          Lobby         @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
+  participant    Participant   @relation(fields: [lobbyId, participantId], references: [lobbyId, id], onDelete: Cascade)
+
+  @@map("participant_sessions")
+}
+
+model PresenceGeneration {
+  lobbyId         String         @map("lobby_id") @db.VarChar(128)
+  participantId   String         @map("participant_id") @db.VarChar(128)
+  generation      BigInt
+  status          PresenceStatus
+  connectionCount Int            @map("connection_count") @db.SmallInt
+  changedAt       DateTime       @map("changed_at") @db.Timestamptz(3)
+  graceEndsAt     DateTime?      @map("grace_ends_at") @db.Timestamptz(3)
+  absentSince     DateTime?      @map("absent_since") @db.Timestamptz(3)
+  departedAt      DateTime?      @map("departed_at") @db.Timestamptz(3)
+  overridden      Boolean        @default(false)
+  endedAt         DateTime?      @map("ended_at") @db.Timestamptz(3)
+  lobby           Lobby          @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
+  participant     Participant    @relation(fields: [lobbyId, participantId], references: [lobbyId, id], onDelete: Cascade)
+
+  @@id([participantId, generation])
+  @@map("presence_generations")
+}
+
+model Round {
+  id                       String             @id @db.VarChar(128)
+  lobbyId                  String             @unique(map: "rounds_lobby_id_key") @map("lobby_id") @db.VarChar(128)
+  initialPatternId         String             @map("initial_pattern_id") @db.VarChar(128)
+  currentPatternId         String             @map("current_pattern_id") @db.VarChar(128)
+  stage                    RoundStage
+  callMode                 CallMode           @map("call_mode")
+  callIntervalSeconds      Int?               @map("call_interval_seconds") @db.SmallInt
+  createdAt                DateTime           @map("created_at") @db.Timestamptz(3)
+  startedAt                DateTime?          @map("started_at") @db.Timestamptz(3)
+  activeAt                 DateTime?          @map("active_at") @db.Timestamptz(3)
+  pausedAt                 DateTime?          @map("paused_at") @db.Timestamptz(3)
+  pauseReason              PauseReason?       @map("pause_reason")
+  nextCallAt               DateTime?          @map("next_call_at") @db.Timestamptz(3)
+  coWinnerTriggeringCallId String?            @map("co_winner_triggering_call_id") @db.VarChar(128)
+  coWinnerOpenedAt         DateTime?          @map("co_winner_opened_at") @db.Timestamptz(3)
+  coWinnerClosesAt         DateTime?          @map("co_winner_closes_at") @db.Timestamptz(3)
+  resultSettledAt          DateTime?          @map("result_settled_at") @db.Timestamptz(3)
+  endedAt                  DateTime?          @map("ended_at") @db.Timestamptz(3)
+  lobby                    Lobby              @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
+  drawPositions            DrawPosition[]
+  cards                    Card[]
+  calls                    Call[]
+  marks                    Mark[]
+  coWinners                CoWinner[]
+  activeLobbyEvents        ActiveLobbyEvent[]
+  commandResults           CommandResult[]
+
+  @@unique([id, lobbyId], map: "rounds_id_lobby_key")
+  @@map("rounds")
+}
+
+model DrawPosition {
+  roundId  String @map("round_id") @db.VarChar(128)
+  position Int    @db.SmallInt
+  ball     Int    @db.SmallInt
+  round    Round  @relation(fields: [roundId], references: [id], onDelete: Cascade)
+
+  @@id([roundId, position])
+  @@unique([roundId, ball], map: "draw_positions_round_ball_key")
+  @@unique([roundId, position, ball], map: "draw_positions_round_position_ball_key")
+  @@map("draw_positions")
+}
+
+model Card {
+  id            String      @id @db.VarChar(128)
+  lobbyId       String      @map("lobby_id") @db.VarChar(128)
+  roundId       String      @map("round_id") @db.VarChar(128)
+  participantId String      @map("participant_id") @db.VarChar(128)
+  cells         Int[]
+  createdAt     DateTime    @map("created_at") @db.Timestamptz(3)
+  lobby         Lobby       @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
+  round         Round       @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  participant   Participant @relation(fields: [lobbyId, participantId], references: [lobbyId, id], onDelete: Cascade)
+  marks         Mark[]
+
+  @@unique([roundId, participantId], map: "cards_round_participant_key")
+  @@unique([id, roundId], map: "cards_id_round_key")
+  @@unique([id, roundId, participantId], map: "cards_id_round_participant_key")
+  @@map("cards")
+}
+
+model Call {
+  id       String   @id @db.VarChar(128)
+  roundId  String   @map("round_id") @db.VarChar(128)
+  position Int      @db.SmallInt
+  ball     Int      @db.SmallInt
+  calledAt DateTime @map("called_at") @db.Timestamptz(3)
+  round    Round    @relation(fields: [roundId], references: [id], onDelete: Cascade)
+
+  @@unique([roundId, position], map: "calls_round_position_key")
+  @@unique([roundId, ball], map: "calls_round_ball_key")
+  @@map("calls")
+}
+
+model Mark {
+  id       String   @id @db.VarChar(128)
+  roundId  String   @map("round_id") @db.VarChar(128)
+  cardId   String   @map("card_id") @db.VarChar(128)
+  ball     Int      @db.SmallInt
+  markedAt DateTime @map("marked_at") @db.Timestamptz(3)
+  round    Round    @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  card     Card     @relation(fields: [cardId, roundId], references: [id, roundId], onDelete: Cascade)
+
+  @@unique([cardId, ball], map: "marks_card_ball_key")
+  @@map("marks")
+}
+
+model CoWinner {
+  lobbyId          String   @map("lobby_id") @db.VarChar(128)
+  roundId          String   @map("round_id") @db.VarChar(128)
+  participantId    String   @map("participant_id") @db.VarChar(128)
+  cardId           String   @map("card_id") @db.VarChar(128)
+  triggeringCallId String   @map("triggering_call_id") @db.VarChar(128)
+  confirmedAt      DateTime @map("confirmed_at") @db.Timestamptz(3)
+  lobby            Lobby    @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
+  round            Round    @relation(fields: [roundId], references: [id], onDelete: Cascade)
+
+  @@id([roundId, participantId])
+  @@unique([roundId, cardId], map: "co_winners_round_card_key")
+  @@map("co_winners")
+}
+
+model ActiveLobbyEvent {
+  lobbyId       String   @map("lobby_id") @db.VarChar(128)
+  sequence      BigInt
+  roundId       String?  @map("round_id") @db.VarChar(128)
+  eventType     String   @map("event_type") @db.VarChar(64)
+  schemaVersion Int      @map("schema_version") @db.SmallInt
+  payload       Json
+  createdAt     DateTime @map("created_at") @db.Timestamptz(3)
+  lobby         Lobby    @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
+  round         Round?   @relation(fields: [roundId], references: [id], onDelete: Cascade)
+
+  @@id([lobbyId, sequence])
+  @@map("active_lobby_events")
+}
+
+model CommandResult {
+  lobbyId       String        @map("lobby_id") @db.VarChar(128)
+  participantId String        @map("participant_id") @db.VarChar(128)
+  commandId     String        @map("command_id") @db.VarChar(128)
+  roundId       String?       @map("round_id") @db.VarChar(128)
+  commandType   String        @map("command_type") @db.VarChar(64)
+  deliveryScope DeliveryScope @map("delivery_scope")
+  eventSequence BigInt?       @map("event_sequence")
+  result        Json
+  createdAt     DateTime      @map("created_at") @db.Timestamptz(3)
+  lobby         Lobby         @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
+  participant   Participant   @relation(fields: [lobbyId, participantId], references: [lobbyId, id], onDelete: Cascade)
+  round         Round?        @relation(fields: [roundId], references: [id], onDelete: Cascade)
+
+  @@id([lobbyId, participantId, commandId])
+  @@map("command_results")
+}

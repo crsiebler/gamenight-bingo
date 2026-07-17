@@ -5,6 +5,17 @@
   "type": "module",
   "exports": "./src/index.ts",
   "scripts": {
+    "generate": "prisma generate --config prisma.config.ts",
+    "migrate:deploy": "prisma migrate deploy --config prisma.config.ts",
     "typecheck": "tsc --project tsconfig.json --pretty false"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "7.6.0",
+    "@prisma/client": "7.6.0",
+    "pg": "8.16.3"
+  },
+  "devDependencies": {
+    "@types/pg": "8.15.5",
+    "prisma": "7.6.0"
   }
 }

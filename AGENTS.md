@@ -259,8 +259,20 @@ then refactor while green.
 
 - Keep Prisma confined to `packages/database`; expose repositories to the rest
   of the application.
+- Prisma 7 generates its ignored client under `packages/database/generated` via
+  `bun run db:generate`; the root install-time prepare script regenerates it, and
+  application packages import only database repository interfaces.
 - Design constraints for scoped uniqueness, command idempotency, monotonic event
   sequences, and cascade deletion rather than relying only on application checks.
+- PostgreSQL-only partial indexes, checks, and composite foreign keys live in
+  append-only migration SQL because Prisma schema syntax cannot represent them;
+  inspect generated migrations so later schema changes do not drop those guards.
+- `rounds.lobby_id` is unique: the durable model retains one current round and
+  cascades its cards, marks, private draw order, calls, winners, round events, and
+  command results rather than storing prior-round history.
+- Run database integration tests only with an explicit approved
+  `TEST_DATABASE_URL` after `DATABASE_URL=... bun run db:migrate:deploy`; the
+  generic test command skips that suite when no test database is supplied.
 - Migration files are append-only once shared. Do not edit applied migrations to
   change history.
 - Obtain explicit confirmation before creating or running a migration unless the

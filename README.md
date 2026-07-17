@@ -40,7 +40,9 @@ Browser
 - **Game server:** a separate long-lived Node.js Socket.IO process owns
   low-latency commands, presence, timers, and sequenced events.
 - **Database:** PostgreSQL is durable truth. Prisma is confined to repository
-  implementations rather than imported by domain code.
+  implementations rather than imported by domain code. The durable model keeps
+  only one current round per lobby and cascades its private state when replaced
+  or when the lobby is deleted.
 - **Contracts:** Zod schemas version and validate HTTP and realtime boundaries.
 - **Local infrastructure:** Docker Compose supplies PostgreSQL. Redis is
   reserved for an optional future profile and is not an MVP dependency.
@@ -162,10 +164,13 @@ realtime tickets cannot outlive reconnect, and reconnect must be shorter than
 lobby retention. Values must be unsigned decimal integers; invalid errors name
 the setting and constraint without including its supplied value.
 
-Application database URLs, public origins, cookie secrets, and process ports are
-infrastructure-specific. Their names and defaults will be defined by the
-dependency-ordered runtime stories. Actual secret values have no repository
-default and belong only in approved local or hosted secret storage.
+`DATABASE_URL` selects the PostgreSQL database used by Prisma migration commands;
+it has no usable repository default and must target an explicitly approved local
+or test database during development. `TEST_DATABASE_URL` enables the isolated
+PostgreSQL integration suite. Public origins, cookie secrets, and process ports
+remain infrastructure-specific and will be defined by dependency-ordered runtime
+stories. Actual secret values belong only in approved local or hosted secret
+storage.
 
 ## Workspace
 
@@ -264,6 +269,9 @@ bun run lint
 bun run format:check
 bun run typecheck
 bun run test
+bun run db:generate
+DATABASE_URL='<approved-local-or-test-url>' bun run db:migrate:deploy
+TEST_DATABASE_URL='<migrated-test-url>' bun run test:database
 bun run test:e2e
 ```
 
@@ -275,6 +283,10 @@ should run the narrow affected suite while developing and all required root
 checks before committing. The initial Playwright smoke test validates the runner
 without an application server or downloaded browser; browser-journey stories
 must install the required Playwright browsers before running their suites.
+The generic Vitest run skips database integration tests when `TEST_DATABASE_URL`
+is absent; database changes must also run `test:database` against PostgreSQL 16
+after applying the committed migrations. Never run migration or integration-test
+commands against production.
 
 ## Contributing
 

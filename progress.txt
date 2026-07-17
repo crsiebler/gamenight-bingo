@@ -27,6 +27,9 @@ Next story: US-001
 - Category preview pages reuse the source-filtered canonical preview model and shared renderer while exposing category-specific creation/generation functions, committed goldens, and standalone HTML paths.
 - Complete pattern audits join all PDF inventory/review rows to runtime IDs, aliases, exact or flexible mask parity, approved identity/mask constraints, and the combined category preview goldens; mutation tests must prove each audit failure category remains fail-closed.
 - Domain transitions return discriminated stable errors for expected state rejection and throw `RangeError` only for malformed internal values such as invalid counts, timestamps, or durations.
+- Prisma 7 is confined to `packages/database`; `bun run db:generate` creates the ignored client during install, while repository interfaces expose durable aggregate state without exporting Prisma types.
+- PostgreSQL-only partial indexes, checks, and composite foreign keys live in append-only migration SQL; the durable schema keeps one current round per lobby so round cards, marks, private draw order, calls, winners, events, and command results cascade without prior-round history.
+- Database integration tests require an explicitly approved, migrated PostgreSQL 16 `TEST_DATABASE_URL`; the generic Vitest run skips them when the variable is absent.
 
 Append-only iteration log
 -------------------------
@@ -1516,3 +1519,64 @@ Targeted re-review outcome for US-020 at 2026-07-17 01:17:43 MST:
 - The stage-shape, boundary compatibility, continuation-target, transition-matrix, and malformed-input findings are resolved.
 - Residual risk is limited to deferred persistence/wire-adapter integration and no measured coverage percentage; neither is required by this pure-domain story, and all project-required checks pass.
 - No in-scope critical, high, or medium findings remain. US-020 can be marked passing and committed.
+
+## 2026-07-17 01:40:16 MST - US-021
+- What was implemented
+  - Added the Prisma 7/PostgreSQL durable model for lobbies, participants, hash-only sessions, presence generations, one current round, cards, marks, private draw positions, calls, co-winners, active-lobby events, command results, and inactivity timestamps.
+  - Added an append-only migration with PostgreSQL-only partial indexes, checks, composite foreign keys, current-round uniqueness, valid-card validation, called-mark integrity, scoped event/command integrity, and lobby-owned cascade deletion.
+  - Added a Prisma-backed aggregate repository that exposes no Prisma types and reconstructs complete authoritative state after disconnect/restart, plus PostgreSQL 16 integration coverage for restart persistence, scoped uniqueness, token storage, cascade metadata, and no prior-round history model.
+- Files changed: `.gitignore`, `.prettierignore`, `AGENTS.md`, `README.md`, `bun.lock`, `eslint.config.mjs`, `package.json`, `packages/database/package.json`, `packages/database/prisma.config.ts`, `packages/database/prisma/schema.prisma`, `packages/database/prisma/migrations/migration_lock.toml`, `packages/database/prisma/migrations/20260717083124_initial_durable_state/migration.sql`, `packages/database/src/database.integration.test.ts`, `packages/database/src/index.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/tsconfig.json`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-021 - Model durable PostgreSQL state`
+- Auto approval: `enabled`
+- Checks:
+  - `TEST_DATABASE_URL=... bunx vitest run packages/database/src/database.integration.test.ts` (expected fail before implementation: 4 failures because the repository and schema were absent; pass after implementation with 4 tests)
+  - `DATABASE_URL=... bun run db:migrate:deploy` (pass; initial migration applied to an empty isolated PostgreSQL 16 database)
+  - `DATABASE_URL=... prisma validate --config packages/database/prisma.config.ts` (pass)
+  - `DATABASE_URL=... prisma migrate status --config packages/database/prisma.config.ts` (pass; schema up to date)
+  - `bun install --frozen-lockfile` (pass; generated Prisma client refreshed with no lock changes)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (fail only on three pre-existing untracked US-018 browser report artifacts)
+  - `git diff --cached --name-only -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete staged candidate)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `TEST_DATABASE_URL=... bun run test` (pass after review remediation; 15 Vitest files and 238 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `postgres-pro`, `database-optimizer`
+  - Used: `postgres-pro`, `database-optimizer` for relational shape, custom PostgreSQL constraints, minimal indexing, repository boundaries, restart query shape, and integration-test guidance
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and dependency/data-integrity-triggered `security-engineer`; targeted re-review by the same specialists
+  - Findings: initial cross-lobby card ownership, nullable-check, call-fixture, and cascade-assertion findings fixed; targeted re-review returned no actionable findings
+- Decisions (why):
+  - Kept exactly one round per lobby with cascaded round-owned state because persistence must support restart without retaining prior-round result history.
+  - Stored the full draw permutation only in the server-internal repository aggregate and exposed no Prisma client/model types, so future adapters can construct privacy-safe snapshots without making future calls representable in wire contracts.
+  - Used custom migration SQL for partial indexes, checks, and cross-table composite integrity because Prisma 7 does not model those PostgreSQL features; the Prisma schema remains the portable relation model.
+  - Deferred Serializable retry, sequence allocation, and duplicate-command execution behavior to US-022 while modeling the uniqueness and foreign-key prerequisites now.
+  - Left unrelated untracked browser-verification artifacts unchanged and used an isolated PostgreSQL 16 Compose project on loopback for migration and integration validation.
+- **Learnings for future iterations:**
+  - Prisma 7 requires an explicit PostgreSQL driver adapter at runtime and generates a client to the package-local ignored directory during root install preparation.
+  - Future Prisma schema changes must inspect generated SQL for accidental loss of custom partial indexes, checks, or composite foreign keys that Prisma cannot represent.
+  - Database integration tests are opt-in through an explicit migrated `TEST_DATABASE_URL`; generic root tests remain usable without starting PostgreSQL.
+- Known issues / follow-ups:
+  - Root `bun run format:check` still scans pre-existing untracked US-018 Lighthouse/DOM artifacts; those unrelated files remain intentionally untouched and unstaged.
+  - US-022 must add bounded Serializable retries, atomic event-sequence allocation, persist-before-broadcast command commits, and idempotent replay behavior over this schema.
+- Next iteration start:
+  - Implement US-022 serializable idempotent transactions over the committed durable schema.
+---
+
+Review remediation for US-021 at 2026-07-17 01:52:41 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced four deduplicated blocking findings: cards were not constrained to participants in the round's lobby, nullable PostgreSQL checks failed open on `UNKNOWN`, the call-uniqueness fixture could fail through an unrelated draw foreign key, and cascade coverage checked only table-level metadata.
+- Added failing regressions first; the focused suite failed in all four expected areas before remediation.
+- Added lobby-scoped card storage and composite participant/round ownership constraints, propagated lobby identity through the repository, and added cross-lobby rejection coverage.
+- Made card arrays non-null, forced nullable session/presence/round checks to evaluate `IS TRUE`, and covered missing rejoin, grace, automatic-interval, and card data.
+- Corrected the duplicate-call fixture to retain a valid draw tuple, proved the same call position/ball remains reusable across rounds, and strengthened cascade assertions to require the exact owned table-to-parent foreign-key edges.
+- An executing `DELETE` cascade test was not added because the active scoped approval explicitly excludes destructive operations and repository policy prohibits executing DELETE without separate confirmation; exact foreign-key edge and delete-rule inspection provides non-destructive migration verification.
+- Post-fix checks: migration applied from empty to a fresh isolated PostgreSQL 16 database, focused 6 integration tests pass, `bun run lint` (pass), `bun run typecheck` (pass), full 238-test suite with `TEST_DATABASE_URL` (pass), Playwright smoke (pass), and migration deploy status (pass).
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` because the fixes affect all three original specialist areas.
+
+Targeted re-review outcome for US-021 at 2026-07-17 01:55:19 MST:
+- `code-reviewer`, `qa-expert`, and `security-engineer` reviewed the revised complete staged diff and returned empty actionable finding lists.
+- The cross-lobby ownership, nullable-check, call-fixture, and cascade-edge findings are resolved.
+- Residual risk is limited to structural rather than executing DELETE cascade verification because destructive-operation approval was not granted; the committed foreign-key graph and delete rules are covered non-destructively.
+- No in-scope critical, high, or medium findings remain. US-021 can be marked passing and committed.

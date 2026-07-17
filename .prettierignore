@@ -6,3 +6,4 @@ tests/fixtures/quality/
 bun.lock
 docs/*.pdf
 progress.txt
+packages/database/generated/
