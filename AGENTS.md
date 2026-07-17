@@ -43,10 +43,10 @@ docker compose --profile redis up -d
 ```
 
 The default Compose stack starts only PostgreSQL. Web and game-server processes
-run through Bun outside Docker after their runtime implementation stories land.
+run through Bun outside Docker as their runtime implementation stories land.
 
-These are the remaining root command contracts after the relevant application
-stories add them:
+The web command is available; the game-server command remains a contract until
+its runtime story lands:
 
 ```sh
 bun run dev:web
@@ -147,6 +147,11 @@ invalid counts, timestamps, or durations.
 - Validate snapshot references as one authorized projection: lobby, round,
   session, roster roles and presence, timers, own card/marks, calls, and winners
   must agree with each other.
+- Project stage-specific snapshot fields only when that durable stage requires
+  them; an open co-winner window may have confirmed winners but no settled result.
+- Build authorized snapshots from an allowlisted actor-scoped repository query;
+  never adapt `findById`, which contains session hashes, every card, private draw
+  order, active events, and command results.
 - Reconnect never automatically resumes paused calling.
 
 ## HTTP Conventions
@@ -154,13 +159,25 @@ invalid counts, timestamps, or durations.
 - Put application endpoints under `/api/v1` and validate inputs and outputs with
   shared versioned contracts.
 - Return stable machine-readable error codes with safe, actionable messages.
+- Route unsupported methods and unknown private API resources through the same
+  versioned dispatcher so framework-generated 404/405 responses cannot bypass
+  stable error schemas or private `no-store` headers.
 - Authenticate and authorize every private read and mutation; a lobby code is a
   locator, not proof of identity or host authority.
 - Apply origin/CSRF checks, payload limits, and independent rate limits where
   required by the PRD.
+- Derive requester rate-limit keys only at a trusted proxy boundary that
+  overwrites or appends the observed address and prevents direct origin access.
+  Require an authenticated proxy marker that clients cannot supply, hash
+  requester addresses, bound active in-memory buckets, and use one bounded
+  unidentified bucket when no valid trusted address is available. Rate-limit
+  session-status and snapshot reads before they can acquire lobby fences.
 - Set `Cache-Control: no-store` on private responses.
 - Require command IDs on mutation endpoints and return committed sequence and
   idempotent result data.
+- A replayed entry command may return its original immutable metadata but must
+  never mint a new participant credential from a command ID. Commit rejoin
+  idempotency and session activation in one lobby-scoped transaction.
 - Do not add APIs for chat, event-history retrieval, prior-round browsing, or
   expired-lobby restoration.
 
@@ -193,6 +210,11 @@ then refactor while green.
 - Put pure rules under unit and property-based tests.
 - Test HTTP and realtime boundaries for contract parsing, authorization,
   idempotency, privacy, and stable errors.
+- Verify framework-routing guarantees such as unsupported methods, catch-all
+  resources, stable errors, and private cache headers with live Next requests;
+  dispatcher unit tests or route-source assertions alone do not exercise that
+  boundary. The live API route suite requires an approved migrated
+  `TEST_DATABASE_URL` and otherwise skips only that database-backed test.
 - Use isolated PostgreSQL integration tests for repository, transaction,
   migration, concurrency, and restart behavior.
 - Use multi-client Socket.IO tests for ordering, presence, reconnects, timers,
@@ -254,6 +276,11 @@ then refactor while green.
   than accepting it from clients. Rejoin-status resolution must run the
   lobby-scoped expiry transition before cookie validation so a missing, cleared,
   or malformed credential cannot defer departure.
+- Authorized snapshot rosters prioritize every referenced actor. The bounded
+  projection may contain 26 entries only when preserving the 25-player current
+  round plus one waiting replacement actor; otherwise exclude unrelated departed
+  history and retain the normal current-roster bound. This does not increase
+  lobby admission capacity.
 - Do not fingerprint devices or collect unnecessary device attributes.
 - Never log cookies, realtime tickets, secrets, future draw positions, private
   cards, or full private snapshots.

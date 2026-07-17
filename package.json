@@ -10,6 +10,7 @@
     "check:workspace-boundaries": "bun scripts/check-workspace-boundaries.mjs",
     "db:generate": "bun run --cwd packages/database generate",
     "db:migrate:deploy": "bun run --cwd packages/database migrate:deploy",
+    "dev:web": "bun run --cwd apps/web dev",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint . --max-warnings=0",

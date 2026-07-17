@@ -1,4 +1,10 @@
 import { PrismaPg } from "@prisma/adapter-pg";
+import {
+  CONTRACT_SCHEMA_VERSION,
+  LobbyEntryResponseSchema,
+  SnapshotSchema,
+  type Snapshot,
+} from "@gamenight-bingo/contracts";
 import { normalizeUsername, type UsernameNormalizationResult } from "@gamenight-bingo/domain";
 
 import {
@@ -251,7 +257,74 @@ export type CreateActiveLobbyResult =
       };
     };
 
+export interface LobbyEntryRecord {
+  readonly commandId: string;
+  readonly idempotentReplay: boolean;
+  readonly lobbyId: string;
+  readonly lobbyCode: string;
+  readonly themeId: string;
+  readonly participantId: string;
+  readonly username: string;
+  readonly role: ParticipantRole;
+  readonly roundEligibility: RoundEligibility;
+  readonly sessionId: string;
+  readonly issuedAt: Date;
+}
+
+interface NewLobbyEntrySession {
+  readonly commandId: string;
+  readonly participantId: string;
+  readonly sessionId: string;
+  readonly username: string;
+  readonly tokenHash: Uint8Array;
+  readonly issuedAt: Date;
+}
+
+export interface CreateLobbyWithHostInput extends NewLobbyEntrySession {
+  readonly lobbyId: string;
+  readonly themeId: string;
+  readonly maxActiveLobbies: number;
+  readonly nextCode: () => string;
+}
+
+export interface JoinLobbyWithSessionInput extends NewLobbyEntrySession {
+  readonly lobbyId: string;
+  readonly lobbyCode: string;
+  readonly maxPlayersPerLobby: number;
+}
+
+export interface RejoinLobbyWithSessionInput {
+  readonly lobbyId: string;
+  readonly tokenHash: Uint8Array;
+  readonly commandId: string;
+}
+
+type LobbyEntryMutationError =
+  | Extract<UsernameNormalizationResult, { readonly ok: false }>["error"]
+  | {
+      readonly code:
+        | "ACTIVE_LOBBY_LIMIT_REACHED"
+        | "COMMAND_REPLAY_MISMATCH"
+        | "LOBBY_FULL"
+        | "LOBBY_NOT_FOUND"
+        | "TOKEN_HASH_COLLISION"
+        | "USERNAME_TAKEN";
+      readonly message: string;
+    };
+
+export type LobbyEntryMutationResult =
+  | { readonly ok: true; readonly entry: LobbyEntryRecord }
+  | {
+      readonly ok: false;
+      readonly error: LobbyEntryMutationError;
+    };
+
 export interface LobbyStateRepository {
+  createLobbyWithHost(input: CreateLobbyWithHostInput): Promise<LobbyEntryMutationResult>;
+  joinLobbyWithSession(input: JoinLobbyWithSessionInput): Promise<LobbyEntryMutationResult>;
+  rejoinLobbyWithSession(
+    input: RejoinLobbyWithSessionInput,
+  ): Promise<LobbyEntryMutationResult | null>;
   createActive(
     state: NewActiveLobbyState,
     options: CreateActiveLobbyOptions,
@@ -269,6 +342,10 @@ export interface LobbyStateRepository {
   }): Promise<Extract<RecognizedParticipantSession, { readonly status: "disconnected" }> | null>;
   findById(lobbyId: string): Promise<DurableLobbyState | null>;
   findActiveLobbyIdByCode(code: string): Promise<string | null>;
+  findAuthorizedSnapshot(input: {
+    readonly lobbyId: string;
+    readonly tokenHash: Uint8Array;
+  }): Promise<Snapshot | null>;
   resolveParticipantSessionByTokenHash(input: {
     readonly lobbyId: string;
     readonly tokenHash: Uint8Array;
@@ -427,6 +504,50 @@ function toJsonObject(value: Prisma.JsonValue): JsonObject {
     throw new TypeError("Persisted event and command payloads must be JSON objects.");
   }
   return value as JsonObject;
+}
+
+function toPersistedLobbyEntry(entry: LobbyEntryRecord): JsonObject {
+  return {
+    schemaVersion: CONTRACT_SCHEMA_VERSION,
+    type: "lobby-entry",
+    commandId: entry.commandId,
+    idempotentReplay: false,
+    lobby: { id: entry.lobbyId, code: entry.lobbyCode, themeId: entry.themeId },
+    participant: {
+      id: entry.participantId,
+      username: entry.username,
+      role: entry.role,
+      roundEligibility: entry.roundEligibility,
+    },
+    session: {
+      id: entry.sessionId,
+      status: "active",
+      issuedAt: entry.issuedAt.toISOString(),
+    },
+  };
+}
+
+function fromPersistedLobbyEntry(
+  value: JsonValue | undefined,
+  commandId: string,
+): LobbyEntryRecord {
+  const entry = LobbyEntryResponseSchema.parse(value);
+  if (entry.commandId !== commandId || entry.idempotentReplay) {
+    throw new Error("Persisted lobby entry command metadata is inconsistent.");
+  }
+  return {
+    commandId,
+    idempotentReplay: true,
+    lobbyId: entry.lobby.id,
+    lobbyCode: entry.lobby.code,
+    themeId: entry.lobby.themeId,
+    participantId: entry.participant.id,
+    username: entry.participant.username,
+    role: entry.participant.role,
+    roundEligibility: entry.participant.roundEligibility,
+    sessionId: entry.session.id,
+    issuedAt: new Date(entry.session.issuedAt),
+  };
 }
 
 function assertValidDate(value: Date, name: string): void {
@@ -784,6 +905,439 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
         createdAt: command.createdAt,
       })),
     });
+  }
+
+  async createLobbyWithHost(input: CreateLobbyWithHostInput): Promise<LobbyEntryMutationResult> {
+    if (!Number.isSafeInteger(input.maxActiveLobbies) || input.maxActiveLobbies < 1) {
+      throw new RangeError("The active lobby limit must be a positive safe integer.");
+    }
+    if (input.tokenHash.length !== 32) {
+      throw new RangeError("Participant session token hashes must contain exactly 32 bytes.");
+    }
+    assertValidDate(input.issuedAt, "The participant session issuance timestamp");
+    const normalized = normalizeUsername(input.username);
+    if (!normalized.ok) {
+      return { ok: false, error: normalized.error };
+    }
+
+    for (let attempt = 0; attempt < 128; attempt += 1) {
+      const code = input.nextCode();
+      if (!/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/.test(code)) {
+        throw new RangeError(
+          "Generated lobby codes must use the canonical six-character alphabet.",
+        );
+      }
+      try {
+        const result = await runTransactionWithRetry(
+          async () =>
+            this.prisma.$transaction(
+              async (transaction) => {
+                await transaction.$queryRaw`
+                  SELECT pg_advisory_xact_lock(17742, 23001)::text AS "lock"
+                `;
+                const prior = await transaction.commandResult.findFirst({
+                  where: { commandId: input.commandId, commandType: "create-lobby" },
+                  select: {
+                    result: true,
+                    lobby: { select: { id: true, code: true, status: true, themeId: true } },
+                    participant: {
+                      select: {
+                        id: true,
+                        username: true,
+                        role: true,
+                        roundEligibility: true,
+                        departedAt: true,
+                      },
+                    },
+                  },
+                });
+                if (prior !== null) {
+                  const intent = toJsonObject(prior.result);
+                  if (
+                    intent["normalizedUsername"] !== normalized.normalizedUsername ||
+                    intent["themeId"] !== input.themeId
+                  ) {
+                    return {
+                      ok: false,
+                      error: {
+                        code: "COMMAND_REPLAY_MISMATCH",
+                        message:
+                          "The command ID was already used for different lobby entry intent.",
+                      },
+                    } as const;
+                  }
+                  if (
+                    !["WAITING", "ACTIVE"].includes(prior.lobby.status) ||
+                    prior.participant.departedAt !== null
+                  ) {
+                    return {
+                      ok: false,
+                      error: {
+                        code: "LOBBY_NOT_FOUND",
+                        message: "The active lobby was not found.",
+                      },
+                    } as const;
+                  }
+                  const entry = fromPersistedLobbyEntry(intent["entry"], input.commandId);
+                  if (
+                    entry.lobbyId !== prior.lobby.id ||
+                    entry.participantId !== prior.participant.id
+                  ) {
+                    throw new Error("Create-lobby command entry scope is inconsistent.");
+                  }
+                  return { ok: true, entry } as const;
+                }
+
+                const activeLobbyCount = await transaction.lobby.count({
+                  where: { status: { in: ["WAITING", "ACTIVE"] } },
+                });
+                if (activeLobbyCount >= input.maxActiveLobbies) {
+                  return {
+                    ok: false,
+                    error: {
+                      code: "ACTIVE_LOBBY_LIMIT_REACHED",
+                      message: "The active lobby limit has been reached.",
+                    },
+                  } as const;
+                }
+                const collision = await transaction.lobby.findFirst({
+                  where: { code, status: { in: ["WAITING", "ACTIVE"] } },
+                  select: { id: true },
+                });
+                if (collision !== null) return "collision" as const;
+
+                const entry: LobbyEntryRecord = {
+                  commandId: input.commandId,
+                  idempotentReplay: false,
+                  lobbyId: input.lobbyId,
+                  lobbyCode: code,
+                  themeId: input.themeId,
+                  participantId: input.participantId,
+                  username: normalized.username,
+                  role: "host",
+                  roundEligibility: "playing",
+                  sessionId: input.sessionId,
+                  issuedAt: input.issuedAt,
+                };
+                await this.insert(transaction, {
+                  lobby: {
+                    id: input.lobbyId,
+                    code,
+                    status: "waiting",
+                    themeId: input.themeId,
+                    createdAt: input.issuedAt,
+                    lastActivityAt: input.issuedAt,
+                    endedAt: null,
+                    lastEventSequence: 0n,
+                  },
+                  participants: [
+                    {
+                      id: input.participantId,
+                      username: normalized.username,
+                      normalizedUsername: normalized.normalizedUsername,
+                      role: "host",
+                      roundEligibility: "playing",
+                      joinedAt: input.issuedAt,
+                      departedAt: null,
+                    },
+                  ],
+                  sessions: [
+                    {
+                      id: input.sessionId,
+                      participantId: input.participantId,
+                      tokenHash: input.tokenHash,
+                      status: "active",
+                      issuedAt: input.issuedAt,
+                      disconnectedAt: null,
+                      rejoinUntil: null,
+                      departedAt: null,
+                    },
+                  ],
+                  presenceGenerations: [
+                    {
+                      participantId: input.participantId,
+                      generation: 1n,
+                      status: "absent",
+                      connectionCount: 0,
+                      changedAt: input.issuedAt,
+                      graceEndsAt: null,
+                      absentSince: input.issuedAt,
+                      departedAt: null,
+                      overridden: false,
+                      endedAt: null,
+                    },
+                  ],
+                  round: null,
+                  events: [],
+                  commandResults: [
+                    {
+                      participantId: input.participantId,
+                      commandId: input.commandId,
+                      roundId: null,
+                      commandType: "create-lobby",
+                      deliveryScope: "participant-private",
+                      eventSequence: null,
+                      result: {
+                        normalizedUsername: normalized.normalizedUsername,
+                        themeId: input.themeId,
+                        entry: toPersistedLobbyEntry(entry),
+                      },
+                      createdAt: input.issuedAt,
+                    },
+                  ],
+                });
+                return { ok: true, entry } as const;
+              },
+              {
+                isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+                maxWait: 5_000,
+                timeout: 10_000,
+              },
+            ),
+          this.retryOptions,
+        );
+        if (result === "collision") continue;
+        return result;
+      } catch (error) {
+        if (isParticipantSessionTokenHashCollision(error)) {
+          return {
+            ok: false,
+            error: {
+              code: "TOKEN_HASH_COLLISION",
+              message: "The participant session credential collided.",
+            },
+          };
+        }
+        throw error;
+      }
+    }
+    throw new Error("Unable to generate a unique active lobby code.");
+  }
+
+  async joinLobbyWithSession(input: JoinLobbyWithSessionInput): Promise<LobbyEntryMutationResult> {
+    if (
+      !Number.isSafeInteger(input.maxPlayersPerLobby) ||
+      input.maxPlayersPerLobby < 1 ||
+      input.maxPlayersPerLobby > 25
+    ) {
+      throw new RangeError("The participant limit must be a safe integer between 1 and 25.");
+    }
+    if (input.tokenHash.length !== 32) {
+      throw new RangeError("Participant session token hashes must contain exactly 32 bytes.");
+    }
+    if (!/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/.test(input.lobbyCode)) {
+      throw new RangeError("Lobby codes must use the canonical six-character alphabet.");
+    }
+    assertValidDate(input.issuedAt, "The participant session issuance timestamp");
+    const normalized = normalizeUsername(input.username);
+    if (!normalized.ok) {
+      return { ok: false, error: normalized.error };
+    }
+
+    try {
+      return await runTransactionWithRetry(
+        async () =>
+          this.prisma.$transaction(
+            async (transaction) => {
+              const lobbies = await transaction.$queryRaw<
+                readonly { id: string; code: string; themeId: string }[]
+              >`
+                UPDATE "lobbies"
+                   SET "last_event_sequence" = "last_event_sequence"
+                 WHERE "id" = ${input.lobbyId}
+                   AND "code" = ${input.lobbyCode}
+                   AND "status" IN ('WAITING', 'ACTIVE')
+                 RETURNING "id", "code", "theme_id" AS "themeId"
+              `;
+              const lobby = lobbies[0];
+              if (lobby === undefined) {
+                return {
+                  ok: false,
+                  error: {
+                    code: "LOBBY_NOT_FOUND",
+                    message: "The active lobby was not found.",
+                  },
+                } as const;
+              }
+
+              await this.expireDueParticipantSessions(
+                transaction,
+                input.lobbyId,
+                this.currentLifecycleTime(),
+              );
+              const prior = await transaction.commandResult.findFirst({
+                where: {
+                  lobbyId: input.lobbyId,
+                  commandId: input.commandId,
+                  commandType: "join-lobby",
+                },
+                select: {
+                  result: true,
+                  participant: {
+                    select: {
+                      id: true,
+                      username: true,
+                      role: true,
+                      roundEligibility: true,
+                      departedAt: true,
+                    },
+                  },
+                },
+              });
+              if (prior !== null) {
+                const intent = toJsonObject(prior.result);
+                if (intent["normalizedUsername"] !== normalized.normalizedUsername) {
+                  return {
+                    ok: false,
+                    error: {
+                      code: "COMMAND_REPLAY_MISMATCH",
+                      message: "The command ID was already used for different lobby entry intent.",
+                    },
+                  } as const;
+                }
+                if (prior.participant.departedAt !== null) {
+                  return {
+                    ok: false,
+                    error: {
+                      code: "LOBBY_NOT_FOUND",
+                      message: "The active lobby was not found.",
+                    },
+                  } as const;
+                }
+                const entry = fromPersistedLobbyEntry(intent["entry"], input.commandId);
+                if (
+                  entry.lobbyId !== input.lobbyId ||
+                  entry.participantId !== prior.participant.id
+                ) {
+                  throw new Error("Join-lobby command entry scope is inconsistent.");
+                }
+                return { ok: true, entry } as const;
+              }
+              const existing = await transaction.participant.findUnique({
+                where: {
+                  lobbyId_normalizedUsername: {
+                    lobbyId: input.lobbyId,
+                    normalizedUsername: normalized.normalizedUsername,
+                  },
+                },
+                select: { id: true },
+              });
+              if (existing !== null) {
+                return {
+                  ok: false,
+                  error: {
+                    code: "USERNAME_TAKEN",
+                    message: "That username is already in use.",
+                  },
+                } as const;
+              }
+              const participantCount = await transaction.participant.count({
+                where: { lobbyId: input.lobbyId, departedAt: null },
+              });
+              if (participantCount >= input.maxPlayersPerLobby) {
+                return {
+                  ok: false,
+                  error: { code: "LOBBY_FULL", message: "The lobby is full." },
+                } as const;
+              }
+              const currentRound = await transaction.round.findUnique({
+                where: { lobbyId: input.lobbyId },
+                select: { stage: true },
+              });
+              const roundEligibility = currentRound === null ? "playing" : "waiting";
+              const entry: LobbyEntryRecord = {
+                commandId: input.commandId,
+                idempotentReplay: false,
+                lobbyId: input.lobbyId,
+                lobbyCode: lobby.code,
+                themeId: lobby.themeId,
+                participantId: input.participantId,
+                username: normalized.username,
+                role: "player",
+                roundEligibility,
+                sessionId: input.sessionId,
+                issuedAt: input.issuedAt,
+              };
+
+              await transaction.participant.create({
+                data: {
+                  id: input.participantId,
+                  lobbyId: input.lobbyId,
+                  username: normalized.username,
+                  normalizedUsername: normalized.normalizedUsername,
+                  role: "PLAYER",
+                  roundEligibility: roundEligibilities.toDatabase(roundEligibility),
+                  joinedAt: input.issuedAt,
+                  departedAt: null,
+                },
+              });
+              await transaction.presenceGeneration.create({
+                data: {
+                  lobbyId: input.lobbyId,
+                  participantId: input.participantId,
+                  generation: 1n,
+                  status: "ABSENT",
+                  connectionCount: 0,
+                  changedAt: input.issuedAt,
+                  graceEndsAt: null,
+                  absentSince: input.issuedAt,
+                  departedAt: null,
+                  overridden: false,
+                  endedAt: null,
+                },
+              });
+              await transaction.participantSession.create({
+                data: {
+                  id: input.sessionId,
+                  lobbyId: input.lobbyId,
+                  participantId: input.participantId,
+                  tokenHash: new Uint8Array(input.tokenHash),
+                  status: "ACTIVE",
+                  issuedAt: input.issuedAt,
+                  disconnectedAt: null,
+                  rejoinUntil: null,
+                  departedAt: null,
+                },
+              });
+              await transaction.commandResult.create({
+                data: {
+                  lobbyId: input.lobbyId,
+                  participantId: input.participantId,
+                  commandId: input.commandId,
+                  roundId: null,
+                  commandType: "join-lobby",
+                  deliveryScope: "PARTICIPANT_PRIVATE",
+                  eventSequence: null,
+                  result: toInputJson({
+                    normalizedUsername: normalized.normalizedUsername,
+                    entry: toPersistedLobbyEntry(entry),
+                  }),
+                  createdAt: input.issuedAt,
+                },
+              });
+
+              return { ok: true, entry } as const;
+            },
+            {
+              isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+              maxWait: 5_000,
+              timeout: 10_000,
+            },
+          ),
+        this.retryOptions,
+      );
+    } catch (error) {
+      if (isParticipantSessionTokenHashCollision(error)) {
+        return {
+          ok: false,
+          error: {
+            code: "TOKEN_HASH_COLLISION",
+            message: "The participant session credential collided.",
+          },
+        };
+      }
+      throw error;
+    }
   }
 
   async createActive(
@@ -1311,6 +1865,647 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
         createdAt: command.createdAt,
       })),
     };
+  }
+
+  async rejoinLobbyWithSession(
+    input: RejoinLobbyWithSessionInput,
+  ): Promise<LobbyEntryMutationResult | null> {
+    if (input.tokenHash.length !== 32) {
+      throw new RangeError("Participant session token hashes must contain exactly 32 bytes.");
+    }
+    return runTransactionWithRetry(
+      async () =>
+        this.prisma.$transaction(
+          async (transaction) => {
+            const fenced = await transaction.$queryRaw<readonly { id: string }[]>`
+              UPDATE "lobbies"
+                 SET "last_event_sequence" = "last_event_sequence"
+               WHERE "id" = ${input.lobbyId}
+                 AND "status" IN ('WAITING', 'ACTIVE')
+               RETURNING "id"
+            `;
+            if (fenced.length !== 1) return null;
+            const now = this.currentLifecycleTime();
+            await this.expireDueParticipantSessions(transaction, input.lobbyId, now);
+            const session = await transaction.participantSession.findFirst({
+              where: {
+                lobbyId: input.lobbyId,
+                tokenHash: new Uint8Array(input.tokenHash),
+                status: { in: ["ACTIVE", "DISCONNECTED"] },
+                participant: { departedAt: null },
+              },
+              select: {
+                id: true,
+                status: true,
+                issuedAt: true,
+                lobby: { select: { id: true, code: true, themeId: true } },
+                participant: {
+                  select: { id: true, username: true, role: true, roundEligibility: true },
+                },
+              },
+            });
+            if (session === null) return null;
+            const entry: LobbyEntryRecord = {
+              commandId: input.commandId,
+              idempotentReplay: false,
+              lobbyId: session.lobby.id,
+              lobbyCode: session.lobby.code,
+              themeId: session.lobby.themeId,
+              participantId: session.participant.id,
+              username: session.participant.username,
+              role: participantRoles.fromDatabase(session.participant.role),
+              roundEligibility: roundEligibilities.fromDatabase(
+                session.participant.roundEligibility,
+              ),
+              sessionId: session.id,
+              issuedAt: session.issuedAt,
+            };
+            const prior = await transaction.commandResult.findUnique({
+              where: {
+                lobbyId_participantId_commandId: {
+                  lobbyId: input.lobbyId,
+                  participantId: session.participant.id,
+                  commandId: input.commandId,
+                },
+              },
+              select: { commandType: true, result: true },
+            });
+            if (prior !== null) {
+              const result = toJsonObject(prior.result);
+              if (prior.commandType !== "rejoin-lobby" || result["sessionId"] !== session.id) {
+                return {
+                  ok: false,
+                  error: {
+                    code: "COMMAND_REPLAY_MISMATCH",
+                    message: "The command ID was already used for different lobby entry intent.",
+                  },
+                } as const;
+              }
+              const replay = fromPersistedLobbyEntry(result["entry"], input.commandId);
+              if (
+                replay.lobbyId !== session.lobby.id ||
+                replay.participantId !== session.participant.id ||
+                replay.sessionId !== session.id
+              ) {
+                throw new Error("Rejoin-lobby command entry scope is inconsistent.");
+              }
+              return { ok: true, entry: replay } as const;
+            }
+            await transaction.commandResult.create({
+              data: {
+                lobbyId: input.lobbyId,
+                participantId: session.participant.id,
+                commandId: input.commandId,
+                roundId: null,
+                commandType: "rejoin-lobby",
+                deliveryScope: "PARTICIPANT_PRIVATE",
+                eventSequence: null,
+                result: toInputJson({
+                  sessionId: session.id,
+                  entry: toPersistedLobbyEntry(entry),
+                }),
+                createdAt: now,
+              },
+            });
+            if (session.status === "DISCONNECTED") {
+              await transaction.participantSession.update({
+                where: { id: session.id },
+                data: {
+                  status: "ACTIVE",
+                  disconnectedAt: null,
+                  rejoinUntil: null,
+                  departedAt: null,
+                },
+              });
+            }
+            await transaction.participantSession.updateMany({
+              where: {
+                lobbyId: session.lobby.id,
+                participantId: session.participant.id,
+                id: { not: session.id },
+                status: { not: "DEPARTED" },
+              },
+              data: { status: "DEPARTED", departedAt: now },
+            });
+            return { ok: true, entry } as const;
+          },
+          {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+            maxWait: 5_000,
+            timeout: 10_000,
+          },
+        ),
+      this.retryOptions,
+    );
+  }
+
+  async findAuthorizedSnapshot(input: {
+    readonly lobbyId: string;
+    readonly tokenHash: Uint8Array;
+  }): Promise<Snapshot | null> {
+    if (input.tokenHash.length !== 32) {
+      throw new RangeError("Participant session token hashes must contain exactly 32 bytes.");
+    }
+
+    return runTransactionWithRetry(
+      async () =>
+        this.prisma.$transaction(
+          async (transaction) => {
+            const fenced = await transaction.$queryRaw<readonly { id: string; status: string }[]>`
+              UPDATE "lobbies"
+                 SET "last_event_sequence" = "last_event_sequence"
+               WHERE "id" = ${input.lobbyId}
+                 AND "status" IN ('WAITING', 'ACTIVE')
+               RETURNING "id", "status"
+            `;
+            if (fenced.length !== 1) {
+              return null;
+            }
+            const generatedAt = this.currentLifecycleTime();
+            await this.expireDueParticipantSessions(transaction, input.lobbyId, generatedAt);
+
+            const session = await transaction.participantSession.findFirst({
+              where: {
+                lobbyId: input.lobbyId,
+                tokenHash: new Uint8Array(input.tokenHash),
+                status: "ACTIVE",
+                participant: { departedAt: null },
+              },
+              select: {
+                id: true,
+                participantId: true,
+                issuedAt: true,
+                participant: { select: { roundEligibility: true } },
+              },
+            });
+            if (session === null) {
+              return null;
+            }
+            const currentRoundParticipantCount = await transaction.card.count({
+              where: { lobbyId: input.lobbyId },
+            });
+            const visibleParticipantLimit =
+              fenced[0]?.status === "ACTIVE" &&
+              session.participant.roundEligibility === "WAITING" &&
+              currentRoundParticipantCount === 25
+                ? 26
+                : 25;
+
+            const visibleParticipantRows = await transaction.$queryRaw<readonly { id: string }[]>`
+              SELECT p."id"
+                FROM "participants" p
+               WHERE p."lobby_id" = ${input.lobbyId}
+                 AND (
+                   p."id" = ${session.participantId}
+                   OR p."role" = 'HOST'
+                   OR p."departed_at" IS NULL
+                   OR EXISTS (
+                     SELECT 1
+                       FROM "co_winners" required_winner
+                      WHERE required_winner."lobby_id" = ${input.lobbyId}
+                        AND required_winner."participant_id" = p."id"
+                   )
+                   OR EXISTS (
+                     SELECT 1
+                       FROM "cards" current_card
+                      WHERE current_card."lobby_id" = ${input.lobbyId}
+                        AND current_card."participant_id" = p."id"
+                   )
+                 )
+               ORDER BY CASE
+                          WHEN p."id" = ${session.participantId} THEN 0
+                          WHEN p."role" = 'HOST' THEN 1
+                          WHEN EXISTS (
+                            SELECT 1
+                              FROM "co_winners" cw
+                             WHERE cw."lobby_id" = ${input.lobbyId}
+                               AND cw."participant_id" = p."id"
+                          ) THEN 2
+                          WHEN EXISTS (
+                            SELECT 1
+                              FROM "cards" required_card
+                             WHERE required_card."lobby_id" = ${input.lobbyId}
+                               AND required_card."participant_id" = p."id"
+                          ) THEN 3
+                          ELSE 4
+                        END,
+                        p."departed_at" DESC NULLS LAST,
+                        p."joined_at" ASC,
+                        p."id" ASC
+               LIMIT ${visibleParticipantLimit}
+            `;
+            const visibleParticipantIds = visibleParticipantRows.map(({ id }) => id);
+
+            const lobby = await transaction.lobby.findUnique({
+              where: { id: input.lobbyId },
+              select: {
+                id: true,
+                code: true,
+                status: true,
+                themeId: true,
+                createdAt: true,
+                lastEventSequence: true,
+                participants: {
+                  where: { id: { in: visibleParticipantIds } },
+                  orderBy: [{ joinedAt: "asc" }, { id: "asc" }],
+                  select: {
+                    id: true,
+                    username: true,
+                    role: true,
+                    roundEligibility: true,
+                    joinedAt: true,
+                    departedAt: true,
+                    presenceGenerations: {
+                      orderBy: { generation: "desc" },
+                      take: 1,
+                      select: {
+                        generation: true,
+                        status: true,
+                        changedAt: true,
+                        graceEndsAt: true,
+                        absentSince: true,
+                        departedAt: true,
+                        overridden: true,
+                      },
+                    },
+                  },
+                },
+                currentRound: {
+                  select: {
+                    id: true,
+                    currentPatternId: true,
+                    stage: true,
+                    callMode: true,
+                    callIntervalSeconds: true,
+                    createdAt: true,
+                    startedAt: true,
+                    pausedAt: true,
+                    pauseReason: true,
+                    nextCallAt: true,
+                    coWinnerTriggeringCallId: true,
+                    coWinnerOpenedAt: true,
+                    coWinnerClosesAt: true,
+                    resultSettledAt: true,
+                    endedAt: true,
+                    cards: {
+                      where: { participantId: session.participantId },
+                      take: 1,
+                      select: {
+                        id: true,
+                        participantId: true,
+                        cells: true,
+                        marks: {
+                          orderBy: { markedAt: "asc" },
+                          select: { id: true, ball: true, markedAt: true },
+                        },
+                      },
+                    },
+                    calls: {
+                      orderBy: { position: "asc" },
+                      select: { id: true, position: true, ball: true, calledAt: true },
+                    },
+                    coWinners: {
+                      orderBy: { participantId: "asc" },
+                      select: { participantId: true },
+                    },
+                  },
+                },
+              },
+            });
+            if (lobby === null) {
+              return null;
+            }
+
+            const host = lobby.participants.find((participant) => participant.role === "HOST");
+            if (host === undefined) {
+              throw new Error("An active lobby requires one host participant.");
+            }
+            const prioritizedParticipants = [...lobby.participants].sort((left, right) => {
+              const priority = (participant: (typeof lobby.participants)[number]): number => {
+                if (participant.id === session.participantId) return 0;
+                if (participant.role === "HOST") return 1;
+                if (participant.departedAt === null) return 2;
+                return 3;
+              };
+              const difference = priority(left) - priority(right);
+              if (difference !== 0) return difference;
+              if (left.departedAt !== null && right.departedAt !== null) {
+                return right.departedAt.getTime() - left.departedAt.getTime();
+              }
+              return left.joinedAt.getTime() - right.joinedAt.getTime();
+            });
+            const visibleParticipants = prioritizedParticipants.slice(0, 26);
+
+            const participants = visibleParticipants.map((participant) => {
+              const latestPresence = participant.presenceGenerations[0];
+              const generation = Number(latestPresence?.generation ?? 1n);
+              if (!Number.isSafeInteger(generation) || generation < 1) {
+                throw new Error("Presence generations must be positive safe integers.");
+              }
+
+              let presence: Record<string, unknown>;
+              if (participant.departedAt !== null) {
+                presence = {
+                  participantId: participant.id,
+                  generation,
+                  status: "departed",
+                  changedAt: participant.departedAt.toISOString(),
+                  departedAt: participant.departedAt.toISOString(),
+                };
+              } else if (latestPresence === undefined) {
+                presence = {
+                  participantId: participant.id,
+                  generation,
+                  status: "absent",
+                  changedAt: participant.joinedAt.toISOString(),
+                  absentSince: participant.joinedAt.toISOString(),
+                  overridden: false,
+                };
+              } else {
+                const base = {
+                  participantId: participant.id,
+                  generation,
+                  changedAt: latestPresence.changedAt.toISOString(),
+                };
+                switch (latestPresence.status) {
+                  case "CONNECTED":
+                    presence = { ...base, status: "connected" };
+                    break;
+                  case "GRACE":
+                    if (latestPresence.graceEndsAt === null) {
+                      throw new Error("Grace presence requires a deadline.");
+                    }
+                    presence = {
+                      ...base,
+                      status: "grace",
+                      graceEndsAt: latestPresence.graceEndsAt.toISOString(),
+                    };
+                    break;
+                  case "ABSENT":
+                    if (latestPresence.absentSince === null) {
+                      throw new Error("Absent presence requires a start timestamp.");
+                    }
+                    presence = {
+                      ...base,
+                      status: "absent",
+                      absentSince: latestPresence.absentSince.toISOString(),
+                      overridden: latestPresence.overridden,
+                    };
+                    break;
+                  case "DEPARTED":
+                    if (latestPresence.departedAt === null) {
+                      throw new Error("Departed presence requires a departure timestamp.");
+                    }
+                    presence = {
+                      ...base,
+                      status: "departed",
+                      departedAt: latestPresence.departedAt.toISOString(),
+                    };
+                    break;
+                }
+              }
+              return {
+                id: participant.id,
+                username: participant.username,
+                role: participantRoles.fromDatabase(participant.role),
+                roundEligibility: roundEligibilities.fromDatabase(participant.roundEligibility),
+                presence,
+              };
+            });
+            const self = participants.find(
+              (participant) => participant.id === session.participantId,
+            );
+            if (self === undefined) {
+              return null;
+            }
+
+            const round = lobby.currentRound;
+            const requireDate = (value: Date | null, name: string): Date => {
+              if (value === null)
+                throw new Error(`${name} is required by the persisted round stage.`);
+              return value;
+            };
+            const requireString = (value: string | null, name: string): string => {
+              if (value === null)
+                throw new Error(`${name} is required by the persisted round stage.`);
+              return value;
+            };
+            const callConfiguration =
+              round?.callMode === "AUTOMATIC"
+                ? { mode: "automatic" as const, intervalSeconds: round.callIntervalSeconds }
+                : { mode: "manual" as const };
+            const baseRound =
+              round === null
+                ? null
+                : {
+                    id: round.id,
+                    lobbyId: lobby.id,
+                    patternId: round.currentPatternId,
+                    callConfiguration,
+                  };
+            const winnerResult =
+              round === null ||
+              (round.stage !== "RESULT" && round.stage !== "ENDED") ||
+              round.coWinners.length === 0
+                ? null
+                : {
+                    triggeringCallId: requireString(
+                      round.coWinnerTriggeringCallId,
+                      "The result triggering call",
+                    ),
+                    openedAt: requireDate(
+                      round.coWinnerOpenedAt,
+                      "The result opening timestamp",
+                    ).toISOString(),
+                    closesAt: requireDate(
+                      round.coWinnerClosesAt,
+                      "The result closing timestamp",
+                    ).toISOString(),
+                    settledAt: requireDate(
+                      round.resultSettledAt,
+                      "The result settlement timestamp",
+                    ).toISOString(),
+                    winnerParticipantIds: round.coWinners.map((winner) => winner.participantId),
+                  };
+
+            let roundState: unknown = null;
+            if (round !== null && baseRound !== null) {
+              const startedAt =
+                round.stage === "WAITING"
+                  ? null
+                  : requireDate(round.startedAt, "The round start timestamp").toISOString();
+              switch (round.stage) {
+                case "WAITING":
+                  roundState = {
+                    ...baseRound,
+                    stage: "waiting",
+                    createdAt: round.createdAt.toISOString(),
+                  };
+                  break;
+                case "ACTIVE":
+                  roundState = { ...baseRound, stage: "active", startedAt };
+                  break;
+                case "PAUSED":
+                  if (round.pauseReason === null) {
+                    throw new Error("Paused rounds require a pause reason.");
+                  }
+                  roundState = {
+                    ...baseRound,
+                    stage: "paused",
+                    startedAt,
+                    pauseReason: pauseReasons.fromDatabase(round.pauseReason),
+                    pausedAt: requireDate(round.pausedAt, "The pause timestamp").toISOString(),
+                  };
+                  break;
+                case "CO_WINNER_WINDOW":
+                  roundState = {
+                    ...baseRound,
+                    stage: "co-winner-window",
+                    startedAt,
+                    window: {
+                      triggeringCallId: requireString(
+                        round.coWinnerTriggeringCallId,
+                        "The co-winner triggering call",
+                      ),
+                      openedAt: requireDate(
+                        round.coWinnerOpenedAt,
+                        "The co-winner opening timestamp",
+                      ).toISOString(),
+                      closesAt: requireDate(
+                        round.coWinnerClosesAt,
+                        "The co-winner closing timestamp",
+                      ).toISOString(),
+                    },
+                  };
+                  break;
+                case "RESULT":
+                  if (winnerResult === null) throw new Error("Result rounds require winners.");
+                  roundState = { ...baseRound, stage: "result", startedAt, result: winnerResult };
+                  break;
+                case "ENDED":
+                  roundState = {
+                    ...baseRound,
+                    stage: "ended",
+                    startedAt,
+                    endedAt: requireDate(round.endedAt, "The round end timestamp").toISOString(),
+                    result: winnerResult,
+                  };
+                  break;
+              }
+            }
+
+            const ownCard = round?.cards[0];
+            const calls =
+              round?.calls.map((call) => ({
+                id: call.id,
+                roundId: round.id,
+                position: call.position,
+                ball: call.ball,
+                calledAt: call.calledAt.toISOString(),
+              })) ?? [];
+            const card =
+              ownCard === undefined || round === null
+                ? null
+                : {
+                    id: ownCard.id,
+                    roundId: round.id,
+                    participantId: ownCard.participantId,
+                    cells: ownCard.cells.map((cell, index) =>
+                      index === 12 && cell === 0 ? "FREE" : cell,
+                    ),
+                  };
+            const marks =
+              ownCard?.marks.map((mark) => ({
+                id: mark.id,
+                cardId: ownCard.id,
+                ball: mark.ball,
+                markedAt: mark.markedAt.toISOString(),
+              })) ?? [];
+
+            let timer: Record<string, unknown> | null = null;
+            if (round?.stage === "CO_WINNER_WINDOW") {
+              timer = {
+                kind: "co-winner",
+                triggeringCallId: requireString(
+                  round.coWinnerTriggeringCallId,
+                  "The co-winner triggering call",
+                ),
+                deadline: requireDate(
+                  round.coWinnerClosesAt,
+                  "The co-winner closing timestamp",
+                ).toISOString(),
+              };
+            } else if (
+              round?.stage === "ACTIVE" &&
+              round.callMode === "AUTOMATIC" &&
+              round.nextCallAt !== null
+            ) {
+              timer = { kind: "automatic-call", deadline: round.nextCallAt.toISOString() };
+            } else {
+              const graceParticipant = participants.find(
+                (participant) => participant.presence["status"] === "grace",
+              );
+              if (graceParticipant !== undefined) {
+                timer = {
+                  kind: "disconnect-grace",
+                  participantId: graceParticipant.id,
+                  generation: graceParticipant.presence["generation"],
+                  deadline: graceParticipant.presence["graceEndsAt"],
+                };
+              }
+            }
+
+            const lastEventSequence = Number(lobby.lastEventSequence);
+            if (!Number.isSafeInteger(lastEventSequence) || lastEventSequence < 0) {
+              throw new Error("Active lobby event sequences must fit in a safe integer.");
+            }
+            return SnapshotSchema.parse({
+              schemaVersion: 1,
+              generatedAt: generatedAt.toISOString(),
+              lastEventSequence: lastEventSequence === 0 ? null : lastEventSequence,
+              lobby:
+                lobby.status === "WAITING"
+                  ? {
+                      id: lobby.id,
+                      code: lobby.code,
+                      hostParticipantId: host.id,
+                      themeId: lobby.themeId,
+                      status: "waiting",
+                      createdAt: lobby.createdAt.toISOString(),
+                    }
+                  : {
+                      id: lobby.id,
+                      code: lobby.code,
+                      hostParticipantId: host.id,
+                      themeId: lobby.themeId,
+                      status: "active",
+                      createdAt: lobby.createdAt.toISOString(),
+                      roundId: requireString(round?.id ?? null, "The active lobby round"),
+                    },
+              session: {
+                id: session.id,
+                lobbyId: lobby.id,
+                participantId: session.participantId,
+                status: "active",
+                issuedAt: session.issuedAt.toISOString(),
+              },
+              self,
+              participants,
+              round: roundState,
+              ownCard: card,
+              ownMarks: marks,
+              calls,
+              timer,
+            });
+          },
+          {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+            maxWait: 5_000,
+            timeout: 10_000,
+          },
+        ),
+      this.retryOptions,
+    );
   }
 
   async findActiveLobbyIdByCode(code: string): Promise<string | null> {

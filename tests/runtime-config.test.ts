@@ -126,6 +126,32 @@ describe("runtime configuration", () => {
     });
   });
 
+  it("parses web connection and trusted-proxy settings without exposing their values", () => {
+    const databaseUrl = "postgresql://runtime-private-marker";
+    const trustedProxySecret = "trusted-proxy-private-marker-value";
+
+    expect(
+      parseRuntimeConfig({
+        DATABASE_URL: databaseUrl,
+        TRUSTED_PROXY_SECRET: trustedProxySecret,
+      }),
+    ).toEqual({
+      ...EXPECTED_DEFAULTS,
+      databaseUrl,
+      trustedProxySecret,
+    });
+
+    const error = captureConfigurationError({
+      DATABASE_URL: "",
+      TRUSTED_PROXY_SECRET: "short-private-marker",
+    });
+    expect(error.issues).toEqual([
+      "DATABASE_URL must be nonempty when configured.",
+      "TRUSTED_PROXY_SECRET must contain at least 32 characters when configured.",
+    ]);
+    expect(error.message).not.toContain("short-private-marker");
+  });
+
   it.each(ENVIRONMENT_KEYS)("rejects a noninteger %s override", (key) => {
     const error = captureConfigurationError({ [key]: "1.5" });
 

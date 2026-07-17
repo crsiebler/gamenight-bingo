@@ -6,9 +6,11 @@ export type RuntimeConfig = Readonly<{
   disconnectPauseGraceSeconds: number;
   realtimeTicketTtlSeconds: number;
   coWinnerWindowMs: number;
+  databaseUrl?: string;
+  trustedProxySecret?: string;
 }>;
 
-type RuntimeConfigProperty = keyof RuntimeConfig;
+type RuntimeConfigProperty = Exclude<keyof RuntimeConfig, "databaseUrl" | "trustedProxySecret">;
 
 type RuntimeConfigDefinition = Readonly<{
   environmentKey: string;
@@ -86,7 +88,10 @@ export class RuntimeConfigurationError extends Error {
 export function parseRuntimeConfig(
   environment: Readonly<Record<string, string | undefined>>,
 ): RuntimeConfig {
-  const configuration: Record<RuntimeConfigProperty, number> = {
+  const configuration: Record<RuntimeConfigProperty, number> & {
+    databaseUrl?: string;
+    trustedProxySecret?: string;
+  } = {
     ...RUNTIME_CONFIG_DEFAULTS,
   };
   const invalidProperties = new Set<RuntimeConfigProperty>();
@@ -114,6 +119,24 @@ export function parseRuntimeConfig(
     }
 
     configuration[definition.property] = parsedValue;
+  }
+
+  const databaseUrl = environment["DATABASE_URL"];
+  if (databaseUrl !== undefined) {
+    if (databaseUrl.trim().length === 0) {
+      issues.push("DATABASE_URL must be nonempty when configured.");
+    } else {
+      configuration.databaseUrl = databaseUrl;
+    }
+  }
+
+  const trustedProxySecret = environment["TRUSTED_PROXY_SECRET"];
+  if (trustedProxySecret !== undefined) {
+    if (trustedProxySecret.length < 32) {
+      issues.push("TRUSTED_PROXY_SECRET must contain at least 32 characters when configured.");
+    } else {
+      configuration.trustedProxySecret = trustedProxySecret;
+    }
   }
 
   if (

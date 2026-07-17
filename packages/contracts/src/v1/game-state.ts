@@ -307,7 +307,7 @@ export const SnapshotSchema = z
     lobby: LobbyStateSchema,
     session: ParticipantSessionSchema,
     self: ParticipantSummarySchema,
-    participants: z.array(ParticipantSummarySchema).max(25),
+    participants: z.array(ParticipantSummarySchema).max(26),
     round: RoundStateSchema.nullable(),
     ownCard: CardSchema.nullable(),
     ownMarks: z.array(MarkSchema).max(24),
@@ -358,6 +358,21 @@ export const SnapshotSchema = z
           path: ["self"],
         });
       }
+    }
+    if (
+      snapshot.participants.length === 26 &&
+      (snapshot.lobby.status !== "active" ||
+        snapshot.round === null ||
+        snapshot.self.roundEligibility !== "waiting" ||
+        snapshot.participants.filter((participant) => participant.roundEligibility === "playing")
+          .length !== 25)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "A 26-participant snapshot requires one waiting self projection and 25 current-round participants.",
+        path: ["participants"],
+      });
     }
 
     const hosts = snapshot.participants.filter((participant) => participant.role === "host");

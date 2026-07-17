@@ -37,6 +37,11 @@ Next story: US-001
 - Normalize usernames at the trusted reservation boundary by rejecting Unicode control/format characters, trimming and collapsing Unicode whitespace, applying NFC, enforcing the 128-character display/key limit, then lowercasing for lobby-scoped uniqueness; serialize reservations on the lobby row before checking names and configured capacity.
 - Participant session credentials use 32 injected cryptographic bytes encoded as unpadded base64url; hash the exact encoded token with SHA-256 before persistence, return it only through a Secure/HttpOnly/SameSite=Strict lobby-path cookie, and resolve identity through a narrow active-lobby plus hash lookup rather than a full aggregate or client-supplied participant ID.
 - Same-device session lifecycle transitions share the active-lobby transaction fence and sample their repository clock after acquiring it on every retry: disconnect stores one durable deadline, rejoin-status sweeps expiry before cookie validation, `now >= rejoinUntil` atomically expires due credentials and departs a slot only when no valid sibling remains, timely rejoin clears lifecycle timestamps while invalidating siblings, and persistence derives waiting eligibility for new active-round joins.
+- Next.js consumes the workspace's raw TypeScript packages through Webpack with a `.js` extension alias because their Node ESM source specifiers intentionally name emitted `.js` files; keep `.next` output ignored by Git and ESLint.
+- Lobby entry adapters validate strict v1 intent contracts and rate-limit mutations plus lobby-fenced reads before body or database work using an authenticated proxy marker, hashed requester identities, and bounded per-operation storage. Replayed entry commands decode the complete original allowlisted projection without minting credentials, rejoin command persistence and activation share one lock-time lobby transaction, and snapshots authenticate/project in one fenced actor-scoped query that excludes unrelated departed history while preserving the 25-player round plus one waiting replacement only when that waiting participant is the requester.
+- Next App Router API modules forward supported methods, unsupported methods, and unknown private catch-all paths to the shared versioned dispatcher so stable JSON errors and `no-store` headers survive the framework routing boundary.
+- Authoritative snapshot projections construct stage-specific fields only for stages that require them; an open co-winner window may contain confirmed winners before a settled result exists.
+- Framework-routing guarantees require live Next request coverage under an approved migrated `TEST_DATABASE_URL`; dispatcher unit tests and route-source assertions do not prove unsupported methods or catch-all resources retain stable errors and private cache headers.
 
 Append-only iteration log
 -------------------------
@@ -2016,3 +2021,245 @@ Targeted re-review outcome for resumed US-026 at 2026-07-17 04:38:22 MST:
 - The targeted review confirmed direct lock-time deadline enforcement, exact-deadline capacity reuse, repeated-disconnect idempotency, and staggered sibling eligibility are now covered.
 - No unresolved in-scope critical, high, or medium findings remain. The bounded authorized-roster projection remains explicitly assigned to US-027.
 - US-026 can be marked passing and committed after the final staged/unstaged consistency check.
+
+## 2026-07-17 05:08:07 MST - US-027
+- What was implemented
+  - Added strict v1 HTTP contracts and explicit Next.js 16 App Router endpoints for the public pattern catalog, lobby creation/join, same-device status/rejoin, and actor-authorized snapshots.
+  - Added secure mutation guards, independent in-memory create/join/rejoin limiter namespaces, stable versioned errors, private `no-store` responses, and cookie-only credential delivery.
+  - Added atomic PostgreSQL host/session and player/session admission plus an actor-scoped snapshot query that allowlists own-card/current-call state and excludes hashes, foreign cards, future draws, active events, and command results.
+  - Activated `bun run dev:web`, documented required `DATABASE_URL` behavior, and configured Next's Webpack resolver for the workspace's Node ESM TypeScript source convention.
+- Files changed: `.gitignore`, `AGENTS.md`, `README.md`, `package.json`, `bun.lock`, `eslint.config.mjs`, `apps/web/package.json`, `apps/web/tsconfig.json`, `apps/web/next-env.d.ts`, `apps/web/next.config.ts`, `apps/web/src/app/api/v1/**/route.ts`, `apps/web/src/lobby-entry-http.ts`, `apps/web/src/lobby-entry-http.test.ts`, `apps/web/src/lobby-entry-runtime.ts`, `packages/contracts/src/v1/events.ts`, `packages/contracts/src/v1/http.ts`, `packages/contracts/src/v1/index.ts`, `packages/database/package.json`, `packages/database/src/index.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/database.integration.test.ts`, `tests/lobby-entry-contracts-v1.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-027 - Implement lobby entry HTTP APIs`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run tests/lobby-entry-contracts-v1.test.ts` (expected fail before implementation because the HTTP contract schemas were absent; pass with 7 tests)
+  - `bunx vitest run apps/web/src/lobby-entry-http.test.ts` (expected fail before implementation because the HTTP service was absent; review regression then failed while the handler over-read a streamed body; pass with 17 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts` (expected fail with 4 missing repository behaviors; review regressions then failed for command replay and entry metadata; pass with 50 tests)
+  - `bun install --frozen-lockfile` (pass; Next.js and workspace dependencies are reproducible)
+  - `bun run lint` (pass after excluding generated `.next` output)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun run format:check` (fail only on three pre-existing untracked US-018 browser report files)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass after review remediation; 21 Vitest files and 333 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `DATABASE_URL=<approved local Compose database> bun run --cwd apps/web build` (pass; all six `/api/v1` routes compiled)
+  - Live `GET /api/v1/patterns` against `bun run dev:web` (pass; versioned canonical catalog returned)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `api-designer`, `security-engineer`
+  - Used: `api-designer`, `security-engineer` for route contracts, safe status/error semantics, atomic admission, rate-limit boundaries, origin/body controls, cookie handling, and snapshot privacy guidance
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive `security-engineer`; targeted re-review by the same specialists planned after substantive fixes
+  - Findings: fixed replay-unsafe entry commands, unbounded streamed-body buffering, invalid no-card eligibility, late limiter ordering, unbounded roster fetching, and focused error/rate/concurrency/snapshot coverage before targeted re-review
+- Decisions (why):
+  - Kept transport route files thin over a framework-neutral Request/Response service so contract, rate-limit, authorization, and privacy behavior is deterministic under Vitest.
+  - Added atomic entry-specific repository methods rather than composing reservation and session issuance because a credential collision or persistence failure must not strand a username or participant slot.
+  - Used an allowlisted actor-scoped snapshot query instead of `findById` because the durable aggregate contains every private card, complete draw order, session hashes, events, and command results.
+  - Selected Webpack with a narrow `.js` extension alias because Next 16 Turbopack does not support extension aliases and rewriting established Node ESM specifiers across all workspaces would exceed this story.
+  - Used process-local fixed-window limiters without Redis because the MVP explicitly cannot depend on optional Redis; create, join, and rejoin quotas remain independent.
+- **Learnings for future iterations:**
+  - Next 16 dynamic route parameters are asynchronous, but these route adapters can forward the complete request URL to the shared dispatcher without trusting or duplicating route parameters.
+  - Production builds and live development both need Webpack while workspace packages export raw TypeScript with `.js` ESM specifiers.
+  - Snapshot privacy is strongest when forbidden aggregate fields are absent from the repository query itself rather than removed during HTTP serialization.
+- Known issues / follow-ups:
+  - Root `bun run format:check` still scans three pre-existing untracked US-018 report files; they remain untouched and unstaged, while the complete tracked tree passes Prettier.
+  - Shared/distributed rate limiting can replace the process-local implementation only when multi-instance infrastructure is introduced; the MVP does not depend on Redis.
+- Next iteration start:
+  - If review passes, implement US-028 single-use realtime tickets; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for resumed US-027 at 2026-07-17 11:09:41 MST:
+- The restarted `code-reviewer`, `qa-expert`, and `security-engineer` pass produced three deduplicated blocking findings: bare `/api/v1/lobbies/{code}` paths bypassed the shared dispatcher; the 26-participant contract exception was not tied to an active current round; and co-winner-window snapshots attempted to construct a settled result before settlement.
+- Added failing focused regressions before implementation for the missing route adapter, a roundless 26-participant snapshot, and a PostgreSQL co-winner-window snapshot with confirmed winners but no settlement timestamp.
+- Added the bare lobby-code Next route adapter for every supported method, restricted 26-participant projections to active lobbies with a current round, and constructed winner results only for result/ended stages.
+- Added reusable root guidance and Codebase Patterns for stage-specific authoritative snapshot projection.
+- Post-fix checks: focused HTTP, contract, and PostgreSQL regressions pass; the PostgreSQL-enabled root suite passes with typecheck, 21 files, and 349 tests; lint, tracked-tree Prettier, Playwright smoke, Next production build, and whitespace checks pass.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` because fixes addressed findings from all three specialist areas.
+
+Targeted re-review outcome for resumed US-027 at 2026-07-17 11:15:00 MST:
+- `qa-expert` and `security-engineer` returned empty actionable finding lists with no residual risks in their remediation areas.
+- `code-reviewer` identified one remaining medium blocker: repository `visibleParticipantLimit` can still select 26 participants for a waiting-status lobby with 25 persisted cards, while the tightened contract permits 26 only for an active lobby, causing snapshot parsing to return 500 for that durable state.
+- The next iteration must add a PostgreSQL regression for a waiting lobby with 25 current-round cards plus a waiting requester, require durable lobby status `ACTIVE` before selecting the 26-entry projection, rerun all checks, and restart the complete staged review loop.
+- Per the one-targeted-re-review limit, no further implementation changes or commit are permitted in this iteration. `US-027` remains `passes: false`, and `prd.json` remains unchanged.
+
+Review remediation for US-027 at 2026-07-17 05:32:40 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced five accepted blocking root causes: create/join/rejoin command IDs were not replay-safe; streamed bodies were buffered before enforcing 4 KiB; no-card admissions could be `playing` while a round record existed; join/rejoin limits ran after database lookup; and the snapshot query fetched an unbounded durable roster before slicing.
+- Added failing contract, HTTP, and PostgreSQL regressions for replay metadata and duplicate intent, early stream cancellation, then implemented persisted private command results with mismatch detection and fresh credential issuance for replayed admission without duplicating lobby/participant state.
+- Rejoin now validates and commits its command scope before activation, with repeated commands returning `idempotentReplay: true`; create commands serialize through the global admission fence and join commands through the lobby fence.
+- Stream parsing now reads and cancels incrementally at 4,096 bytes, mutation limiter buckets run before body/database work, any current round keeps a no-card entrant waiting, and the actor-scoped roster IDs are limited to 25 in SQL with self/host/winner/current-participant priority.
+- Added stable error mapping, exact fixed-window reset, all three limiter namespaces, atomic normalized-name/capacity concurrency, waiting/ended eligibility, no-card snapshot, bounded roster, and rejoin replay coverage.
+- Discarded the source-alias finding because the PRD explicitly preserves `Full House` as canonical source alias metadata for the runtime Blackout entry; the public catalog exposes source-linked canonical previews by design.
+- Deferred active-lobby join event sequencing to the realtime presence stories because no participant-join active-event contract or broadcaster exists yet; entry command results are participant-private and carry no lobby sequence under the established sequence rules.
+- Retained conservative process/lobby-scoped limiter keys because the standard Fetch `Request` exposed by self-hosted Next does not provide trusted peer-address metadata, spoofable forwarding headers are intentionally ignored, Redis cannot become an MVP dependency, and independent early create/join/rejoin limits satisfy this story. Trusted ingress or shared limiting remains an infrastructure follow-up.
+- Post-fix checks: focused 24 contract/HTTP tests and 50 PostgreSQL tests pass, lint passes, tracked-tree Prettier passes, typecheck passes, the full PostgreSQL-enabled suite passes with 333 tests, Playwright smoke passes, Next production build passes, and staged/unstaged whitespace checks pass.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` because fixes addressed findings from all three specialist areas.
+
+Targeted re-review outcome for US-027 at 2026-07-17 05:39:13 MST:
+- `code-reviewer`, `qa-expert`, and `security-engineer` reviewed the revised complete staged diff after the remediation pass.
+- The merged high-severity blocker is that create/join command replay treats a public command ID plus repeated public intent as authority to mint a fresh active session for the original participant. A command ID is not a credential, so replay must require proof of the original scoped session or return immutable metadata without issuing a new credential.
+- Remaining medium blockers are that rejoin command persistence and activation span two transactions; the 25-person snapshot roster can omit a required co-winner when self/host/winners exceed the bound; and the new capacity-concurrency test starts from an already-full lobby rather than proving one final-slot winner and one rejection.
+- `qa-expert` also retained a high rate-limit denial/memory-growth finding for global/per-lobby keys and unbounded expired buckets. The lack of trusted peer metadata explains requester scoping but does not bound attacker-controlled canonical-code buckets; the next iteration must at minimum bound storage and establish a deployable trusted requester-key boundary or document a concrete safe alternative.
+- Per the one-targeted-re-review limit, no further implementation changes or commit are permitted in this iteration. `US-027` remains `passes: false`, and `prd.json` remains unchanged.
+- Next iteration start: redesign entry replay so credentials cannot be minted from command IDs, combine rejoin replay/activation atomically, make required snapshot references fit the bounded roster, correct the capacity race fixture, bound and safely key limiter storage, rerun all checks, and restart the complete staged review loop.
+
+## 2026-07-17 05:56:29 MST - US-027
+- What was implemented
+  - Resumed the blocked lobby-entry story and changed create/join command replays to return the original immutable session metadata without persisting or issuing a new credential.
+  - Replaced the split rejoin command/activation path with one Serializable lobby-scoped repository transaction that expires due sessions, authenticates the hash-only credential, validates idempotency, activates the session, and invalidates siblings atomically.
+  - Bounded each in-memory mutation/read requester map, authenticated the trusted-proxy marker before hashing forwarded addresses, and used one bounded unidentified fallback when no valid trusted identity is available.
+  - Consolidated cookie authentication, lock-time expiry, and authorized snapshot projection into one transaction; unrelated departed history is excluded and the 26th entry is allowed only for a waiting actor beside the 25-player current round.
+  - Corrected the capacity concurrency fixture to race two joins for one remaining slot and documented the trusted ingress and replay invariants.
+- Files changed: `.gitignore`, `AGENTS.md`, `README.md`, `package.json`, `bun.lock`, `eslint.config.mjs`, `apps/web/package.json`, `apps/web/tsconfig.json`, `apps/web/next-env.d.ts`, `apps/web/next.config.ts`, `apps/web/src/app/api/v1/**/route.ts`, `apps/web/src/lobby-entry-http.ts`, `apps/web/src/lobby-entry-http.test.ts`, `apps/web/src/lobby-entry-runtime.ts`, `apps/web/src/participant-session.ts`, `packages/contracts/src/v1/events.ts`, `packages/contracts/src/v1/game-state.ts`, `packages/contracts/src/v1/http.ts`, `packages/contracts/src/v1/index.ts`, `packages/database/package.json`, `packages/database/src/index.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/database.integration.test.ts`, `tests/contracts-v1.test.ts`, `tests/lobby-entry-contracts-v1.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-027 - Implement lobby entry HTTP APIs`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/lobby-entry-http.test.ts` (expected fail with 5 replay, requester-isolation, bucket-bound, and atomic-rejoin regressions; review remediations then failed in 3 trusted-proxy/read-limit/snapshot-transaction areas; pass after implementation with 25 tests)
+  - `bunx vitest run tests/contracts-v1.test.ts` (expected fail for the required 26-person bounded snapshot projection; pass after implementation with 85 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts` (expected fail with 4 replay, snapshot-reference, and atomic-rejoin regressions after correcting a local Ruby command-substitution compatibility error; review remediations then failed in 3 immutable-replay/lock-time timestamp areas; pass after implementation with 54 tests)
+  - `bunx vitest run apps/web/src/lobby-entry-http.test.ts apps/web/src/participant-session.test.ts tests/contracts-v1.test.ts tests/lobby-entry-contracts-v1.test.ts` (pass after review remediation with 126 tests)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun run format:check` (not rerun because it still scans three pre-existing untracked US-018 report files; the complete tracked tree passes)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass after review remediation with 21 Vitest files and 344 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `DATABASE_URL=<approved local Compose database> bun run --cwd apps/web build` (pass; all six `/api/v1` routes compiled)
+  - `bun install --frozen-lockfile` (pass; 371 installs checked with no changes)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `api-designer`, `security-engineer`
+  - Used: skipped in this resumed iteration because both recommended agents already advised US-027 and the work directly addressed concrete findings from the prior complete specialist review
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive `security-engineer`; targeted re-review by the same specialists planned after substantive fixes
+  - Findings: fixed trusted-proxy spoofing, unrelated departed-roster exposure, mutable replay reconstruction, pre-fence timestamps, unbounded fenced reads, and split snapshot authentication before targeted re-review
+- Decisions (why):
+  - Returned original entry/session metadata with no `Set-Cookie` on replay because a public command ID can support idempotent result retrieval but cannot prove participant identity or authorize credential issuance.
+  - Stored the complete allowlisted original entry projection inside the private command result rather than adding schema columns because mutable participant/lobby rows cannot reconstruct an immutable replay and no migration is needed.
+  - Used one transaction for valid-cookie rejoin instead of composing status, command, and activation calls because expiry or command conflicts must roll back without partially activating or recording the session.
+  - Allowed 26 snapshot participants only for the maximum 25-player round plus the requesting waiting replacement because all referenced winners, the host, and self must remain representable while durable departed history stays bounded out of the projection.
+  - Required a secret proxy marker before accepting the rightmost forwarded address and hashed it before storage; direct, invalid, or unauthenticated headers share a bounded fallback rather than creating attacker-controlled keys.
+- **Learnings for future iterations:**
+  - Entry-command idempotency records must retain immutable response metadata, but credential issuance always requires separate scoped proof of identity.
+  - Rejoin command persistence, expiry, activation, and sibling invalidation are one lifecycle transition and must share one lobby fence and sampled lock-time clock.
+  - Snapshot collection bounds must account for required historical references in addition to current admission capacity; one waiting replacement can coexist with a full prior-round winner roster.
+  - Process-local limiter maps need both trusted requester normalization and a hard active-bucket bound; expiry cleanup alone does not prevent active-key memory growth.
+- Known issues / follow-ups:
+  - The unrelated untracked US-018 browser reports remain untouched and unstaged; root `bun run format:check` continues to scan three of them while every tracked file passes Prettier.
+  - The current limiter is intentionally process-local for the single-instance MVP. Multi-instance shared limiting remains future infrastructure work and must not introduce a default Redis dependency.
+- Next iteration start:
+  - If review passes, implement US-028 single-use realtime tickets; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for resumed US-027 at 2026-07-17 06:18:10 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced six deduplicated blocking findings: forwarded addresses lacked an enforced trust marker; the 26-entry query exposed unrelated departed history; replay responses reconstructed mutable fields; snapshot and rejoin timestamps were sampled before the fence; status/snapshot reads could contend on lobby fences without limits; and snapshot authentication plus projection used two transactions.
+- Added failing regressions before remediation: 3 HTTP failures for direct-header spoofing, unbounded status reads, and preliminary snapshot authentication; 1 contract failure for unconditional 26-entry rosters; and 3 PostgreSQL failures for mutable replay state plus pre-fence snapshot/rejoin timestamps.
+- Added a minimum-32-character `TRUSTED_PROXY_SECRET` runtime setting and constant-time secret-marker verification before forwarded addresses can produce requester keys; unauthenticated headers now map to the bounded unidentified bucket.
+- Added independent status/snapshot limiter scopes before lobby lookup and changed snapshot repository input to the scoped cookie hash so authentication, expiry, timestamping, and projection share one Serializable transaction.
+- Persisted the complete strict allowlisted lobby-entry response inside each private command result and decode that immutable projection on create/join/rejoin replay.
+- Sampled rejoin command and snapshot timestamps from the repository clock after acquiring the lobby fence on every retry.
+- Restricted the roster query to self, host, current active participants, current-round card owners, and winners; the contract permits 26 only for one waiting self plus 25 playing current-round participants.
+- Post-fix checks: focused 126 HTTP/session/contract tests pass, 54 PostgreSQL tests pass, lint passes, tracked-tree Prettier passes, typecheck passes, the PostgreSQL-enabled root suite passes with 344 tests, Playwright smoke passes, Next production build passes, and staged/unstaged whitespace checks pass.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` because substantive fixes addressed all three specialist areas.
+
+Targeted re-review outcome for resumed US-027 at 2026-07-17 06:24:04 MST:
+- `security-engineer` returned an empty actionable finding list and confirmed the authenticated proxy marker, bounded read/mutation limits, single-transaction snapshot authentication, lock-time production timestamps, and replay credential protections.
+- `code-reviewer` and `qa-expert` identified one deduplicated high blocker: after a departed current-round player is replaced, the SQL projection returns all 25 current-round card owners plus the waiting replacement to every actor. The 26-entry contract correctly permits that projection only when self is waiting, so a playing host/player snapshot can fail parsing and return 500.
+- `qa-expert` identified one medium test blocker: the snapshot/rejoin timestamp tests inject a later clock value but never hold the lobby fence while the operation waits, so they do not prove the clock is sampled after lock acquisition on a retry or delayed transaction.
+- Both findings are in scope because authorized snapshot availability and lock-time lifecycle sampling are explicit repository invariants introduced by this story.
+- Per the one-targeted-re-review limit, no further implementation changes or commit are permitted in this iteration. `US-027` remains `passes: false`, and `prd.json` remains unchanged.
+- Next iteration start: add a dual-actor full-roster regression, make roster selection include the waiting replacement only for a waiting requester while preserving all required host/winner/current-round references, add coordinated fence-blocking snapshot and rejoin timestamp tests, rerun all checks, and restart the complete staged review loop.
+
+## 2026-07-17 06:33:16 MST - US-027
+- What was implemented
+  - Resumed the blocked lobby-entry story with a dual-actor full-roster regression covering both the waiting replacement and a current-round playing actor.
+  - Limited authorized snapshot projection to 25 participants for playing requesters while retaining the 26th waiting replacement only when that participant requests the snapshot.
+  - Replaced nominal timestamp assertions with coordinated PostgreSQL fence-blocking tests that prove snapshots and atomic rejoin expiry sample lifecycle time after lock acquisition.
+- Files changed: `.gitignore`, `AGENTS.md`, `README.md`, `package.json`, `bun.lock`, `eslint.config.mjs`, `apps/web/package.json`, `apps/web/tsconfig.json`, `apps/web/next-env.d.ts`, `apps/web/next.config.ts`, `apps/web/src/app/api/v1/**/route.ts`, `apps/web/src/lobby-entry-http.ts`, `apps/web/src/lobby-entry-http.test.ts`, `apps/web/src/lobby-entry-runtime.ts`, `apps/web/src/participant-session.ts`, `packages/contracts/src/v1/events.ts`, `packages/contracts/src/v1/game-state.ts`, `packages/contracts/src/v1/http.ts`, `packages/contracts/src/v1/index.ts`, `packages/database/package.json`, `packages/database/src/index.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/database.integration.test.ts`, `tests/contracts-v1.test.ts`, `tests/lobby-entry-contracts-v1.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-027 - Implement lobby entry HTTP APIs`
+- Auto approval: `enabled`
+- Checks:
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t 'returns actor-valid rosters'` (expected fail: playing actor received an invalid 26-participant snapshot)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t 'returns actor-valid rosters|samples the snapshot timestamp|samples atomic rejoin expiry'` (pass with 3 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts` (pass with 55 tests)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun run format:check` (fail only on three pre-existing untracked browser-report files)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass with 21 Vitest files and 345 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `DATABASE_URL=<approved local Compose database> bun run --cwd apps/web build` (pass; all six `/api/v1` routes compiled)
+  - `bun install --frozen-lockfile` (pass; 371 installs checked with no changes)
+  - `git diff --check && git diff --cached --check` (pass)
+- Implementation agents:
+  - Recommended: `api-designer`, `security-engineer`
+  - Used: `api-designer`, `security-engineer` for resumed contract-completeness, replay, cookie, authorization, proxy trust, rate-limit, and actor-scoped snapshot guidance
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive `security-engineer` planned for the complete staged diff
+  - Findings: pending staged-diff review
+- Decisions (why):
+  - Parameterized the SQL projection limit from the authenticated actor's durable round eligibility because the existing reference-priority order already retains host, winners, and current-round card owners before a waiting replacement.
+  - Coordinated tests with a real PostgreSQL row lock because changing an injected clock without proving lock contention cannot verify lock-time sampling.
+  - Did not add more `AGENTS.md` guidance because the root guide already states the requester-specific 26-entry roster exception and lock-time lifecycle rule.
+- **Learnings for future iterations:**
+  - Snapshot roster limits are actor-dependent: a waiting replacement may need 26 entries, but playing actors must receive only the 25 current-round references.
+  - Tests for post-fence timestamps must hold the lobby row lock, observe the repository operation waiting, advance the injected clock, and release the lock before asserting persisted or projected time.
+- Known issues / follow-ups:
+  - The unrelated untracked browser reports remain untouched and unstaged; root `bun run format:check` reports three of them while every tracked file passes Prettier.
+  - The current limiter remains intentionally process-local for the single-instance MVP; multi-instance shared limiting is future infrastructure work.
+- Next iteration start:
+  - If review passes, implement US-028 single-use realtime tickets; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for resumed US-027 at 2026-07-17 06:47:55 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced three deduplicated blocking findings: waiting snapshots could still exceed the contract after a partial round refilled; `DATABASE_URL` and `TRUSTED_PROXY_SECRET` bypassed shared runtime parsing; and framework-generated unknown-route/unsupported-method responses bypassed stable versioned `no-store` errors.
+- Added failing PostgreSQL and runtime-configuration regressions, then limited 26-entry snapshots to waiting requesters only when the current round actually has 25 card-owning participants.
+- Extended `parseRuntimeConfig` with optional web database/proxy settings and secret-safe validation, and changed the web runtime to consume only the immutable parsed result.
+- Forwarded all supported Next route-handler methods through the shared dispatcher and added an explicit private catch-all route; live Next development requests confirmed unknown resources and unsupported methods return versioned `NOT_FOUND` JSON with `Cache-Control: no-store`.
+- Added reusable root guidance for preserving stable private errors across the framework routing boundary.
+- Post-fix checks: focused runtime configuration and 4 PostgreSQL regression tests pass; the PostgreSQL-enabled root suite passes with 21 files and 347 tests; lint, tracked-tree Prettier, typecheck, Playwright smoke, Next production build, and whitespace checks pass.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` because substantive fixes affected each original specialist area.
+
+## 2026-07-17 10:55:48 MST - US-027
+- What was implemented
+  - Resumed the staged lobby-entry HTTP API candidate after the prior remediation added bounded actor-valid snapshots, shared runtime parsing, and stable framework-route errors.
+  - Revalidated the complete implementation without changing its behavior before restarting the required staged review loop.
+- Files changed: `.gitignore`, `AGENTS.md`, `README.md`, `package.json`, `bun.lock`, `eslint.config.mjs`, `apps/web/package.json`, `apps/web/tsconfig.json`, `apps/web/next-env.d.ts`, `apps/web/next.config.ts`, `apps/web/src/app/api/v1/**/route.ts`, `apps/web/src/lobby-entry-http.ts`, `apps/web/src/lobby-entry-http.test.ts`, `apps/web/src/lobby-entry-runtime.ts`, `apps/web/src/participant-session.ts`, `packages/contracts/src/runtime-config.ts`, `packages/contracts/src/v1/events.ts`, `packages/contracts/src/v1/game-state.ts`, `packages/contracts/src/v1/http.ts`, `packages/contracts/src/v1/index.ts`, `packages/database/package.json`, `packages/database/src/index.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/database.integration.test.ts`, `tests/contracts-v1.test.ts`, `tests/lobby-entry-contracts-v1.test.ts`, `tests/runtime-config.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-027 - Implement lobby entry HTTP APIs`
+- Auto approval: `enabled`
+- Checks:
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass; typecheck plus 21 Vitest files and 347 tests)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `DATABASE_URL=<approved local Compose database> bun run --cwd apps/web build` (pass; all versioned API routes compiled)
+  - `bun install --frozen-lockfile` (pass; 371 installs checked with no changes)
+  - `git diff --cached --check` (pass)
+- Implementation agents:
+  - Recommended: `api-designer`, `security-engineer`
+  - Used: skipped in this resumed iteration because both recommended agents already advised US-027 and the staged candidate directly incorporates the prior specialist remediation
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive `security-engineer` planned for the restarted complete staged review
+  - Findings: pending staged-diff review
+- Decisions (why):
+  - Restarted review against the complete staged candidate because the prior iteration ended after substantive remediation without recording its targeted review outcome.
+  - Kept unrelated untracked browser artifacts untouched because they predate and do not overlap the selected story.
+- **Learnings for future iterations:**
+  - A resumed story with a fully staged candidate should rerun current checks and review the complete staged diff rather than relying only on a prior iteration's pending review state.
+- Known issues / follow-ups:
+  - Root `bun run format:check` still scans unrelated untracked browser artifacts; the complete tracked tree passes Prettier.
+- Next iteration start:
+  - If review passes, implement US-028 single-use realtime tickets; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for resumed US-027 at 2026-07-17 11:36:18 MST:
+- The restarted `code-reviewer`, `qa-expert`, and `security-engineer` pass produced three deduplicated medium blockers: the 26-participant projection ignored durable lobby status, unsupported methods queried the lobby without a limiter, and route-source assertions did not exercise the real Next routing boundary.
+- Added failing HTTP and PostgreSQL regressions before implementation. Unsupported private methods now return the stable `no-store` error before lobby lookup, and the 26-entry exception now requires the fenced lobby status to be `ACTIVE` in addition to one waiting requester and a full 25-card current round.
+- Added a database-backed Playwright request test that starts Next through `webServer` and verifies bare lobby paths, unknown nested resources, and unsupported methods return versioned `NOT_FOUND` JSON with `Cache-Control: no-store`.
+- Updated root guidance and Codebase Patterns with the reusable live framework-boundary testing requirement.
+- Post-fix checks: focused HTTP and PostgreSQL regressions pass; `TEST_DATABASE_URL=<approved local Compose database> bun run test` passes with typecheck, 21 files, and 350 tests; `bun run lint` passes; tracked-tree Prettier passes; the database-backed Playwright suite passes with 2 tests; the Next production build passes; frozen install and whitespace checks pass.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` because substantive fixes addressed all three specialist areas.
+
+Targeted re-review outcome for resumed US-027 at 2026-07-17 11:36:18 MST:
+- `code-reviewer`, `qa-expert`, and `security-engineer` reviewed the revised complete staged diff and returned empty actionable finding lists.
+- The reviewers confirmed the active-lobby 26-entry guard, pre-lookup unsupported-method rejection, and database-backed live Next route coverage fully resolve the initial findings without introducing a new critical, high, or medium issue.
+- No unresolved in-scope blocking findings remain. US-027 can be marked passing and committed after the final staged/unstaged consistency check.

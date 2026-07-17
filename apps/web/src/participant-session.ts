@@ -135,6 +135,10 @@ function isCanonicalSessionToken(token: string): boolean {
   return decoded.length === SESSION_ENTROPY_BYTES && decoded.toString("base64url") === token;
 }
 
+export function hashCanonicalParticipantSessionToken(token: string): Uint8Array | null {
+  return isCanonicalSessionToken(token) ? hashToken(token) : null;
+}
+
 export async function issueSameDeviceSession(
   input: IssueSameDeviceSessionInput,
   dependencies: ParticipantSessionDependencies,
@@ -192,13 +196,16 @@ export async function resolveSameDeviceSession(
 ): Promise<ResolveSameDeviceSessionResult> {
   await store.expireParticipantRejoinWindows(lobbyId);
 
-  if (cookieValue === undefined || !isCanonicalSessionToken(cookieValue)) {
+  if (cookieValue === undefined) {
     return { status: "new-participant-required" };
   }
 
+  const tokenHash = hashCanonicalParticipantSessionToken(cookieValue);
+  if (tokenHash === null) return { status: "new-participant-required" };
+
   const session = await store.resolveParticipantSessionByTokenHash({
     lobbyId,
-    tokenHash: hashToken(cookieValue),
+    tokenHash,
   });
   if (session === null) {
     return { status: "new-participant-required" };
@@ -246,13 +253,16 @@ export async function rejoinSameDeviceSession(
   cookieValue: string | undefined,
   store: ParticipantSessionStore,
 ): Promise<ResolveSameDeviceSessionResult> {
-  if (cookieValue === undefined || !isCanonicalSessionToken(cookieValue)) {
+  if (cookieValue === undefined) {
     return { status: "new-participant-required" };
   }
 
+  const tokenHash = hashCanonicalParticipantSessionToken(cookieValue);
+  if (tokenHash === null) return { status: "new-participant-required" };
+
   const session = await store.rejoinParticipantSessionByTokenHash({
     lobbyId,
-    tokenHash: hashToken(cookieValue),
+    tokenHash,
   });
   return session === null
     ? { status: "new-participant-required" }

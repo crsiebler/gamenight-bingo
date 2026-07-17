@@ -1,10 +1,26 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const testDatabaseUrl = process.env["TEST_DATABASE_URL"];
+
 export default defineConfig({
   testDir: "./tests/e2e",
   outputDir: "./test-results/playwright",
   reporter: "list",
   retries: 0,
+  use: {
+    baseURL: "http://127.0.0.1:3100",
+  },
+  ...(testDatabaseUrl === undefined
+    ? {}
+    : {
+        webServer: {
+          command: "bun run dev:web --hostname 127.0.0.1 --port 3100",
+          url: "http://127.0.0.1:3100/api/v1/patterns",
+          env: { DATABASE_URL: testDatabaseUrl },
+          reuseExistingServer: false,
+          timeout: 120_000,
+        },
+      }),
   projects: [
     {
       name: "chromium",

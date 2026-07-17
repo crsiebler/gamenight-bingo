@@ -685,15 +685,65 @@ describe("v1 snapshot privacy", () => {
     const winners = Array.from({ length: 26 }, (_, index) => `participant_${index}`);
 
     expect(SnapshotSchema.safeParse({ ...snapshot, participants }).success).toBe(true);
+    const participantsWithRequiredHistory = [
+      ...participants,
+      {
+        ...player,
+        id: "participant_25",
+        presence: { ...player.presence, participantId: "participant_25" },
+      },
+    ];
+    expect(
+      SnapshotSchema.safeParse({
+        ...snapshot,
+        participants: participantsWithRequiredHistory,
+      }).success,
+    ).toBe(false);
+    const waitingSelf = {
+      ...player,
+      id: "participant_waiting",
+      roundEligibility: "waiting",
+      presence: { ...player.presence, participantId: "participant_waiting" },
+    } as const;
+    expect(
+      SnapshotSchema.safeParse({
+        ...snapshot,
+        session: { ...session, participantId: waitingSelf.id },
+        self: waitingSelf,
+        participants: [...participants, waitingSelf],
+        ownCard: null,
+        ownMarks: [],
+      }).success,
+    ).toBe(true);
+    expect(
+      SnapshotSchema.safeParse({
+        ...snapshot,
+        lobby: {
+          id: activeLobby.id,
+          code: activeLobby.code,
+          hostParticipantId: activeLobby.hostParticipantId,
+          themeId: activeLobby.themeId,
+          status: "waiting",
+          createdAt: activeLobby.createdAt,
+        },
+        session: { ...session, participantId: waitingSelf.id },
+        self: waitingSelf,
+        participants: [...participants, waitingSelf],
+        round: null,
+        ownCard: null,
+        ownMarks: [],
+        calls: [],
+      }).success,
+    ).toBe(false);
     expect(
       SnapshotSchema.safeParse({
         ...snapshot,
         participants: [
-          ...participants,
+          ...participantsWithRequiredHistory,
           {
             ...player,
-            id: "participant_25",
-            presence: { ...player.presence, participantId: "participant_25" },
+            id: "participant_26",
+            presence: { ...player.presence, participantId: "participant_26" },
           },
         ],
       }).success,

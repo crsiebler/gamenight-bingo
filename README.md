@@ -116,9 +116,10 @@ bun run dev:web
 bun run dev:game-server
 ```
 
-These commands become executable when their application runtime stories land;
-no placeholder process is provided by the workspace scaffold. The processes
-run locally through Bun, not in the default Compose stack.
+`bun run dev:web` is executable and starts the Next.js HTTP API after validating
+runtime configuration and connecting through `DATABASE_URL`. The game-server
+command becomes executable when its application runtime story lands. Both
+processes run locally through Bun, not in the default Compose stack.
 
 ## Environment
 
@@ -164,11 +165,19 @@ realtime tickets cannot outlive reconnect, and reconnect must be shorter than
 lobby retention. Values must be unsigned decimal integers; invalid errors name
 the setting and constraint without including its supplied value.
 
-`DATABASE_URL` selects the PostgreSQL database used by Prisma migration commands;
-it has no usable repository default and must target an explicitly approved local
-or test database during development. `TEST_DATABASE_URL` enables the isolated
-PostgreSQL integration suite. Public origins, cookie secrets, and process ports
-remain infrastructure-specific and will be defined by dependency-ordered runtime
+`DATABASE_URL` selects the PostgreSQL database used by Prisma migration commands
+and the web API; it has no usable repository default and is required before the
+web process starts. It must target an explicitly approved local or test database
+during development. `TEST_DATABASE_URL` enables the isolated PostgreSQL
+integration suite. The web rate limiter treats the rightmost
+`X-Forwarded-For` address as requester identity only when the terminating proxy
+also supplies `X-Gamenight-Trusted-Proxy` with the configured
+`TRUSTED_PROXY_SECRET`. The optional secret must contain at least 32 characters;
+when absent, every request safely uses the bounded unidentified-requester bucket.
+Hosted ingress must strip client-supplied copies of both headers, inject the
+secret marker, overwrite or append the observed address, and prevent direct
+origin access. Public origins, cookie secrets, and process ports remain
+infrastructure-specific and will be defined by dependency-ordered runtime
 stories. Actual secret values belong only in approved local or hosted secret
 storage.
 
@@ -256,6 +265,11 @@ active. Reconnect never automatically resumes paused calls.
 - Inputs, origins, permissions, rates, cookies, and private caching are checked
   at server boundaries. Errors and diagnostics must not expose credentials or
   private game state.
+- Create, join, and rejoin limits use independent requester buckets with bounded
+  in-memory storage; session-status and snapshot reads are independently bounded
+  before lobby maintenance. Production must use the authenticated proxy marker
+  and header-stripping boundary documented above. Client-supplied forwarding or
+  proxy-marker headers are not trusted.
 
 ## Checks And Tests
 
