@@ -15,6 +15,8 @@ Next story: US-001
 - Workspace typechecks must cover every discovered `src` file without inherited or implicit exclusions, verified against TypeScript's parsed effective file set, and must reject all parsed configuration diagnostics while retaining effective `noEmit` with `outDir`/`declarationDir` outside `src`; domain source also rejects JavaScript and `@ts-nocheck`. Shared/domain TypeScript configuration cannot inherit or synthesize implicit module imports, and domain bare imports plus package-valued type/AMD directives must be Node built-ins, self-references, or declared dependencies without traversal segments and validated against forbidden runtime or type-package aliases.
 - Keep intentional ESLint, Prettier, TypeScript, Vitest, React Testing Library, and Playwright failures under `tests/fixtures/quality`; normal checks exclude them, while `bun run test:quality-tooling` requires each tool to fail for its expected diagnostic rather than accepting any nonzero exit.
 - Vitest discovery is limited to repository `apps`, `packages`, and `tests` paths, with TS tests running in Node and TSX tests in jsdom; Playwright owns `tests/e2e` and remains a separate `bun run test:e2e` command.
+- Runtime entry points pass `process.env` to `parseRuntimeConfig` from `packages/contracts`; downstream and domain code consume the immutable parsed type rather than reading environment state directly, and startup subprocess tests isolate environment/module state.
+- After workspace dependency manifests change, run `bun install` to refresh `bun.lock`, then verify reproducibility with `bun install --frozen-lockfile`.
 
 Append-only iteration log
 -------------------------
@@ -710,3 +712,51 @@ Targeted re-review outcome for US-007 at 2026-07-16 17:38:11 MST:
 - The lint-staged fixture handling, Vitest/Playwright discovery separation, and complete workspace typecheck path are resolved.
 - Residual risks are limited to intentionally deferred browser-backed journeys, developer-local hook bypassability, and the requirement-bound bare `npx` fallback behavior.
 - All in-scope blocking findings are resolved; US-007 can be marked passing and committed.
+
+## 2026-07-16 17:51:00 MST - US-008
+- What was implemented
+  - Added a shared immutable runtime configuration type, exact seven-value defaults, strict environment parser, bounded ranges, and cross-field timing validation in `packages/contracts`.
+  - Wired both application entry points to validate `process.env` before future serving behavior and declared their contracts workspace dependency without adding placeholder runtimes.
+  - Added parser and isolated subprocess startup tests covering defaults, overrides, malformed and unsafe values, inconsistent timing, deterministic aggregation, immutability, and secret-free errors; documented the accepted constraints.
+- Files changed: `AGENTS.md`, `README.md`, `apps/game-server/package.json`, `apps/game-server/src/index.ts`, `apps/game-server/tsconfig.json`, `apps/web/package.json`, `apps/web/src/index.ts`, `apps/web/tsconfig.json`, `bun.lock`, `packages/contracts/src/index.ts`, `packages/contracts/src/runtime-config.ts`, `tests/runtime-config.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-008 - Define and validate runtime configuration`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run tests/runtime-config.test.ts` (expected fail before implementation: 39 failures because the parser and startup validation did not exist; pass after review remediation with 40 tests)
+  - `bun install --frozen-lockfile` (pass before and after manifest lock refresh)
+  - `bun install` (pass; refreshed workspace dependency metadata in `bun.lock`)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (initial fail on 2 new files; pass after formatting)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `bun run test` (pass; 3 Vitest files and 48 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `backend-developer`, `security-engineer`
+  - Used: `security-engineer` for strict parsing, range, timing, redaction, startup, and test guidance; skipped `backend-developer` because standard mode budgets one adviser and the module placement and startup wiring were straightforward after repository inspection
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and parsing/startup-triggered `security-engineer`; targeted re-review by `qa-expert` planned after test remediation
+  - Findings: added valid inclusive-boundary coverage for the QA medium finding; deferred the PRD-status observation because Ralph requires that metadata update only after review passes
+- Decisions (why):
+  - Put the shared parser and type in `packages/contracts` while keeping environment access in app entry points so every process validates before future serving and domain code remains environment-independent.
+  - Accepted only unsigned decimal integers and bounded capacities to the supported 25-player/100-lobby profile, with conservative timing ceilings, because permissive coercion or unbounded resource settings would make invalid configuration operationally unsafe.
+  - Required disconnect grace to be shorter than reconnect, ticket lifetime not to exceed reconnect, and reconnect to be shorter than lobby retention because violating those relationships creates contradictory lifecycle behavior.
+  - Aggregated issues in deterministic field order without supplied values so operators receive actionable variable/constraint errors without reflecting sensitive environment content.
+- **Learnings for future iterations:**
+  - Startup configuration tests should execute each entry point in a subprocess so environment mutation and module caching cannot hide validation behavior.
+  - A frozen install validates the existing lock but does not refresh new workspace dependency metadata; update `bun.lock` with `bun install`, then verify it with a frozen install.
+  - Node ambient types belong only in the runtime app TypeScript configs; the contracts and domain packages remain independent of Node process globals.
+- Known issues / follow-ups:
+  - Future web and game-server runtime stories must preserve top-level validation before opening listeners or serving requests.
+- Next iteration start:
+  - Implement US-009 versioned Zod contracts using the parsed runtime configuration types without moving server-authoritative rules into clients.
+---
+
+Review remediation for US-008 at 2026-07-16 17:56:36 MST:
+- Initial review used `code-reviewer`, `qa-expert`, and `security-engineer` against the complete staged diff.
+- The merged in-scope blocking findings contained one medium test gap: documented range limits had rejection coverage but no valid inclusive-boundary combinations.
+- Added timing-compatible lower/upper boundary combinations covering capacity limits, timing ceilings, smallest mutually consistent lifecycle timings, and co-winner bounds.
+- The PRD completion-state finding was discarded because Ralph explicitly requires `passes: true` only after the staged specialist review passes; `prd.json` is intentionally added during final metadata staging.
+- Post-fix checks: focused runtime configuration suite (40 tests pass), `bun run test` (48 tests pass), `bun run lint` (pass), `bun run format:check` (pass), and staged/unstaged diff checks (pass).
+- Targeted re-review: `qa-expert` returned an empty actionable finding list and confirmed the inclusive-boundary gap is resolved with no residual risk in the remediation scope.

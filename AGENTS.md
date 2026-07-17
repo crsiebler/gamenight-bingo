@@ -222,6 +222,9 @@ then refactor while green.
   analytics and public structured data off private routes.
 - Validate environment configuration before serving traffic without echoing
   secret values.
+- Parse process environment only at runtime entry points through
+  `parseRuntimeConfig` from `packages/contracts`; pass the immutable typed result
+  inward and keep `packages/domain` independent of `process.env`.
 - Delete inactive lobby data according to configured retention, but never delete
   an active lobby with active calls or connections.
 - Do not commit secrets, credentials, tokens, local environment files, database

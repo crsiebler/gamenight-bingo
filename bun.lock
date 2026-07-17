@@ -30,10 +30,16 @@
     "apps/game-server": {
       "name": "@gamenight-bingo/game-server",
       "version": "0.0.0",
+      "dependencies": {
+        "@gamenight-bingo/contracts": "workspace:*",
+      },
     },
     "apps/web": {
       "name": "@gamenight-bingo/web",
       "version": "0.0.0",
+      "dependencies": {
+        "@gamenight-bingo/contracts": "workspace:*",
+      },
     },
     "packages/contracts": {
       "name": "@gamenight-bingo/contracts",

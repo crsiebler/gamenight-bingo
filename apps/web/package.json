@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "dependencies": {
+    "@gamenight-bingo/contracts": "workspace:*"
+  },
   "scripts": {
     "typecheck": "tsc --project tsconfig.json --pretty false"
   }

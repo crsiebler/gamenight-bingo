@@ -154,10 +154,18 @@ The confirmed application defaults are:
 | `REALTIME_TICKET_TTL_SECONDS`     |    `60` | Lifetime of a single-use Socket.IO ticket              |
 | `CO_WINNER_WINDOW_MS`             |  `2000` | Window for completions attributable to the latest call |
 
+Capacity overrides accept 1-25 players and 1-100 active lobbies. Timing limits
+are 1-86,400 seconds for lobby retention, 1-3,600 seconds for reconnect, 1-300
+seconds for disconnect grace and realtime tickets, and 1-10,000 milliseconds
+for the co-winner window. Disconnect grace must be shorter than reconnect,
+realtime tickets cannot outlive reconnect, and reconnect must be shorter than
+lobby retention. Values must be unsigned decimal integers; invalid errors name
+the setting and constraint without including its supplied value.
+
 Application database URLs, public origins, cookie secrets, and process ports are
 infrastructure-specific. Their names and defaults will be defined by the
-runtime-configuration story. Actual secret values have no repository default
-and belong only in approved local or hosted secret storage.
+dependency-ordered runtime stories. Actual secret values have no repository
+default and belong only in approved local or hosted secret storage.
 
 ## Workspace
 
