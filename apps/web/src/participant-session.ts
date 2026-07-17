@@ -8,7 +8,6 @@ const SESSION_ENTROPY_BYTES = 32;
 const SESSION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const MAX_SESSION_ISSUANCE_ATTEMPTS = 3;
 
-export type ParticipantSessionStatus = "active" | "disconnected";
 export type ParticipantRole = "host" | "player";
 
 export interface NewParticipantSession {
@@ -19,23 +18,42 @@ export interface NewParticipantSession {
   readonly issuedAt: Date;
 }
 
-export interface RecognizedParticipantSession {
+interface RecognizedParticipantSessionIdentity {
   readonly sessionId: string;
   readonly lobbyId: string;
   readonly participantId: string;
   readonly username: string;
   readonly role: ParticipantRole;
-  readonly status: ParticipantSessionStatus;
 }
+
+export type RecognizedParticipantSession =
+  | (RecognizedParticipantSessionIdentity & {
+      readonly status: "active";
+    })
+  | (RecognizedParticipantSessionIdentity & {
+      readonly status: "disconnected";
+      readonly disconnectedAt: Date;
+      readonly rejoinUntil: Date;
+    });
 
 export interface ParticipantSessionStore {
   createParticipantSession(
     session: NewParticipantSession,
   ): Promise<"created" | "scope-not-found" | "token-hash-collision">;
-  findParticipantSessionByTokenHash(input: {
+  expireParticipantRejoinWindows(lobbyId: string): Promise<number>;
+  markParticipantSessionDisconnected(input: {
+    readonly lobbyId: string;
+    readonly sessionId: string;
+    readonly reconnectWindowSeconds: number;
+  }): Promise<Extract<RecognizedParticipantSession, { readonly status: "disconnected" }> | null>;
+  resolveParticipantSessionByTokenHash(input: {
     readonly lobbyId: string;
     readonly tokenHash: Uint8Array;
   }): Promise<RecognizedParticipantSession | null>;
+  rejoinParticipantSessionByTokenHash(input: {
+    readonly lobbyId: string;
+    readonly tokenHash: Uint8Array;
+  }): Promise<Extract<RecognizedParticipantSession, { readonly status: "active" }> | null>;
 }
 
 export interface ParticipantSessionCookie {
@@ -80,7 +98,28 @@ export type ResolveSameDeviceSessionResult =
   | { readonly status: "new-participant-required" }
   | {
       readonly status: "recognized";
-      readonly session: RecognizedParticipantSession;
+      readonly session: Extract<RecognizedParticipantSession, { readonly status: "active" }>;
+    }
+  | {
+      readonly status: "rejoin-available";
+      readonly label: string;
+      readonly session: Extract<RecognizedParticipantSession, { readonly status: "disconnected" }>;
+    };
+
+export interface DisconnectSameDeviceSessionInput {
+  readonly lobbyId: string;
+  readonly sessionId: string;
+  readonly reconnectWindowSeconds: number;
+}
+
+export type DisconnectSameDeviceSessionResult =
+  | { readonly ok: true; readonly rejoinUntil: Date }
+  | {
+      readonly ok: false;
+      readonly error: {
+        readonly code: "PARTICIPANT_SESSION_NOT_FOUND";
+        readonly message: "The active participant session was not found.";
+      };
     };
 
 function hashToken(token: string): Uint8Array {
@@ -151,11 +190,67 @@ export async function resolveSameDeviceSession(
   cookieValue: string | undefined,
   store: ParticipantSessionStore,
 ): Promise<ResolveSameDeviceSessionResult> {
+  await store.expireParticipantRejoinWindows(lobbyId);
+
   if (cookieValue === undefined || !isCanonicalSessionToken(cookieValue)) {
     return { status: "new-participant-required" };
   }
 
-  const session = await store.findParticipantSessionByTokenHash({
+  const session = await store.resolveParticipantSessionByTokenHash({
+    lobbyId,
+    tokenHash: hashToken(cookieValue),
+  });
+  if (session === null) {
+    return { status: "new-participant-required" };
+  }
+  if (session.status === "disconnected") {
+    return {
+      status: "rejoin-available",
+      label: `Rejoin as ${session.username}`,
+      session,
+    };
+  }
+  return { status: "recognized", session };
+}
+
+export async function disconnectSameDeviceSession(
+  input: DisconnectSameDeviceSessionInput,
+  store: ParticipantSessionStore,
+): Promise<DisconnectSameDeviceSessionResult> {
+  if (
+    !Number.isSafeInteger(input.reconnectWindowSeconds) ||
+    input.reconnectWindowSeconds < 1 ||
+    input.reconnectWindowSeconds > 3_600
+  ) {
+    throw new RangeError("The reconnect window must be a safe integer between 1 and 3600 seconds.");
+  }
+
+  const session = await store.markParticipantSessionDisconnected({
+    lobbyId: input.lobbyId,
+    sessionId: input.sessionId,
+    reconnectWindowSeconds: input.reconnectWindowSeconds,
+  });
+  return session === null
+    ? {
+        ok: false,
+        error: {
+          code: "PARTICIPANT_SESSION_NOT_FOUND",
+          message: "The active participant session was not found.",
+        },
+      }
+    : { ok: true, rejoinUntil: session.rejoinUntil };
+}
+
+export async function rejoinSameDeviceSession(
+  lobbyId: string,
+  cookieValue: string | undefined,
+  store: ParticipantSessionStore,
+): Promise<ResolveSameDeviceSessionResult> {
+  if (cookieValue === undefined || !isCanonicalSessionToken(cookieValue)) {
+    return { status: "new-participant-required" };
+  }
+
+  const session = await store.rejoinParticipantSessionByTokenHash({
     lobbyId,
     tokenHash: hashToken(cookieValue),
   });

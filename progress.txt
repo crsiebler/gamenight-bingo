@@ -36,6 +36,7 @@ Next story: US-001
 - Active lobby creation goes through `LobbyStateRepository.createActive`: generate each candidate outside retryable transactions, serialize PostgreSQL admission before counting waiting/active lobbies, and retry only active-code collisions so capacity cannot be oversubscribed.
 - Normalize usernames at the trusted reservation boundary by rejecting Unicode control/format characters, trimming and collapsing Unicode whitespace, applying NFC, enforcing the 128-character display/key limit, then lowercasing for lobby-scoped uniqueness; serialize reservations on the lobby row before checking names and configured capacity.
 - Participant session credentials use 32 injected cryptographic bytes encoded as unpadded base64url; hash the exact encoded token with SHA-256 before persistence, return it only through a Secure/HttpOnly/SameSite=Strict lobby-path cookie, and resolve identity through a narrow active-lobby plus hash lookup rather than a full aggregate or client-supplied participant ID.
+- Same-device session lifecycle transitions share the active-lobby transaction fence and sample their repository clock after acquiring it on every retry: disconnect stores one durable deadline, rejoin-status sweeps expiry before cookie validation, `now >= rejoinUntil` atomically expires due credentials and departs a slot only when no valid sibling remains, timely rejoin clears lifecycle timestamps while invalidating siblings, and persistence derives waiting eligibility for new active-round joins.
 
 Append-only iteration log
 -------------------------
@@ -1906,3 +1907,112 @@ Initial review outcome for US-025 at 2026-07-17 03:50:12 MST:
 - Residual risk is limited to intentionally deferred disconnect/rejoin/departure behavior in US-026 and HTTP cookie serialization, secure entropy wiring, CSRF/origin controls, rate limits, and private caching in US-027.
 - Destructive cascade execution was not run because repository policy prohibits DELETE without separate confirmation; the existing exact foreign-key edge and delete-rule integration coverage confirms session ownership by the lobby.
 - No in-scope critical, high, or medium findings remain. US-025 can be marked passing and committed.
+
+## 2026-07-17 04:04:58 MST - US-026
+- What was implemented
+  - Added server-clock disconnect handling that stores one configured rejoin deadline, cookie-only status resolution that offers `Rejoin as <username>` during the window, and cookie-hash rejoin that restores the prior active session.
+  - Added Serializable lobby-scoped persistence transitions that treat the exact deadline as expired, atomically mark the participant and prior sessions departed, reject cross-lobby/inactive/deleted-lobby credentials, and preserve an eligible participant slot on timely rejoin.
+  - Removed caller control over new-participant round eligibility and derive `waiting` in persistence whenever a current round has started and has not ended.
+- Files changed: `AGENTS.md`, `apps/web/src/participant-session.ts`, `apps/web/src/participant-session.test.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/database.integration.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-026 - Implement two-minute same-device rejoin`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/participant-session.test.ts` (expected fail before implementation with 4 missing-lifecycle failures; pass after implementation with 9 tests)
+  - `TEST_DATABASE_URL=... bunx vitest run packages/database/src/database.integration.test.ts` (expected fail before implementation with 10 missing-transition/eligibility failures; review regressions then failed for no-cookie expiry, sibling invalidation, capacity reuse, and credential reissuance; pass after remediation with 36 tests)
+  - `bun run lint` (pass)
+  - `bun run format:check` (fail only on three pre-existing untracked US-018 browser report files)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `TEST_DATABASE_URL=... bun run test` (pass after review remediation; 19 Vitest files and 294 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: none
+  - Used: `security-engineer` because the story changes credential-based identity recovery and durable authorization state; guidance informed atomic transitions, the exact deadline boundary, sibling-session invalidation, persistence-derived eligibility, and security tests
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive specialist `security-engineer`; targeted re-review by the same specialists planned after substantive fixes
+  - Findings: fixed cookie-dependent expiry, stale sibling ejection, departed-capacity counting, pre-lock authorization time, and weak active-stage eligibility coverage before targeted re-review
+- Decisions (why):
+  - Reused the existing session lifecycle columns and constraints without a migration because they already represent active, disconnected, deadline, and departed states exactly.
+  - Used the active-lobby transaction fence for status, rejoin, and expiry because a lookup followed by a separate update could race at the two-minute boundary or reclaim an invalidated slot.
+  - Defined the window as open only while `now < rejoinUntil`; the exact configured deadline atomically departs the participant and invalidates all nondeparted credentials for that slot.
+  - Derived new-join eligibility from the persisted round stage because browser or HTTP callers must not be able to claim current-round participation.
+  - Kept presence-generation changes out of scope because connection aggregation and absence generations belong to US-032 and US-033.
+- **Learnings for future iterations:**
+  - Durable deadlines plus opportunistic atomic expiry avoid relying on process-local timers and remain correct across process restarts.
+  - Rejoin status may expose only the prior username and narrow session identity after a lobby-scoped hash lookup; neither username nor participant ID is proof of reclaim authority.
+  - Idempotent disconnect must retain the original deadline rather than extending the window on repeated disconnect handling.
+- Known issues / follow-ups:
+  - Root `bun run format:check` still scans three pre-existing untracked US-018 report files; they remain untouched and unstaged, while the complete tracked tree passes Prettier.
+  - Presence generation departure and realtime disconnect wiring remain intentionally assigned to later presence/Socket.IO stories.
+- Next iteration start:
+  - If review passes, implement US-027 versioned lobby entry HTTP APIs; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-026 at 2026-07-17 04:18:42 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced four deduplicated blocking root causes: expiry required the old cookie, stale sibling deadlines could eject a successfully rejoined participant, departed rows still consumed capacity, and authorization reused time sampled before the transaction fence/retry.
+- Added failing regressions first for a no-cookie expiry sweep, sibling-session invalidation, replacement capacity with waiting eligibility, and replacement credential issuance after expiry; the focused suites failed in the expected old paths.
+- Added an injectable repository lifecycle clock sampled after the lobby fence on every retry, a shared due-session expiry transition callable without credentials and reused by status, rejoin, disconnect, credential issuance, and participant reservation.
+- Expiry now invalidates each due credential at its durable deadline and departs the participant only when no active or still-eligible sibling remains; successful rejoin activates one session and invalidates every sibling so stale credentials cannot later eject the slot.
+- Participant capacity now counts only nondeparted rows, and active-round eligibility coverage uses an actual `active` stage while a no-round branch proves `playing` remains available before a round.
+- Post-fix checks: focused 9 web and 36 PostgreSQL tests pass, lint passes, tracked-tree Prettier passes, typecheck passes, the full PostgreSQL-enabled suite passes with 294 tests, Playwright smoke passes, and staged/unstaged whitespace checks pass.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` because fixes affected every original specialist area.
+
+Targeted re-review outcome for US-026 at 2026-07-17 04:23:04 MST:
+- `qa-expert` and `security-engineer` returned empty actionable finding lists and confirmed the no-cookie repository sweep, lock-time clock sampling, sibling invalidation, capacity reuse, and eligibility remediations.
+- `code-reviewer` identified one remaining medium acceptance blocker: `resolveSameDeviceSession` returns for a missing or malformed cookie before invoking `expireParticipantRejoinWindows`, so a cleared-cookie status check does not itself depart the overdue prior slot.
+- The finding is in scope because cleared-cookie behavior and departure after 120 seconds are explicit US-026 acceptance criteria; the web status service must sweep the lobby before its cookie-validation short circuit and cover that ordering with a fake-timer regression.
+- Per the one-targeted-re-review limit, no further implementation changes or commit are permitted in this iteration. `US-026` remains `passes: false` and `prd.json` remains unchanged.
+- Next iteration start: add a failing cleared-cookie deadline test proving expiry runs before cookie validation, invoke the lobby-scoped expiry at the start of `resolveSameDeviceSession`, rerun all US-026 checks, and restart the complete staged review loop.
+
+## 2026-07-17 04:26:44 MST - US-026
+- What was implemented
+  - Resumed the blocked story with a fake-timer regression proving that same-device status resolution sweeps overdue rejoin windows even after the participant clears the cookie.
+  - Invoked lobby-scoped expiry before cookie validation so missing and malformed credentials still allow the prior participant slot to depart at its durable deadline.
+  - Preserved the reusable credential-independent expiry rule in root agent guidance and the consolidated Codebase Patterns section.
+- Files changed: `AGENTS.md`, `apps/web/src/participant-session.ts`, `apps/web/src/participant-session.test.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/database.integration.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-026 - Implement two-minute same-device rejoin`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/participant-session.test.ts` (expected fail before implementation because no expiry sweep occurred; pass after implementation with 10 tests)
+  - `TEST_DATABASE_URL=<inherited> bunx vitest run packages/database/src/database.integration.test.ts` (fail before correcting the test environment because the inherited URL omitted a string password; no tests reached application behavior)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts` (pass with 36 tests)
+  - `bun run lint` (pass)
+  - `bun run format:check` (fail only on three pre-existing untracked US-018 browser report files)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass with 19 Vitest files and 295 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+- Implementation agents:
+  - Recommended: none
+  - Used: skipped because this resumed iteration addressed one concrete prior security-aware review finding using the existing store boundary and test pattern
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive specialist `security-engineer` planned for the complete staged diff
+  - Findings: pending staged-diff review
+- Decisions (why):
+  - Kept expiry ahead of even malformed-cookie rejection because participant departure is a lobby lifecycle transition, not an authentication side effect.
+  - Reused `expireParticipantRejoinWindows` rather than duplicating deadline logic in the web service because persistence already serializes expiry and samples authoritative time after the lobby fence.
+  - Left the unrelated untracked preview reports untouched and validated formatting across every tracked file instead of modifying files outside US-026.
+- **Learnings for future iterations:**
+  - Status endpoints that opportunistically maintain server lifecycle state must run credential-independent maintenance before early authentication returns.
+  - An inherited database URL can be present but unusable; derive local test credentials from the healthy approved Compose service without printing them.
+- Known issues / follow-ups:
+  - Root `bun run format:check` still scans three pre-existing untracked US-018 browser report files; they remain untouched and unstaged, while the complete tracked tree passes Prettier.
+  - Presence generation departure and realtime disconnect wiring remain intentionally assigned to later presence/Socket.IO stories.
+- Next iteration start:
+  - If review passes, implement US-027 versioned lobby entry HTTP APIs; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for resumed US-026 at 2026-07-17 04:36:05 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass returned no security finding and four deduplicated review findings: direct lock-time deadline enforcement, staggered sibling expiry, repeated-disconnect idempotency, and durable departed-roster growth versus the future snapshot limit.
+- Added PostgreSQL regressions for rejoin beginning before the deadline but acquiring the lobby fence at the deadline, direct reservation/capacity reuse at the deadline, repeated disconnect retaining the original deadline, and one sibling expiring while another remains eligible.
+- The 39-test PostgreSQL suite passed on the first run after adding the tests, confirming the existing implementation already satisfied all three in-scope QA findings; no production code changed during this remediation.
+- Deferred bounded visible-roster projection to US-027 because US-026 must durably retain departed participants and no authorized snapshot adapter exists yet; deleting departed rows here could cascade current-round cards or winner state. US-027 must project at most 25 participants while preserving the required departed-state UX without exposing unbounded durable history.
+- Post-review checks: `bun run lint` (pass), tracked-tree Prettier (pass after formatting the added tests), `bun run typecheck` (pass), approved-local-PostgreSQL `bun run test` (pass with 19 files and 298 tests), `bun run test:e2e` (pass), and staged/unstaged whitespace checks (pass).
+- Targeted re-review: pending `qa-expert` review of the revised complete staged diff because only test coverage changed for the in-scope findings.
+
+Targeted re-review outcome for resumed US-026 at 2026-07-17 04:38:22 MST:
+- `qa-expert` reviewed the revised complete staged diff and returned an empty actionable finding list with no residual test risks.
+- The targeted review confirmed direct lock-time deadline enforcement, exact-deadline capacity reuse, repeated-disconnect idempotency, and staggered sibling eligibility are now covered.
+- No unresolved in-scope critical, high, or medium findings remain. The bounded authorized-roster projection remains explicitly assigned to US-027.
+- US-026 can be marked passing and committed after the final staged/unstaged consistency check.

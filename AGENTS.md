@@ -246,6 +246,14 @@ then refactor while green.
   bytes, encode them as unpadded base64url, and persist only the SHA-256 digest
   of the encoded token. Authenticate through a narrow lobby-and-hash lookup,
   never by loading a full lobby aggregate or trusting a client participant ID.
+- Serialize disconnect, rejoin-status, expiry, and rejoin transitions within the
+  active lobby and sample lifecycle time after acquiring that fence on every
+  retry. Treat `now >= rejoinUntil` as departed, invalidate the prior participant
+  slot atomically when no valid sibling session remains, invalidate siblings on
+  successful rejoin, and derive new-join round eligibility in persistence rather
+  than accepting it from clients. Rejoin-status resolution must run the
+  lobby-scoped expiry transition before cookie validation so a missing, cleared,
+  or malformed credential cannot defer departure.
 - Do not fingerprint devices or collect unnecessary device attributes.
 - Never log cookies, realtime tickets, secrets, future draw positions, private
   cards, or full private snapshots.

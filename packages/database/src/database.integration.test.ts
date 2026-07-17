@@ -354,6 +354,12 @@ describeDatabase("PostgreSQL durable game state", () => {
     return connection;
   }
 
+  async function connectWithLifecycleClock(clock: () => Date) {
+    const connection = await connectDatabase(testDatabaseUrl!, { lifecycleClock: clock });
+    connections.push(connection);
+    return connection;
+  }
+
   async function createPersistedLobby(
     connection: Awaited<ReturnType<typeof connectDatabase>>,
     state: DurableLobbyState,
@@ -466,7 +472,6 @@ describeDatabase("PostgreSQL durable game state", () => {
       lobbyId,
       username,
       role: "player",
-      roundEligibility: "playing",
       joinedAt: new Date("2026-07-17T08:03:00.000Z"),
     };
   }
@@ -570,7 +575,7 @@ describeDatabase("PostgreSQL durable game state", () => {
           username: "CASE Player",
           normalizedUsername: "case player",
           role: "player",
-          roundEligibility: "playing",
+          roundEligibility: "waiting",
           joinedAt: participant.joinedAt,
           departedAt: null,
         },
@@ -608,7 +613,7 @@ describeDatabase("PostgreSQL durable game state", () => {
 
     await expect(connection.lobbyStates.createParticipantSession(session)).resolves.toBe("created");
     await expect(
-      connection.lobbyStates.findParticipantSessionByTokenHash({
+      connection.lobbyStates.resolveParticipantSessionByTokenHash({
         lobbyId: firstLobby.lobby.id,
         tokenHash,
       }),
@@ -621,7 +626,7 @@ describeDatabase("PostgreSQL durable game state", () => {
       status: "active",
     });
     await expect(
-      connection.lobbyStates.findParticipantSessionByTokenHash({
+      connection.lobbyStates.resolveParticipantSessionByTokenHash({
         lobbyId: secondLobby.lobby.id,
         tokenHash,
       }),
@@ -696,6 +701,405 @@ describeDatabase("PostgreSQL durable game state", () => {
         issuedAt: new Date("2026-07-17T08:04:00.000Z"),
       }),
     ).rejects.toBeDefined();
+  });
+
+  test("rejoins within 120 seconds and preserves the participant slot", async () => {
+    let now = new Date("2026-07-17T10:00:00.000Z");
+    const connection = await connectWithLifecycleClock(() => now);
+    const state = createLobbyState();
+    await createPersistedLobby(connection, state);
+    const session = state.sessions[0]!;
+    const disconnectedAt = now;
+    const rejoinUntil = new Date("2026-07-17T10:02:00.000Z");
+
+    await expect(
+      connection.lobbyStates.markParticipantSessionDisconnected({
+        lobbyId: state.lobby.id,
+        sessionId: session.id,
+        reconnectWindowSeconds: 120,
+      }),
+    ).resolves.toMatchObject({
+      sessionId: session.id,
+      participantId: session.participantId,
+      status: "disconnected",
+      disconnectedAt,
+      rejoinUntil,
+    });
+    now = new Date("2026-07-17T10:01:59.999Z");
+    await expect(
+      connection.lobbyStates.resolveParticipantSessionByTokenHash({
+        lobbyId: state.lobby.id,
+        tokenHash: session.tokenHash,
+      }),
+    ).resolves.toMatchObject({
+      sessionId: session.id,
+      participantId: session.participantId,
+      status: "disconnected",
+      rejoinUntil,
+    });
+    await expect(
+      connection.lobbyStates.rejoinParticipantSessionByTokenHash({
+        lobbyId: state.lobby.id,
+        tokenHash: session.tokenHash,
+      }),
+    ).resolves.toMatchObject({
+      sessionId: session.id,
+      participantId: session.participantId,
+      status: "active",
+    });
+
+    const restored = await connection.lobbyStates.findById(state.lobby.id);
+    expect(restored?.participants.find(({ id }) => id === session.participantId)).toEqual(
+      state.participants.find(({ id }) => id === session.participantId),
+    );
+    expect(restored?.sessions.find(({ id }) => id === session.id)).toMatchObject({
+      status: "active",
+      disconnectedAt: null,
+      rejoinUntil: null,
+      departedAt: null,
+    });
+  });
+
+  test("retains the original deadline when disconnect handling repeats", async () => {
+    let now = new Date("2026-07-17T10:00:00.000Z");
+    const connection = await connectWithLifecycleClock(() => now);
+    const state = createLobbyState();
+    await createPersistedLobby(connection, state);
+    const session = state.sessions[0]!;
+    const firstDisconnect = await connection.lobbyStates.markParticipantSessionDisconnected({
+      lobbyId: state.lobby.id,
+      sessionId: session.id,
+      reconnectWindowSeconds: 120,
+    });
+
+    now = new Date("2026-07-17T10:01:00.000Z");
+    await expect(
+      connection.lobbyStates.markParticipantSessionDisconnected({
+        lobbyId: state.lobby.id,
+        sessionId: session.id,
+        reconnectWindowSeconds: 120,
+      }),
+    ).resolves.toEqual(firstDisconnect);
+
+    now = new Date("2026-07-17T10:02:00.000Z");
+    await expect(
+      connection.lobbyStates.resolveParticipantSessionByTokenHash({
+        lobbyId: state.lobby.id,
+        tokenHash: session.tokenHash,
+      }),
+    ).resolves.toBeNull();
+    await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toMatchObject({
+      participants: expect.arrayContaining([
+        expect.objectContaining({ id: session.participantId, departedAt: now }),
+      ]),
+      sessions: expect.arrayContaining([
+        expect.objectContaining({
+          id: session.id,
+          disconnectedAt: new Date("2026-07-17T10:00:00.000Z"),
+          rejoinUntil: now,
+          departedAt: now,
+        }),
+      ]),
+    });
+  });
+
+  test("departs the prior slot at the exact rejoin deadline", async () => {
+    let now = new Date("2026-07-17T10:00:00.000Z");
+    const connection = await connectWithLifecycleClock(() => now);
+    const state = createLobbyState();
+    await createPersistedLobby(connection, state);
+    const session = state.sessions[1]!;
+    const disconnectedAt = now;
+    const rejoinUntil = new Date("2026-07-17T10:02:00.000Z");
+
+    await connection.lobbyStates.markParticipantSessionDisconnected({
+      lobbyId: state.lobby.id,
+      sessionId: session.id,
+      reconnectWindowSeconds: 120,
+    });
+    now = rejoinUntil;
+    const replacement = newParticipant(state.lobby.id, "Replacement Player");
+    await expect(
+      connection.lobbyStates.reserveParticipant(replacement, {
+        maxPlayersPerLobby: state.participants.length,
+      }),
+    ).resolves.toEqual({ ok: true, participantId: replacement.id });
+    await expect(
+      connection.lobbyStates.rejoinParticipantSessionByTokenHash({
+        lobbyId: state.lobby.id,
+        tokenHash: session.tokenHash,
+      }),
+    ).resolves.toBeNull();
+
+    const restored = await connection.lobbyStates.findById(state.lobby.id);
+    expect(
+      restored?.participants.find(({ id }) => id === session.participantId)?.departedAt,
+    ).toEqual(rejoinUntil);
+    expect(restored?.sessions.find(({ id }) => id === session.id)).toMatchObject({
+      status: "departed",
+      disconnectedAt,
+      rejoinUntil,
+      departedAt: rejoinUntil,
+    });
+    await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toMatchObject({
+      participants: expect.arrayContaining([
+        expect.objectContaining({
+          id: replacement.id,
+          roundEligibility: "waiting",
+        }),
+      ]),
+    });
+  });
+
+  test("samples rejoin expiry after acquiring the lobby fence", async () => {
+    let now = new Date("2026-07-17T10:00:00.000Z");
+    const connection = await connectWithLifecycleClock(() => now);
+    const state = createLobbyState();
+    await createPersistedLobby(connection, state);
+    const session = state.sessions[0]!;
+    await connection.lobbyStates.markParticipantSessionDisconnected({
+      lobbyId: state.lobby.id,
+      sessionId: session.id,
+      reconnectWindowSeconds: 120,
+    });
+
+    const blocker = await pool.connect();
+    let rejoin:
+      ReturnType<typeof connection.lobbyStates.rejoinParticipantSessionByTokenHash> | undefined;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query(
+        `UPDATE lobbies SET last_event_sequence = last_event_sequence WHERE id = $1`,
+        [state.lobby.id],
+      );
+      now = new Date("2026-07-17T10:01:59.999Z");
+      rejoin = connection.lobbyStates.rejoinParticipantSessionByTokenHash({
+        lobbyId: state.lobby.id,
+        tokenHash: session.tokenHash,
+      });
+      await waitForBlockedParticipantReservations(1);
+      now = new Date("2026-07-17T10:02:00.000Z");
+      await blocker.query("COMMIT");
+    } finally {
+      await blocker.query("ROLLBACK");
+      blocker.release();
+    }
+
+    await expect(rejoin!).resolves.toBeNull();
+    await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toMatchObject({
+      participants: expect.arrayContaining([
+        expect.objectContaining({ id: session.participantId, departedAt: now }),
+      ]),
+    });
+  });
+
+  test("does not issue a replacement credential for an expired prior slot", async () => {
+    let now = new Date("2026-07-17T10:00:00.000Z");
+    const connection = await connectWithLifecycleClock(() => now);
+    const state = createLobbyState();
+    await createPersistedLobby(connection, state);
+    const session = state.sessions[0]!;
+    await connection.lobbyStates.markParticipantSessionDisconnected({
+      lobbyId: state.lobby.id,
+      sessionId: session.id,
+      reconnectWindowSeconds: 120,
+    });
+
+    now = new Date("2026-07-17T10:02:00.000Z");
+    await expect(
+      connection.lobbyStates.createParticipantSession({
+        id: `session-replacement-${randomUUID()}`,
+        lobbyId: state.lobby.id,
+        participantId: session.participantId,
+        tokenHash: new Uint8Array(randomBytes(32)),
+        issuedAt: now,
+      }),
+    ).resolves.toBe("scope-not-found");
+    await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toMatchObject({
+      participants: expect.arrayContaining([
+        expect.objectContaining({ id: session.participantId, departedAt: now }),
+      ]),
+    });
+  });
+
+  test("invalidates stale sibling credentials when one session rejoins", async () => {
+    let now = new Date("2026-07-17T10:00:00.000Z");
+    const connection = await connectWithLifecycleClock(() => now);
+    const state = createLobbyState();
+    await createPersistedLobby(connection, state);
+    const selected = state.sessions[0]!;
+    const siblingHash = new Uint8Array(randomBytes(32));
+    const siblingId = `session-sibling-${randomUUID()}`;
+    await connection.lobbyStates.createParticipantSession({
+      id: siblingId,
+      lobbyId: state.lobby.id,
+      participantId: selected.participantId,
+      tokenHash: siblingHash,
+      issuedAt: now,
+    });
+
+    await connection.lobbyStates.markParticipantSessionDisconnected({
+      lobbyId: state.lobby.id,
+      sessionId: selected.id,
+      reconnectWindowSeconds: 120,
+    });
+    await connection.lobbyStates.markParticipantSessionDisconnected({
+      lobbyId: state.lobby.id,
+      sessionId: siblingId,
+      reconnectWindowSeconds: 120,
+    });
+    now = new Date("2026-07-17T10:01:00.000Z");
+    await expect(
+      connection.lobbyStates.rejoinParticipantSessionByTokenHash({
+        lobbyId: state.lobby.id,
+        tokenHash: selected.tokenHash,
+      }),
+    ).resolves.toMatchObject({ sessionId: selected.id, status: "active" });
+
+    now = new Date("2026-07-17T10:03:00.000Z");
+    await expect(
+      connection.lobbyStates.resolveParticipantSessionByTokenHash({
+        lobbyId: state.lobby.id,
+        tokenHash: siblingHash,
+      }),
+    ).resolves.toBeNull();
+    const restored = await connection.lobbyStates.findById(state.lobby.id);
+    expect(restored?.participants.find(({ id }) => id === selected.participantId)?.departedAt).toBe(
+      null,
+    );
+    expect(restored?.sessions.find(({ id }) => id === selected.id)?.status).toBe("active");
+    expect(restored?.sessions.find(({ id }) => id === siblingId)).toMatchObject({
+      status: "departed",
+      departedAt: new Date("2026-07-17T10:01:00.000Z"),
+    });
+  });
+
+  test("keeps a participant eligible while a sibling rejoin deadline remains open", async () => {
+    let now = new Date("2026-07-17T10:00:00.000Z");
+    const connection = await connectWithLifecycleClock(() => now);
+    const state = createLobbyState();
+    await createPersistedLobby(connection, state);
+    const selected = state.sessions[0]!;
+    const siblingHash = new Uint8Array(randomBytes(32));
+    const siblingId = `session-sibling-${randomUUID()}`;
+    await connection.lobbyStates.createParticipantSession({
+      id: siblingId,
+      lobbyId: state.lobby.id,
+      participantId: selected.participantId,
+      tokenHash: siblingHash,
+      issuedAt: now,
+    });
+    await connection.lobbyStates.markParticipantSessionDisconnected({
+      lobbyId: state.lobby.id,
+      sessionId: selected.id,
+      reconnectWindowSeconds: 120,
+    });
+
+    now = new Date("2026-07-17T10:01:00.000Z");
+    await connection.lobbyStates.markParticipantSessionDisconnected({
+      lobbyId: state.lobby.id,
+      sessionId: siblingId,
+      reconnectWindowSeconds: 120,
+    });
+    now = new Date("2026-07-17T10:02:00.000Z");
+    await expect(
+      connection.lobbyStates.expireParticipantRejoinWindows(state.lobby.id),
+    ).resolves.toBe(0);
+    await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toMatchObject({
+      participants: expect.arrayContaining([
+        expect.objectContaining({ id: selected.participantId, departedAt: null }),
+      ]),
+      sessions: expect.arrayContaining([
+        expect.objectContaining({ id: selected.id, status: "departed", departedAt: now }),
+        expect.objectContaining({ id: siblingId, status: "disconnected", departedAt: null }),
+      ]),
+    });
+    await expect(
+      connection.lobbyStates.rejoinParticipantSessionByTokenHash({
+        lobbyId: state.lobby.id,
+        tokenHash: siblingHash,
+      }),
+    ).resolves.toMatchObject({ sessionId: siblingId, status: "active" });
+  });
+
+  test("rejects rejoin credentials outside their active lobby", async () => {
+    const connection = await connect();
+    const firstLobby = createLobbyState();
+    const secondLobby = createLobbyState();
+    await createPersistedLobby(connection, firstLobby);
+    await createPersistedLobby(connection, secondLobby);
+    const session = firstLobby.sessions[0]!;
+
+    await expect(
+      connection.lobbyStates.rejoinParticipantSessionByTokenHash({
+        lobbyId: secondLobby.lobby.id,
+        tokenHash: session.tokenHash,
+      }),
+    ).resolves.toBeNull();
+    await pool.query(`UPDATE lobbies SET status = 'COMPLETED' WHERE id = $1`, [
+      firstLobby.lobby.id,
+    ]);
+    await expect(
+      connection.lobbyStates.rejoinParticipantSessionByTokenHash({
+        lobbyId: firstLobby.lobby.id,
+        tokenHash: session.tokenHash,
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      connection.lobbyStates.rejoinParticipantSessionByTokenHash({
+        lobbyId: "deleted-lobby",
+        tokenHash: session.tokenHash,
+      }),
+    ).resolves.toBeNull();
+  });
+
+  test("derives waiting eligibility for a new join during an active round", async () => {
+    const connection = await connect();
+    const initialState = createLobbyState();
+    const state: DurableLobbyState = {
+      ...initialState,
+      round: { ...initialState.round!, stage: "active" },
+    };
+    await createPersistedLobby(connection, state);
+    const participant = newParticipant(state.lobby.id, "Late Player");
+
+    await expect(
+      connection.lobbyStates.reserveParticipant(participant, { maxPlayersPerLobby: 3 }),
+    ).resolves.toEqual({ ok: true, participantId: participant.id });
+    await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toMatchObject({
+      participants: expect.arrayContaining([
+        expect.objectContaining({
+          id: participant.id,
+          roundEligibility: "waiting",
+        }),
+      ]),
+    });
+  });
+
+  test("derives playing eligibility when no round is active", async () => {
+    const connection = await connect();
+    const initialState = createLobbyState();
+    const state: DurableLobbyState = {
+      ...initialState,
+      lobby: { ...initialState.lobby, status: "waiting" },
+      round: null,
+      events: [],
+      commandResults: [],
+    };
+    await createPersistedLobby(connection, state);
+    const participant = newParticipant(state.lobby.id, "Pre-round Player");
+
+    await expect(
+      connection.lobbyStates.reserveParticipant(participant, { maxPlayersPerLobby: 3 }),
+    ).resolves.toEqual({ ok: true, participantId: participant.id });
+    await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toMatchObject({
+      participants: expect.arrayContaining([
+        expect.objectContaining({
+          id: participant.id,
+          roundEligibility: "playing",
+        }),
+      ]),
+    });
   });
 
   test("scopes normalized username reservations to one lobby", async () => {

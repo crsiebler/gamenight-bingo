@@ -179,7 +179,6 @@ export interface NewLobbyParticipant {
   readonly lobbyId: string;
   readonly username: string;
   readonly role: "player";
-  readonly roundEligibility: RoundEligibility;
   readonly joinedAt: Date;
 }
 
@@ -191,14 +190,23 @@ export interface NewParticipantSession {
   readonly issuedAt: Date;
 }
 
-export interface RecognizedParticipantSession {
+interface RecognizedParticipantSessionIdentity {
   readonly sessionId: string;
   readonly lobbyId: string;
   readonly participantId: string;
   readonly username: string;
   readonly role: ParticipantRole;
-  readonly status: "active" | "disconnected";
 }
+
+export type RecognizedParticipantSession =
+  | (RecognizedParticipantSessionIdentity & {
+      readonly status: "active";
+    })
+  | (RecognizedParticipantSessionIdentity & {
+      readonly status: "disconnected";
+      readonly disconnectedAt: Date;
+      readonly rejoinUntil: Date;
+    });
 
 export type CreateParticipantSessionResult = "created" | "scope-not-found" | "token-hash-collision";
 
@@ -253,12 +261,22 @@ export interface LobbyStateRepository {
     options: ReserveParticipantOptions,
   ): Promise<ReserveParticipantResult>;
   createParticipantSession(session: NewParticipantSession): Promise<CreateParticipantSessionResult>;
+  expireParticipantRejoinWindows(lobbyId: string): Promise<number>;
+  markParticipantSessionDisconnected(input: {
+    readonly lobbyId: string;
+    readonly sessionId: string;
+    readonly reconnectWindowSeconds: number;
+  }): Promise<Extract<RecognizedParticipantSession, { readonly status: "disconnected" }> | null>;
   findById(lobbyId: string): Promise<DurableLobbyState | null>;
   findActiveLobbyIdByCode(code: string): Promise<string | null>;
-  findParticipantSessionByTokenHash(input: {
+  resolveParticipantSessionByTokenHash(input: {
     readonly lobbyId: string;
     readonly tokenHash: Uint8Array;
   }): Promise<RecognizedParticipantSession | null>;
+  rejoinParticipantSessionByTokenHash(input: {
+    readonly lobbyId: string;
+    readonly tokenHash: Uint8Array;
+  }): Promise<Extract<RecognizedParticipantSession, { readonly status: "active" }> | null>;
 }
 
 export interface CommandTransactionRequest<Result extends JsonObject = JsonObject> {
@@ -322,6 +340,7 @@ export interface CommandTransactionRepository {
 
 export interface DatabaseConnectionOptions {
   readonly transactionRetry?: TransactionRetryOptions;
+  readonly lifecycleClock?: () => Date;
 }
 
 export interface DatabaseConnection {
@@ -408,6 +427,12 @@ function toJsonObject(value: Prisma.JsonValue): JsonObject {
     throw new TypeError("Persisted event and command payloads must be JSON objects.");
   }
   return value as JsonObject;
+}
+
+function assertValidDate(value: Date, name: string): void {
+  if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
+    throw new RangeError(`${name} must be a valid date.`);
+  }
 }
 
 function isActiveLobbyCodeCollision(error: unknown): boolean {
@@ -541,7 +566,62 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
   constructor(
     private readonly prisma: GeneratedPrismaClient,
     private readonly retryOptions: TransactionRetryOptions,
+    private readonly lifecycleClock: () => Date,
   ) {}
+
+  private currentLifecycleTime(): Date {
+    const now = this.lifecycleClock();
+    assertValidDate(now, "The participant session lifecycle timestamp");
+    return now;
+  }
+
+  private async expireDueParticipantSessions(
+    transaction: Prisma.TransactionClient,
+    lobbyId: string,
+    now: Date,
+  ): Promise<number> {
+    const dueSessions = await transaction.participantSession.findMany({
+      where: {
+        lobbyId,
+        status: "DISCONNECTED",
+        rejoinUntil: { lte: now },
+        participant: { departedAt: null },
+      },
+      select: { id: true, participantId: true, rejoinUntil: true },
+      orderBy: { rejoinUntil: "asc" },
+    });
+    const participantDeadlines = new Map<string, Date>();
+    for (const session of dueSessions) {
+      if (session.rejoinUntil === null) {
+        throw new Error("Disconnected participant sessions require a rejoin deadline.");
+      }
+      await transaction.participantSession.update({
+        where: { id: session.id },
+        data: { status: "DEPARTED", departedAt: session.rejoinUntil },
+      });
+      participantDeadlines.set(session.participantId, session.rejoinUntil);
+    }
+
+    let departedParticipants = 0;
+    for (const [participantId, departedAt] of participantDeadlines) {
+      const validSessions = await transaction.participantSession.count({
+        where: {
+          lobbyId,
+          participantId,
+          status: { in: ["ACTIVE", "DISCONNECTED"] },
+        },
+      });
+      if (validSessions !== 0) {
+        continue;
+      }
+      const departed = await transaction.participant.updateMany({
+        where: { id: participantId, lobbyId, departedAt: null },
+        data: { departedAt },
+      });
+      departedParticipants += departed.count;
+    }
+    return departedParticipants;
+  }
 
   private async insert(
     transaction: Prisma.TransactionClient,
@@ -828,6 +908,12 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
               } as const;
             }
 
+            await this.expireDueParticipantSessions(
+              transaction,
+              participant.lobbyId,
+              this.currentLifecycleTime(),
+            );
+
             const existing = await transaction.participant.findUnique({
               where: {
                 lobbyId_normalizedUsername: {
@@ -848,7 +934,7 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
             }
 
             const participantCount = await transaction.participant.count({
-              where: { lobbyId: participant.lobbyId },
+              where: { lobbyId: participant.lobbyId, departedAt: null },
             });
             if (participantCount >= options.maxPlayersPerLobby) {
               return {
@@ -860,6 +946,17 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
               } as const;
             }
 
+            const currentRound = await transaction.round.findUnique({
+              where: { lobbyId: participant.lobbyId },
+              select: { stage: true },
+            });
+            const roundEligibility =
+              currentRound !== null &&
+              currentRound.stage !== "WAITING" &&
+              currentRound.stage !== "ENDED"
+                ? "WAITING"
+                : "PLAYING";
+
             await transaction.participant.create({
               data: {
                 id: participant.id,
@@ -867,7 +964,7 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
                 username: normalized.username,
                 normalizedUsername: normalized.normalizedUsername,
                 role: "PLAYER",
-                roundEligibility: roundEligibilities.toDatabase(participant.roundEligibility),
+                roundEligibility,
                 joinedAt: participant.joinedAt,
                 departedAt: null,
               },
@@ -896,12 +993,27 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
         async () =>
           this.prisma.$transaction(
             async (transaction) => {
+              const lobbies = await transaction.$queryRaw<readonly { id: string }[]>`
+                UPDATE "lobbies"
+                   SET "last_event_sequence" = "last_event_sequence"
+                 WHERE "id" = ${session.lobbyId}
+                   AND "status" IN ('WAITING', 'ACTIVE')
+                 RETURNING "id"
+              `;
+              if (lobbies.length !== 1) {
+                return "scope-not-found" as const;
+              }
+              await this.expireDueParticipantSessions(
+                transaction,
+                session.lobbyId,
+                this.currentLifecycleTime(),
+              );
+
               const participant = await transaction.participant.findFirst({
                 where: {
                   id: session.participantId,
                   lobbyId: session.lobbyId,
                   departedAt: null,
-                  lobby: { status: { in: ["WAITING", "ACTIVE"] } },
                 },
                 select: { id: true },
               });
@@ -938,6 +1050,126 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
       }
       throw error;
     }
+  }
+
+  async expireParticipantRejoinWindows(lobbyId: string): Promise<number> {
+    return runTransactionWithRetry(
+      async () =>
+        this.prisma.$transaction(
+          async (transaction) => {
+            const lobbies = await transaction.$queryRaw<readonly { id: string }[]>`
+              UPDATE "lobbies"
+                 SET "last_event_sequence" = "last_event_sequence"
+               WHERE "id" = ${lobbyId}
+                 AND "status" IN ('WAITING', 'ACTIVE')
+               RETURNING "id"
+            `;
+            return lobbies.length === 1
+              ? this.expireDueParticipantSessions(transaction, lobbyId, this.currentLifecycleTime())
+              : 0;
+          },
+          {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+            maxWait: 5_000,
+            timeout: 10_000,
+          },
+        ),
+      this.retryOptions,
+    );
+  }
+
+  async markParticipantSessionDisconnected(input: {
+    readonly lobbyId: string;
+    readonly sessionId: string;
+    readonly reconnectWindowSeconds: number;
+  }): Promise<Extract<RecognizedParticipantSession, { readonly status: "disconnected" }> | null> {
+    if (
+      !Number.isSafeInteger(input.reconnectWindowSeconds) ||
+      input.reconnectWindowSeconds < 1 ||
+      input.reconnectWindowSeconds > 3_600
+    ) {
+      throw new RangeError(
+        "The reconnect window must be a safe integer between 1 and 3600 seconds.",
+      );
+    }
+
+    return runTransactionWithRetry(
+      async () =>
+        this.prisma.$transaction(
+          async (transaction) => {
+            const lobbies = await transaction.$queryRaw<readonly { id: string }[]>`
+              UPDATE "lobbies"
+                 SET "last_event_sequence" = "last_event_sequence"
+               WHERE "id" = ${input.lobbyId}
+                 AND "status" IN ('WAITING', 'ACTIVE')
+               RETURNING "id"
+            `;
+            if (lobbies.length !== 1) {
+              return null;
+            }
+
+            const disconnectedAt = this.currentLifecycleTime();
+            await this.expireDueParticipantSessions(transaction, input.lobbyId, disconnectedAt);
+
+            const session = await transaction.participantSession.findFirst({
+              where: {
+                id: input.sessionId,
+                lobbyId: input.lobbyId,
+                status: { in: ["ACTIVE", "DISCONNECTED"] },
+                participant: { departedAt: null },
+              },
+              select: {
+                id: true,
+                lobbyId: true,
+                participantId: true,
+                status: true,
+                disconnectedAt: true,
+                rejoinUntil: true,
+                participant: { select: { username: true, role: true } },
+              },
+            });
+            if (session === null) {
+              return null;
+            }
+
+            const disconnected =
+              session.status === "ACTIVE"
+                ? await transaction.participantSession.update({
+                    where: { id: session.id },
+                    data: {
+                      status: "DISCONNECTED",
+                      disconnectedAt,
+                      rejoinUntil: new Date(
+                        disconnectedAt.getTime() + input.reconnectWindowSeconds * 1_000,
+                      ),
+                      departedAt: null,
+                    },
+                    select: { disconnectedAt: true, rejoinUntil: true },
+                  })
+                : session;
+            if (disconnected.disconnectedAt === null || disconnected.rejoinUntil === null) {
+              throw new Error("Disconnected participant sessions require lifecycle timestamps.");
+            }
+
+            return {
+              sessionId: session.id,
+              lobbyId: session.lobbyId,
+              participantId: session.participantId,
+              username: session.participant.username,
+              role: participantRoles.fromDatabase(session.participant.role),
+              status: "disconnected",
+              disconnectedAt: disconnected.disconnectedAt,
+              rejoinUntil: disconnected.rejoinUntil,
+            };
+          },
+          {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+            maxWait: 5_000,
+            timeout: 10_000,
+          },
+        ),
+      this.retryOptions,
+    );
   }
 
   async findById(lobbyId: string): Promise<DurableLobbyState | null> {
@@ -1093,42 +1325,133 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
     return lobby?.id ?? null;
   }
 
-  async findParticipantSessionByTokenHash(input: {
+  async resolveParticipantSessionByTokenHash(input: {
     readonly lobbyId: string;
     readonly tokenHash: Uint8Array;
   }): Promise<RecognizedParticipantSession | null> {
+    return this.accessParticipantSessionByTokenHash(input, false);
+  }
+
+  async rejoinParticipantSessionByTokenHash(input: {
+    readonly lobbyId: string;
+    readonly tokenHash: Uint8Array;
+  }): Promise<Extract<RecognizedParticipantSession, { readonly status: "active" }> | null> {
+    const session = await this.accessParticipantSessionByTokenHash(input, true);
+    return session?.status === "active" ? session : null;
+  }
+
+  private async accessParticipantSessionByTokenHash(
+    input: {
+      readonly lobbyId: string;
+      readonly tokenHash: Uint8Array;
+    },
+    activate: boolean,
+  ): Promise<RecognizedParticipantSession | null> {
     if (input.tokenHash.length !== 32) {
       throw new RangeError("Participant session token hashes must contain exactly 32 bytes.");
     }
 
-    const session = await this.prisma.participantSession.findFirst({
-      where: {
-        lobbyId: input.lobbyId,
-        tokenHash: new Uint8Array(input.tokenHash),
-        status: { in: ["ACTIVE", "DISCONNECTED"] },
-        lobby: { status: { in: ["WAITING", "ACTIVE"] } },
-        participant: { departedAt: null },
-      },
-      select: {
-        id: true,
-        lobbyId: true,
-        participantId: true,
-        status: true,
-        participant: { select: { username: true, role: true } },
-      },
-    });
-    if (session === null || session.status === "DEPARTED") {
-      return null;
-    }
+    return runTransactionWithRetry(
+      async () =>
+        this.prisma.$transaction(
+          async (transaction) => {
+            const lobbies = await transaction.$queryRaw<readonly { id: string }[]>`
+              UPDATE "lobbies"
+                 SET "last_event_sequence" = "last_event_sequence"
+               WHERE "id" = ${input.lobbyId}
+                 AND "status" IN ('WAITING', 'ACTIVE')
+               RETURNING "id"
+            `;
+            if (lobbies.length !== 1) {
+              return null;
+            }
 
-    return {
-      sessionId: session.id,
-      lobbyId: session.lobbyId,
-      participantId: session.participantId,
-      username: session.participant.username,
-      role: participantRoles.fromDatabase(session.participant.role),
-      status: session.status === "ACTIVE" ? "active" : "disconnected",
-    };
+            const now = this.currentLifecycleTime();
+            await this.expireDueParticipantSessions(transaction, input.lobbyId, now);
+
+            const session = await transaction.participantSession.findFirst({
+              where: {
+                lobbyId: input.lobbyId,
+                tokenHash: new Uint8Array(input.tokenHash),
+                status: { in: ["ACTIVE", "DISCONNECTED"] },
+                participant: { departedAt: null },
+              },
+              select: {
+                id: true,
+                lobbyId: true,
+                participantId: true,
+                status: true,
+                disconnectedAt: true,
+                rejoinUntil: true,
+                participant: { select: { username: true, role: true } },
+              },
+            });
+            if (session === null) {
+              return null;
+            }
+
+            const identity = {
+              sessionId: session.id,
+              lobbyId: session.lobbyId,
+              participantId: session.participantId,
+              username: session.participant.username,
+              role: participantRoles.fromDatabase(session.participant.role),
+            };
+            if (session.status === "ACTIVE") {
+              if (activate) {
+                await transaction.participantSession.updateMany({
+                  where: {
+                    lobbyId: session.lobbyId,
+                    participantId: session.participantId,
+                    id: { not: session.id },
+                    status: { not: "DEPARTED" },
+                  },
+                  data: { status: "DEPARTED", departedAt: now },
+                });
+              }
+              return { ...identity, status: "active" } as const;
+            }
+            if (session.disconnectedAt === null || session.rejoinUntil === null) {
+              throw new Error("Disconnected participant sessions require lifecycle timestamps.");
+            }
+
+            if (activate) {
+              await transaction.participantSession.update({
+                where: { id: session.id },
+                data: {
+                  status: "ACTIVE",
+                  disconnectedAt: null,
+                  rejoinUntil: null,
+                  departedAt: null,
+                },
+              });
+              await transaction.participantSession.updateMany({
+                where: {
+                  lobbyId: session.lobbyId,
+                  participantId: session.participantId,
+                  id: { not: session.id },
+                  status: { not: "DEPARTED" },
+                },
+                data: { status: "DEPARTED", departedAt: now },
+              });
+              return { ...identity, status: "active" } as const;
+            }
+
+            return {
+              ...identity,
+              status: "disconnected",
+              disconnectedAt: session.disconnectedAt,
+              rejoinUntil: session.rejoinUntil,
+            } as const;
+          },
+          {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+            maxWait: 5_000,
+            timeout: 10_000,
+          },
+        ),
+      this.retryOptions,
+    );
   }
 }
 
@@ -1280,7 +1603,11 @@ export async function connectDatabase(
   await prisma.$connect();
 
   return {
-    lobbyStates: new PrismaLobbyStateRepository(prisma, options.transactionRetry ?? {}),
+    lobbyStates: new PrismaLobbyStateRepository(
+      prisma,
+      options.transactionRetry ?? {},
+      options.lifecycleClock ?? (() => new Date()),
+    ),
     commandTransactions: new PrismaCommandTransactionRepository(
       prisma,
       options.transactionRetry ?? {},
