@@ -43,6 +43,7 @@ Next story: US-001
 - Authoritative snapshot projections construct stage-specific fields only for stages that require them; an open co-winner window may contain confirmed winners before a settled result exists.
 - Framework-routing guarantees require live Next request coverage under an approved migrated `TEST_DATABASE_URL`; dispatcher unit tests and route-source assertions do not prove unsupported methods or catch-all resources retain stable errors and private cache headers.
 - Realtime tickets use 32 random bytes encoded as canonical unpadded base64url, persist only SHA-256 hashes bound to lobby/participant/session scope, and issue under the lobby fence from an active cookie session. Consumption burns the presented row whether valid or not and returns only authoritative identity for a valid unexpired active scope; issuance purges expired abandoned tickets, and session deactivation invalidates outstanding tickets so rejoin cannot revive them.
+- Round-control commands are rate-limited before lobby-fence acquisition, then resolve the active session, actor role, current round, and own card inside one Serializable transaction; command results persist canonical intent so changed-payload command-ID reuse is rejected, active-lobby replays retain their original sequence, and private mark acknowledgements allocate no lobby sequence. Before replacing a round, expire due participant sessions before roster selection and detach prior active-event and command-result round scopes so replay tombstones survive without retaining old gameplay state.
 
 Append-only iteration log
 -------------------------
@@ -2366,3 +2367,111 @@ Review outcome for resumed US-028 at 2026-07-17 12:28:37 MST:
 - `code-reviewer`, `qa-expert`, and `security-engineer` reviewed the complete restaged high-risk diff and returned empty actionable finding lists.
 - The reviewers confirmed the failure-safe PostgreSQL lock cleanup resolves the prior QA blocker without changing the already-reviewed issuance, expiry, burn-on-presentation, scope, renewal, or redaction behavior.
 - Residual risk is limited to actual Socket.IO handshake and browser reconnect integration intentionally assigned to US-030. No in-scope critical, high, or medium findings remain; US-028 can be marked passing and committed.
+
+## 2026-07-17 12:59:39 MST - US-029
+- What was implemented
+  - Added strict `POST` endpoints for configure, create/start/pause/resume/call-next/continue/end round, and own-card mark commands through the shared versioned private dispatcher.
+  - Added scoped-cookie authentication, endpoint-specific command parsing, host versus own-card authorization, stable private errors, and committed active-lobby or participant-private acknowledgements.
+  - Added a PostgreSQL round-command executor that resolves identity and command scope under the lobby fence, applies canonical domain transitions and authoritative card/draw operations, persists state/events/results atomically, rejects changed-intent command-ID reuse, and replays original committed metadata without repeating effects.
+  - Added HTTP, pure command-rule, and PostgreSQL integration coverage for route contracts, call configuration, cookie scope, authorization, own-card marking, privacy, sequences, and idempotent replay.
+- Files changed: `AGENTS.md`, `apps/web/src/lobby-entry-http.test.ts`, `apps/web/src/lobby-entry-http.ts`, `apps/web/src/lobby-entry-runtime.ts`, `packages/database/src/database.integration.test.ts`, `packages/database/src/index.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/participant-session-expiry.ts`, `packages/database/src/round-command-executor.test.ts`, `packages/database/src/round-command-executor.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-029 - Implement round-control HTTP APIs`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/lobby-entry-http.test.ts` (expected fail before implementation with 23 missing route/contract behaviors; pass after implementation)
+  - `bunx vitest run apps/web/src/lobby-entry-http.test.ts packages/database/src/round-command-executor.test.ts` (pass; 2 files and 57 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `bun run test` (pass after review remediation; 22 files and 333 tests; 70 PostgreSQL tests skipped because `TEST_DATABASE_URL` is unset)
+  - `bunx prettier --check <intended story files>` (pass)
+  - `bun run format:check` (fails only on three pre-existing untracked browser-report files; all intended files pass)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: none in story notes
+  - Used: `api-designer` for endpoint/application-port guidance and `backend-developer` for the atomic PostgreSQL executor; both were within the standard-mode complex-story budget
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive `security-engineer`; targeted re-review planned for the remediated areas
+  - Findings: fixed missing pre-fence command throttling, round-replacement replay loss, and insufficient command-path/idempotency/authorization coverage before targeted re-review
+- Decisions (why):
+  - Reused the existing v1 mutation command and acknowledgement contracts instead of adding HTTP-only shapes so fallback HTTP and later realtime transports share one intent model.
+  - Kept canonical pattern lookup injected from the web runtime so Prisma remains confined to `packages/database` without introducing a database-to-pattern-catalog dependency.
+  - Performed session, role, round, and own-card resolution inside the command transaction because separate HTTP authorization would create a stale-identity race before persistence.
+  - Persisted canonical command intent in the result because command type and round ID alone cannot detect a reused configure, continue, or mark command ID with changed payload.
+- **Learnings for future iterations:**
+  - Active-lobby acknowledgements must use the persisted command-result sequence on replay because a replay intentionally produces no fresh broadcast event.
+  - Participant-private mark results persist with `eventSequence: null`; only lobby-visible commands allocate the monotonic active-lobby sequence.
+  - The catch-all Next route already exports every supported HTTP method, so new private resources belong in the shared dispatcher to preserve stable `no-store` errors rather than in isolated route modules.
+- Known issues / follow-ups:
+  - PostgreSQL integration cases were added but could not run because no approved `TEST_DATABASE_URL` is present; the generic suite skipped the existing 70 database tests.
+  - The unrelated untracked browser-report artifacts remain untouched and unstaged; root `bun run format:check` reports three of them while intended story files pass Prettier.
+  - Realtime Socket.IO command transport and post-commit broadcasting remain assigned to US-030.
+- Next iteration start:
+  - If review passes, implement US-030 authenticated Socket.IO; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-029 at 2026-07-17 13:10:00 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced four deduplicated blockers: no pre-fence command rate limit, round replacement deleting replay protection, incomplete PostgreSQL command-path coverage, and insufficient changed-intent/concurrency/scope authorization coverage.
+- Added a failing HTTP regression before implementing a bounded command limiter that rejects excess requests before body, lobby lookup, or transaction-fence work.
+- Detached prior command-result round scopes before deleting an ended round so replay intent and original acknowledgement metadata survive while old cards, calls, marks, draw order, winners, and round events still cascade.
+- Added PostgreSQL cases covering create/configure/start/pause/resume/call-next/continue/end/mark behavior, generated card/draw state, automatic deadlines, state preservation, changed-intent rejection, cross-lobby and disconnected credentials, concurrent duplicates, round-replacement replay, sequence allocation, and rollback/no-mutation outcomes.
+- Preserved monotonic lobby activity for participant-private marks with `GREATEST`, matching existing command activity behavior.
+- Post-fix checks: focused HTTP and executor tests pass; `bun run typecheck`, `bun run lint`, and `bun run test` pass with 333 tests and 70 PostgreSQL tests skipped without `TEST_DATABASE_URL`; intended-file Prettier and staged/unstaged whitespace checks pass.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` because substantive fixes affected every original specialist area.
+
+Targeted re-review outcome for US-029 at 2026-07-17 13:12:00 MST:
+- `qa-expert` and `security-engineer` returned empty actionable finding lists; their residual risk is the unexecuted PostgreSQL suite while `TEST_DATABASE_URL` is absent.
+- `code-reviewer` found one remaining high blocker: detaching `command_results.round_id` does not preserve lobby-visible replay tombstones because those results still reference round-scoped `active_lobby_events`, and deleting the round cascades the event then the command result through `command_results_event_fkey`.
+- The blocker is in scope because a delayed old start/configure/call command can otherwise execute against the replacement round instead of replaying its original acknowledgement or rejecting changed intent.
+- Per the one-targeted-re-review limit, US-029 remains `passes: false`; `prd.json` was not updated and no commit was created.
+- Next iteration start: detach both command-result and referenced active-event round scopes before deleting an ended round, add a regression that verifies the event/result rows and original acknowledgement survive replacement, rerun all checks, and restart the complete staged review loop.
+
+## 2026-07-17 13:17:02 MST - US-029
+- What was implemented
+  - Resumed the round-control HTTP API story and fixed the remaining round-replacement replay cascade identified by the prior targeted review.
+  - Detached prior-round active-lobby event scopes before deleting the ended round, preserving the event rows required by lobby-visible command replay tombstones while old gameplay rows still cascade.
+  - Strengthened the PostgreSQL regression to verify the original event, command results, sequence, timestamp, scope, and acknowledgement survive replacement without re-executing the old command.
+  - Corrected an independently exposed changed-intent test fixture so its call-free round no longer retained an invalid called-ball mark.
+- Files changed: `AGENTS.md`, `apps/web/src/lobby-entry-http.test.ts`, `apps/web/src/lobby-entry-http.ts`, `apps/web/src/lobby-entry-runtime.ts`, `packages/database/src/database.integration.test.ts`, `packages/database/src/index.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/participant-session-expiry.ts`, `packages/database/src/round-command-executor.test.ts`, `packages/database/src/round-command-executor.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-029 - Implement round-control HTTP APIs`
+- Auto approval: `enabled`
+- Checks:
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "preserves command replay intent when an ended round is replaced"` (expected fail before implementation because the old command executed again with sequence 3; pass after implementation)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (initial fail on an invalid pre-existing changed-intent fixture; pass after fixture correction with typecheck, 23 files, and 403 tests)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `DATABASE_URL=<approved local Compose database> bun run --cwd apps/web build` (pass; all versioned API routes compiled)
+  - `bun install --frozen-lockfile` (pass; 371 installs checked with no changes)
+  - `git diff --check && git diff --cached --check` (pass)
+- Implementation agents:
+  - Recommended: none in story notes
+  - Used: skipped additional agents because `api-designer` and `backend-developer` already advised US-029, and this resumed iteration directly addressed one concrete prior review finding
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive `security-engineer` planned for the complete restaged high-risk diff
+  - Findings: fixed the blocking due-session roster-selection finding; targeted `code-reviewer` re-review returned no actionable findings
+- Decisions (why):
+  - Detached the active-event scope before command-result scope because both rows must survive round deletion for the existing composite event reference and original acknowledgement sequence to remain valid.
+  - Preserved prior active-lobby event rows rather than changing the append-only migration history or weakening the command-result event foreign key because the targeted review required replay metadata preservation within the existing durable model.
+  - Ran the previously skipped PostgreSQL suite against the healthy local Compose database because scoped auto approval is enabled and the defect depends on real cascade behavior.
+- **Learnings for future iterations:**
+  - A lobby-visible replay tombstone depends on both `command_results` and its referenced `active_lobby_events` row; detaching only the command result does not prevent the event cascade from deleting it.
+  - Database integration fixtures must preserve called-ball coherence when removing calls: cards in a call-free round cannot retain marks.
+- Known issues / follow-ups:
+  - The unrelated untracked browser-report artifacts remain untouched and unstaged; tracked files pass Prettier.
+  - Realtime Socket.IO command transport and post-commit broadcasting remain assigned to US-030.
+- Next iteration start:
+  - If review passes, implement US-030 authenticated Socket.IO; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for resumed US-029 at 2026-07-17 13:27:00 MST:
+- The complete staged `code-reviewer`, `qa-expert`, and `security-engineer` pass produced one blocking medium finding: create-round roster selection did not first expire disconnected sessions whose rejoin deadline had passed. QA and security returned empty finding lists.
+- Added a failing PostgreSQL regression proving the overdue participant remained active and received a replacement-round card before remediation.
+- Extracted the existing lobby-fenced session-expiry transition into a shared database-internal helper and invoked it with the post-fence command timestamp before selecting or updating the new-round roster.
+- The regression now proves the due session and participant depart at the durable deadline and only the active host receives a card.
+- Post-fix checks: focused expiry regression passes; `TEST_DATABASE_URL=<approved local Compose database> bun run test` passes typecheck, 23 files, and 404 tests; lint, intended-file Prettier, and whitespace checks pass.
+- Targeted re-review: pending `code-reviewer` review because its finding received the substantive production and integration-test fix; QA and security are not repeated because their initial finding lists were empty.
+
+Targeted re-review outcome for resumed US-029 at 2026-07-17 13:29:00 MST:
+- `code-reviewer` reviewed the revised complete staged diff and returned an empty actionable finding list with no residual risks.
+- The shared due-session expiry transition now runs inside the round-command lobby fence before roster selection, resolving the only blocking finding without changing the reviewed authorization, replay, or sequencing behavior.
+- No in-scope critical, high, or medium findings remain. US-029 can be marked passing and committed after the final staged/unstaged consistency check.

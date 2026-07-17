@@ -3,7 +3,18 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 
-import { SnapshotSchema } from "@gamenight-bingo/contracts";
+import {
+  CallNextCommandSchema,
+  ConfigureCommandSchema,
+  ContinueRoundCommandSchema,
+  CreateRoundCommandSchema,
+  EndRoundCommandSchema,
+  MarkCardCommandSchema,
+  PauseRoundCommandSchema,
+  ResumeRoundCommandSchema,
+  SnapshotSchema,
+  StartRoundCommandSchema,
+} from "@gamenight-bingo/contracts";
 
 import {
   CommandReplayMismatchError,
@@ -359,6 +370,23 @@ describeDatabase("PostgreSQL durable game state", () => {
 
   async function connectWithLifecycleClock(clock: () => Date) {
     const connection = await connectDatabase(testDatabaseUrl!, { lifecycleClock: clock });
+    connections.push(connection);
+    return connection;
+  }
+
+  async function connectWithRoundCommands(clock: () => Date) {
+    const connection = await connectDatabase(testDatabaseUrl!, {
+      roundCommands: {
+        patterns: [
+          { id: "standard-one-line", mode: "one-line" },
+          { id: "standard-two-lines", mode: "two-lines" },
+          { id: "standard-blackout", mode: "blackout" },
+        ],
+        clock,
+        randomBytes: (length) => new Uint8Array(randomBytes(length)),
+        nextId: (prefix) => `${prefix}-${randomUUID()}`,
+      },
+    });
     connections.push(connection);
     return connection;
   }
@@ -2878,6 +2906,557 @@ describeDatabase("PostgreSQL durable game state", () => {
 
     expect(restored?.lobby.lastActivityAt).toEqual(state.lobby.lastActivityAt);
     expect(restored?.lobby.lastEventSequence).toBe(1n);
+    expect(restored?.events).toHaveLength(1);
+    expect(restored?.commandResults).toHaveLength(1);
+  });
+
+  test("atomically commits and replays an authorized host round command", async () => {
+    const occurredAt = new Date("2026-07-17T09:06:00.000Z");
+    const connection = await connectWithRoundCommands(() => occurredAt);
+    const state = createLobbyState();
+    const command = EndRoundCommandSchema.parse({
+      schemaVersion: 1,
+      type: "end-round",
+      commandId: `end-${randomUUID()}`,
+    });
+    await createPersistedLobby(connection, state);
+
+    const execute = () =>
+      connection.roundCommands.execute({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: state.sessions[0]!.tokenHash,
+        command,
+      });
+    const committed = await execute();
+    const replayed = await execute();
+    const restored = await connection.lobbyStates.findById(state.lobby.id);
+
+    expect(committed).toEqual({
+      ok: true,
+      acknowledgement: {
+        commandId: command.commandId,
+        scope: "active-lobby",
+        eventSequence: 2,
+        occurredAt,
+        idempotentReplay: false,
+      },
+    });
+    expect(replayed).toEqual({
+      ok: true,
+      acknowledgement: {
+        commandId: command.commandId,
+        scope: "active-lobby",
+        eventSequence: 2,
+        occurredAt,
+        idempotentReplay: true,
+      },
+    });
+    expect(restored?.round?.stage).toBe("ended");
+    expect(restored?.lobby.status).toBe("waiting");
+    expect(restored?.events).toHaveLength(2);
+    expect(JSON.stringify(restored?.events.at(-1)?.payload)).not.toMatch(
+      /drawOrder|drawPositions|cards|cells/,
+    );
+  });
+
+  test("commits create, configure, start, pause, resume, and call-next transitions", async () => {
+    let now = new Date("2026-07-17T09:10:00.000Z");
+    const connection = await connectWithRoundCommands(() => now);
+    const initial = createLobbyState();
+    const state: DurableLobbyState = {
+      ...initial,
+      lobby: {
+        ...initial.lobby,
+        status: "waiting",
+        lastEventSequence: 0n,
+        endedAt: null,
+      },
+      round: null,
+      events: [],
+      commandResults: [],
+    };
+    await createPersistedLobby(connection, state);
+    const hostHash = state.sessions[0]!.tokenHash;
+    const execute = (command: Parameters<typeof connection.roundCommands.execute>[0]["command"]) =>
+      connection.roundCommands.execute({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: hostHash,
+        command,
+      });
+
+    const created = await execute(
+      CreateRoundCommandSchema.parse({
+        schemaVersion: 1,
+        type: "create-round",
+        commandId: `create-round-${randomUUID()}`,
+      }),
+    );
+    let restored = await connection.lobbyStates.findById(state.lobby.id);
+    expect(created).toMatchObject({
+      ok: true,
+      acknowledgement: { scope: "active-lobby", eventSequence: 1 },
+    });
+    expect(restored?.round).toMatchObject({
+      stage: "waiting",
+      initialPatternId: "standard-one-line",
+      callMode: "manual",
+    });
+    expect(restored?.round?.cards).toHaveLength(2);
+    expect(restored?.round?.drawOrder).toHaveLength(75);
+
+    now = new Date("2026-07-17T09:11:00.000Z");
+    await expect(
+      execute(
+        ConfigureCommandSchema.parse({
+          schemaVersion: 1,
+          type: "configure",
+          commandId: `configure-${randomUUID()}`,
+          patternId: "standard-one-line",
+          callConfiguration: { mode: "automatic", intervalSeconds: 30 },
+        }),
+      ),
+    ).resolves.toMatchObject({ ok: true, acknowledgement: { eventSequence: 2 } });
+    restored = await connection.lobbyStates.findById(state.lobby.id);
+    expect(restored?.round).toMatchObject({ callMode: "automatic", callIntervalSeconds: 30 });
+
+    now = new Date("2026-07-17T09:12:00.000Z");
+    await expect(
+      execute(
+        StartRoundCommandSchema.parse({
+          schemaVersion: 1,
+          type: "start-round",
+          commandId: `start-${randomUUID()}`,
+        }),
+      ),
+    ).resolves.toMatchObject({ ok: true, acknowledgement: { eventSequence: 3 } });
+    restored = await connection.lobbyStates.findById(state.lobby.id);
+    expect(restored?.round).toMatchObject({
+      stage: "active",
+      nextCallAt: new Date("2026-07-17T09:12:30.000Z"),
+    });
+
+    now = new Date("2026-07-17T09:13:00.000Z");
+    await expect(
+      execute(
+        PauseRoundCommandSchema.parse({
+          schemaVersion: 1,
+          type: "pause-round",
+          commandId: `pause-${randomUUID()}`,
+        }),
+      ),
+    ).resolves.toMatchObject({ ok: true, acknowledgement: { eventSequence: 4 } });
+    restored = await connection.lobbyStates.findById(state.lobby.id);
+    expect(restored?.round).toMatchObject({
+      stage: "paused",
+      pauseReason: "host-command",
+      nextCallAt: null,
+    });
+
+    now = new Date("2026-07-17T09:14:00.000Z");
+    await expect(
+      execute(
+        ResumeRoundCommandSchema.parse({
+          schemaVersion: 1,
+          type: "resume-round",
+          commandId: `resume-${randomUUID()}`,
+        }),
+      ),
+    ).resolves.toMatchObject({ ok: true, acknowledgement: { eventSequence: 5 } });
+    restored = await connection.lobbyStates.findById(state.lobby.id);
+    expect(restored?.round).toMatchObject({
+      stage: "active",
+      nextCallAt: new Date("2026-07-17T09:14:30.000Z"),
+    });
+
+    now = new Date("2026-07-17T09:15:00.000Z");
+    await expect(
+      execute(
+        CallNextCommandSchema.parse({
+          schemaVersion: 1,
+          type: "call-next",
+          commandId: `call-${randomUUID()}`,
+        }),
+      ),
+    ).resolves.toMatchObject({ ok: true, acknowledgement: { eventSequence: 6 } });
+    restored = await connection.lobbyStates.findById(state.lobby.id);
+    expect(restored?.round?.calls).toEqual([
+      expect.objectContaining({ position: 1, calledAt: now }),
+    ]);
+    expect(restored?.events).toHaveLength(6);
+    expect(restored?.commandResults).toHaveLength(6);
+  });
+
+  test("continues a settled One Line result without replacing round play state", async () => {
+    const occurredAt = new Date("2026-07-17T09:16:00.000Z");
+    const connection = await connectWithRoundCommands(() => occurredAt);
+    const state = createLobbyState();
+    await createPersistedLobby(connection, state);
+    const command = ContinueRoundCommandSchema.parse({
+      schemaVersion: 1,
+      type: "continue-round",
+      commandId: `continue-${randomUUID()}`,
+      patternId: "standard-two-lines",
+    });
+
+    await expect(
+      connection.roundCommands.execute({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: state.sessions[0]!.tokenHash,
+        command,
+      }),
+    ).resolves.toMatchObject({ ok: true, acknowledgement: { eventSequence: 2 } });
+    const restored = await connection.lobbyStates.findById(state.lobby.id);
+
+    expect(restored?.round).toMatchObject({
+      id: state.round!.id,
+      stage: "active",
+      currentPatternId: "standard-two-lines",
+      cards: state.round!.cards,
+      calls: state.round!.calls,
+      coWinners: [],
+    });
+  });
+
+  test("preserves command replay intent when an ended round is replaced", async () => {
+    const occurredAt = new Date("2026-07-17T09:17:00.000Z");
+    const connection = await connectWithRoundCommands(() => occurredAt);
+    const initial = createLobbyState();
+    const priorCommand = StartRoundCommandSchema.parse({
+      schemaVersion: 1,
+      type: "start-round",
+      commandId: `prior-start-${randomUUID()}`,
+    });
+    const state: DurableLobbyState = {
+      ...initial,
+      lobby: { ...initial.lobby, status: "waiting" },
+      round: { ...initial.round!, stage: "ended", endedAt: initial.round!.resultSettledAt },
+      commandResults: [
+        ...initial.commandResults,
+        {
+          participantId: initial.participants[0]!.id,
+          commandId: priorCommand.commandId,
+          roundId: initial.round!.id,
+          commandType: priorCommand.type,
+          deliveryScope: "active-lobby",
+          eventSequence: 1n,
+          result: { intent: priorCommand },
+          createdAt: initial.round!.startedAt!,
+        },
+      ],
+    };
+    await createPersistedLobby(connection, state);
+    await connection.roundCommands.execute({
+      lobbyId: state.lobby.id,
+      sessionTokenHash: state.sessions[0]!.tokenHash,
+      command: CreateRoundCommandSchema.parse({
+        schemaVersion: 1,
+        type: "create-round",
+        commandId: `replacement-${randomUUID()}`,
+      }),
+    });
+
+    const replayed = await connection.roundCommands.execute({
+      lobbyId: state.lobby.id,
+      sessionTokenHash: state.sessions[0]!.tokenHash,
+      command: priorCommand,
+    });
+    const restored = await connection.lobbyStates.findById(state.lobby.id);
+
+    expect(replayed).toMatchObject({
+      ok: true,
+      acknowledgement: {
+        commandId: priorCommand.commandId,
+        scope: "active-lobby",
+        eventSequence: 1,
+        occurredAt: initial.round!.startedAt,
+        idempotentReplay: true,
+      },
+    });
+    expect(restored?.round?.stage).toBe("waiting");
+    expect(restored?.events).toEqual([
+      { ...initial.events[0]!, roundId: null },
+      expect.objectContaining({ sequence: 2n, roundId: restored?.round?.id }),
+    ]);
+    expect(
+      restored?.commandResults.find(
+        ({ commandId }) => commandId === initial.commandResults[0]!.commandId,
+      ),
+    ).toEqual({ ...initial.commandResults[0]!, roundId: null });
+    expect(
+      restored?.commandResults.find(({ commandId }) => commandId === priorCommand.commandId),
+    ).toEqual({
+      participantId: initial.participants[0]!.id,
+      commandId: priorCommand.commandId,
+      roundId: null,
+      commandType: priorCommand.type,
+      deliveryScope: "active-lobby",
+      eventSequence: 1n,
+      result: { intent: priorCommand },
+      createdAt: initial.round!.startedAt,
+    });
+  });
+
+  test("expires due participant sessions before selecting a replacement-round roster", async () => {
+    const occurredAt = new Date("2026-07-17T09:17:00.000Z");
+    const rejoinUntil = new Date("2026-07-17T09:16:00.000Z");
+    const connection = await connectWithRoundCommands(() => occurredAt);
+    const initial = createLobbyState();
+    const player = initial.participants[1]!;
+    const playerSession = initial.sessions[1]!;
+    const state: DurableLobbyState = {
+      ...initial,
+      lobby: { ...initial.lobby, status: "waiting" },
+      round: { ...initial.round!, stage: "ended", endedAt: initial.round!.resultSettledAt },
+      sessions: initial.sessions.map((session) =>
+        session.id === playerSession.id
+          ? {
+              ...session,
+              status: "disconnected",
+              disconnectedAt: new Date("2026-07-17T09:14:00.000Z"),
+              rejoinUntil,
+            }
+          : session,
+      ),
+    };
+    await createPersistedLobby(connection, state);
+
+    await expect(
+      connection.roundCommands.execute({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: state.sessions[0]!.tokenHash,
+        command: CreateRoundCommandSchema.parse({
+          schemaVersion: 1,
+          type: "create-round",
+          commandId: `replacement-after-expiry-${randomUUID()}`,
+        }),
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    const restored = await connection.lobbyStates.findById(state.lobby.id);
+
+    expect(restored?.participants.find(({ id }) => id === player.id)).toMatchObject({
+      departedAt: rejoinUntil,
+    });
+    expect(restored?.sessions.find(({ id }) => id === playerSession.id)).toMatchObject({
+      status: "departed",
+      departedAt: rejoinUntil,
+    });
+    expect(restored?.round?.cards.map(({ participantId }) => participantId)).toEqual([
+      initial.participants[0]!.id,
+    ]);
+  });
+
+  test("rejects changed replay intent without mutating the configured round", async () => {
+    const connection = await connectWithRoundCommands(() => new Date("2026-07-17T09:18:00.000Z"));
+    const initial = createLobbyState();
+    const state: DurableLobbyState = {
+      ...initial,
+      lobby: { ...initial.lobby, status: "waiting", lastEventSequence: 0n },
+      round: {
+        ...initial.round!,
+        stage: "waiting",
+        startedAt: null,
+        activeAt: null,
+        resultSettledAt: null,
+        coWinnerTriggeringCallId: null,
+        coWinnerOpenedAt: null,
+        coWinnerClosesAt: null,
+        calls: [],
+        cards: initial.round!.cards.map((card) => ({ ...card, marks: [] })),
+        coWinners: [],
+      },
+      events: [],
+      commandResults: [],
+    };
+    const commandId = `configure-replay-${randomUUID()}`;
+    await createPersistedLobby(connection, state);
+    const execute = (intervalSeconds: 30 | 60) =>
+      connection.roundCommands.execute({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: state.sessions[0]!.tokenHash,
+        command: ConfigureCommandSchema.parse({
+          schemaVersion: 1,
+          type: "configure",
+          commandId,
+          patternId: "standard-one-line",
+          callConfiguration: { mode: "automatic", intervalSeconds },
+        }),
+      });
+
+    await expect(execute(30)).resolves.toMatchObject({ ok: true });
+    await expect(execute(60)).resolves.toEqual({
+      ok: false,
+      error: { code: "INVALID_COMMAND" },
+    });
+    const restored = await connection.lobbyStates.findById(state.lobby.id);
+
+    expect(restored?.round?.callIntervalSeconds).toBe(30);
+    expect(restored?.events).toHaveLength(1);
+    expect(restored?.commandResults).toHaveLength(1);
+  });
+
+  test("rejects cross-lobby and inactive session credentials before command mutation", async () => {
+    const occurredAt = new Date("2026-07-17T09:19:00.000Z");
+    const connection = await connectWithRoundCommands(() => occurredAt);
+    const first = createLobbyState();
+    const second = createLobbyState();
+    const command = EndRoundCommandSchema.parse({
+      schemaVersion: 1,
+      type: "end-round",
+      commandId: `unauthorized-end-${randomUUID()}`,
+    });
+    await createPersistedLobby(connection, first);
+    await createPersistedLobby(connection, second);
+
+    await expect(
+      connection.roundCommands.execute({
+        lobbyId: second.lobby.id,
+        sessionTokenHash: first.sessions[0]!.tokenHash,
+        command,
+      }),
+    ).resolves.toEqual({ ok: false, error: { code: "UNAUTHORIZED" } });
+    await connection.lobbyStates.markParticipantSessionDisconnected({
+      lobbyId: first.lobby.id,
+      sessionId: first.sessions[0]!.id,
+      reconnectWindowSeconds: 120,
+    });
+    await expect(
+      connection.roundCommands.execute({
+        lobbyId: first.lobby.id,
+        sessionTokenHash: first.sessions[0]!.tokenHash,
+        command,
+      }),
+    ).resolves.toEqual({ ok: false, error: { code: "UNAUTHORIZED" } });
+
+    await expect(connection.lobbyStates.findById(first.lobby.id)).resolves.toMatchObject({
+      round: { stage: "result" },
+      events: first.events,
+      commandResults: first.commandResults,
+    });
+    await expect(connection.lobbyStates.findById(second.lobby.id)).resolves.toMatchObject({
+      round: { stage: "result" },
+      events: second.events,
+      commandResults: second.commandResults,
+    });
+  });
+
+  test("serializes concurrent duplicate round commands into one committed effect", async () => {
+    const occurredAt = new Date("2026-07-17T09:20:00.000Z");
+    const setupConnection = await connectWithRoundCommands(() => occurredAt);
+    const firstConnection = await connectWithRoundCommands(() => occurredAt);
+    const secondConnection = await connectWithRoundCommands(() => occurredAt);
+    const state = createLobbyState();
+    const command = EndRoundCommandSchema.parse({
+      schemaVersion: 1,
+      type: "end-round",
+      commandId: `concurrent-end-${randomUUID()}`,
+    });
+    await createPersistedLobby(setupConnection, state);
+    const execute = (connection: Awaited<ReturnType<typeof connectDatabase>>) =>
+      connection.roundCommands.execute({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: state.sessions[0]!.tokenHash,
+        command,
+      });
+
+    const results = await Promise.all([execute(firstConnection), execute(secondConnection)]);
+    const restored = await setupConnection.lobbyStates.findById(state.lobby.id);
+
+    expect(
+      results.map((result) => (result.ok ? result.acknowledgement.idempotentReplay : null)).sort(),
+    ).toEqual([false, true]);
+    expect(restored?.round?.stage).toBe("ended");
+    expect(restored?.events).toHaveLength(2);
+    expect(restored?.commandResults).toHaveLength(2);
+  });
+
+  test("authorizes a private mark against only the authenticated participant card", async () => {
+    const occurredAt = new Date("2026-07-17T09:07:00.000Z");
+    const connection = await connectWithRoundCommands(() => occurredAt);
+    const base = createLobbyState();
+    const playerCard = base.round!.cards[1]!;
+    const state: DurableLobbyState = {
+      ...base,
+      lobby: {
+        ...base.lobby,
+        lastEventSequence: 0n,
+        lastActivityAt: new Date("2026-07-17T10:00:00.000Z"),
+      },
+      round: {
+        ...base.round!,
+        stage: "active",
+        coWinnerTriggeringCallId: null,
+        coWinnerOpenedAt: null,
+        coWinnerClosesAt: null,
+        resultSettledAt: null,
+        coWinners: [],
+        cards: [
+          base.round!.cards[0]!,
+          { ...playerCard, cells: [1, ...playerCard.cells.slice(1)], marks: [] },
+        ],
+      },
+      events: [],
+      commandResults: [],
+    };
+    const command = MarkCardCommandSchema.parse({
+      schemaVersion: 1,
+      type: "mark-card",
+      commandId: `mark-${randomUUID()}`,
+      ball: 1,
+    });
+    await createPersistedLobby(connection, state);
+
+    const committed = await connection.roundCommands.execute({
+      lobbyId: state.lobby.id,
+      sessionTokenHash: state.sessions[1]!.tokenHash,
+      command,
+    });
+    const replayed = await connection.roundCommands.execute({
+      lobbyId: state.lobby.id,
+      sessionTokenHash: state.sessions[1]!.tokenHash,
+      command,
+    });
+    const restored = await connection.lobbyStates.findById(state.lobby.id);
+
+    expect(committed).toMatchObject({
+      ok: true,
+      acknowledgement: {
+        scope: "participant-private",
+        eventSequence: null,
+        idempotentReplay: false,
+      },
+    });
+    expect(replayed).toMatchObject({
+      ok: true,
+      acknowledgement: { eventSequence: null, idempotentReplay: true },
+    });
+    expect(restored?.lobby.lastEventSequence).toBe(0n);
+    expect(restored?.lobby.lastActivityAt).toEqual(new Date("2026-07-17T10:00:00.000Z"));
+    expect(restored?.round?.cards[0]?.marks).toHaveLength(1);
+    expect(restored?.round?.cards[1]?.marks).toEqual([
+      expect.objectContaining({ ball: 1, markedAt: occurredAt }),
+    ]);
+  });
+
+  test("rejects a player host-control command before any mutation is persisted", async () => {
+    const connection = await connectWithRoundCommands(() => new Date("2026-07-17T09:08:00.000Z"));
+    const state = createLobbyState();
+    const command = EndRoundCommandSchema.parse({
+      schemaVersion: 1,
+      type: "end-round",
+      commandId: `forbidden-${randomUUID()}`,
+    });
+    await createPersistedLobby(connection, state);
+
+    await expect(
+      connection.roundCommands.execute({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: state.sessions[1]!.tokenHash,
+        command,
+      }),
+    ).resolves.toEqual({ ok: false, error: { code: "FORBIDDEN" } });
+    const restored = await connection.lobbyStates.findById(state.lobby.id);
+
+    expect(restored?.round?.stage).toBe("result");
     expect(restored?.events).toHaveLength(1);
     expect(restored?.commandResults).toHaveLength(1);
   });

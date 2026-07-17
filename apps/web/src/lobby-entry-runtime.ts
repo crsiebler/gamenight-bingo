@@ -23,7 +23,7 @@ if (databaseUrl === undefined || databaseUrl.length === 0) {
 }
 
 const rateLimiter = createInMemoryRateLimiter(
-  { create: 10, join: 30, rejoin: 30, ticket: 30, status: 60, snapshot: 60 },
+  { create: 10, join: 30, rejoin: 30, ticket: 30, status: 60, snapshot: 60, command: 120 },
   60_000,
 );
 const trustedProxySecret = runtimeConfig.trustedProxySecret;
@@ -34,9 +34,17 @@ const runtimeGlobal = globalThis as typeof globalThis & {
 };
 const handler =
   runtimeGlobal.lobbyEntryHandler ??
-  connectDatabase(databaseUrl).then((database) =>
+  connectDatabase(databaseUrl, {
+    roundCommands: {
+      patterns: patternCatalog,
+      clock: () => new Date(),
+      randomBytes: (length) => new Uint8Array(randomBytes(length)),
+      nextId: (prefix) => `${prefix}-${randomUUID()}`,
+    },
+  }).then((database) =>
     createLobbyEntryHttpHandler({
       store: database.lobbyStates,
+      roundCommandExecutor: database.roundCommands,
       patterns: patternCatalog,
       rateLimiter,
       requesterKey: (request) => requesterKeyFromTrustedProxy(request, trustedProxySecret),

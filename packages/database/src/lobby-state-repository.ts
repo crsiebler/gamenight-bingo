@@ -21,6 +21,12 @@ import {
   type RoundStage as DatabaseRoundStage,
   type SessionStatus as DatabaseSessionStatus,
 } from "../generated/prisma/client.js";
+import {
+  createPrismaRoundCommandExecutor,
+  type RoundCommandExecutor,
+  type RoundCommandRuntimeOptions,
+} from "./round-command-executor.js";
+import { expireDueParticipantSessions } from "./participant-session-expiry.js";
 import { runTransactionWithRetry, type TransactionRetryOptions } from "./transaction-retry.js";
 
 export type JsonPrimitive = boolean | number | string | null;
@@ -442,11 +448,13 @@ export interface CommandTransactionRepository {
 export interface DatabaseConnectionOptions {
   readonly transactionRetry?: TransactionRetryOptions;
   readonly lifecycleClock?: () => Date;
+  readonly roundCommands?: RoundCommandRuntimeOptions;
 }
 
 export interface DatabaseConnection {
   readonly lobbyStates: LobbyStateRepository;
   readonly commandTransactions: CommandTransactionRepository;
+  readonly roundCommands: RoundCommandExecutor;
   disconnect(): Promise<void>;
 }
 
@@ -718,57 +726,6 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
     const now = this.lifecycleClock();
     assertValidDate(now, "The participant session lifecycle timestamp");
     return now;
-  }
-
-  private async expireDueParticipantSessions(
-    transaction: Prisma.TransactionClient,
-    lobbyId: string,
-    now: Date,
-  ): Promise<number> {
-    const dueSessions = await transaction.participantSession.findMany({
-      where: {
-        lobbyId,
-        status: "DISCONNECTED",
-        rejoinUntil: { lte: now },
-        participant: { departedAt: null },
-      },
-      select: { id: true, participantId: true, rejoinUntil: true },
-      orderBy: { rejoinUntil: "asc" },
-    });
-    const participantDeadlines = new Map<string, Date>();
-    for (const session of dueSessions) {
-      if (session.rejoinUntil === null) {
-        throw new Error("Disconnected participant sessions require a rejoin deadline.");
-      }
-      await transaction.realtimeTicket.deleteMany({
-        where: { participantSessionId: session.id },
-      });
-      await transaction.participantSession.update({
-        where: { id: session.id },
-        data: { status: "DEPARTED", departedAt: session.rejoinUntil },
-      });
-      participantDeadlines.set(session.participantId, session.rejoinUntil);
-    }
-
-    let departedParticipants = 0;
-    for (const [participantId, departedAt] of participantDeadlines) {
-      const validSessions = await transaction.participantSession.count({
-        where: {
-          lobbyId,
-          participantId,
-          status: { in: ["ACTIVE", "DISCONNECTED"] },
-        },
-      });
-      if (validSessions !== 0) {
-        continue;
-      }
-      const departed = await transaction.participant.updateMany({
-        where: { id: participantId, lobbyId, departedAt: null },
-        data: { departedAt },
-      });
-      departedParticipants += departed.count;
-    }
-    return departedParticipants;
   }
 
   private async insert(
@@ -1187,7 +1144,7 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
                 } as const;
               }
 
-              await this.expireDueParticipantSessions(
+              await expireDueParticipantSessions(
                 transaction,
                 input.lobbyId,
                 this.currentLifecycleTime(),
@@ -1489,7 +1446,7 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
               } as const;
             }
 
-            await this.expireDueParticipantSessions(
+            await expireDueParticipantSessions(
               transaction,
               participant.lobbyId,
               this.currentLifecycleTime(),
@@ -1584,7 +1541,7 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
               if (lobbies.length !== 1) {
                 return "scope-not-found" as const;
               }
-              await this.expireDueParticipantSessions(
+              await expireDueParticipantSessions(
                 transaction,
                 session.lobbyId,
                 this.currentLifecycleTime(),
@@ -1665,7 +1622,7 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
             }
 
             const issuedAt = this.currentLifecycleTime();
-            await this.expireDueParticipantSessions(transaction, input.lobbyId, issuedAt);
+            await expireDueParticipantSessions(transaction, input.lobbyId, issuedAt);
             await transaction.realtimeTicket.deleteMany({
               where: { expiresAt: { lte: issuedAt } },
             });
@@ -1786,7 +1743,7 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
                RETURNING "id"
             `;
             return lobbies.length === 1
-              ? this.expireDueParticipantSessions(transaction, lobbyId, this.currentLifecycleTime())
+              ? expireDueParticipantSessions(transaction, lobbyId, this.currentLifecycleTime())
               : 0;
           },
           {
@@ -1830,7 +1787,7 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
             }
 
             const disconnectedAt = this.currentLifecycleTime();
-            await this.expireDueParticipantSessions(transaction, input.lobbyId, disconnectedAt);
+            await expireDueParticipantSessions(transaction, input.lobbyId, disconnectedAt);
 
             const session = await transaction.participantSession.findFirst({
               where: {
@@ -2059,7 +2016,7 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
             `;
             if (fenced.length !== 1) return null;
             const now = this.currentLifecycleTime();
-            await this.expireDueParticipantSessions(transaction, input.lobbyId, now);
+            await expireDueParticipantSessions(transaction, input.lobbyId, now);
             const session = await transaction.participantSession.findFirst({
               where: {
                 lobbyId: input.lobbyId,
@@ -2195,7 +2152,7 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
               return null;
             }
             const generatedAt = this.currentLifecycleTime();
-            await this.expireDueParticipantSessions(transaction, input.lobbyId, generatedAt);
+            await expireDueParticipantSessions(transaction, input.lobbyId, generatedAt);
 
             const session = await transaction.participantSession.findFirst({
               where: {
@@ -2735,7 +2692,7 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
             }
 
             const now = this.currentLifecycleTime();
-            await this.expireDueParticipantSessions(transaction, input.lobbyId, now);
+            await expireDueParticipantSessions(transaction, input.lobbyId, now);
 
             const session = await transaction.participantSession.findFirst({
               where: {
@@ -2979,6 +2936,11 @@ export async function connectDatabase(
     commandTransactions: new PrismaCommandTransactionRepository(
       prisma,
       options.transactionRetry ?? {},
+    ),
+    roundCommands: createPrismaRoundCommandExecutor(
+      prisma,
+      options.transactionRetry ?? {},
+      options.roundCommands,
     ),
     async disconnect() {
       await prisma.$disconnect();

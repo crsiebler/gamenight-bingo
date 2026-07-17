@@ -173,8 +173,25 @@ function createDependencies(
   overrides: Partial<LobbyEntryHttpDependencies> = {},
 ): LobbyEntryHttpDependencies {
   let id = 0;
+  const commandStore = store as LobbyEntryStore & {
+    executeRoundCommand?: LobbyEntryHttpDependencies["roundCommandExecutor"]["execute"];
+  };
   return {
     store,
+    roundCommandExecutor: {
+      execute:
+        commandStore.executeRoundCommand ??
+        (async (input) => ({
+          ok: true,
+          acknowledgement: {
+            commandId: input.command.commandId,
+            scope: input.command.type === "mark-card" ? "participant-private" : "active-lobby",
+            eventSequence: input.command.type === "mark-card" ? null : 1,
+            occurredAt: NOW,
+            idempotentReplay: false,
+          },
+        })),
+    },
     patterns: [
       {
         id: "standard-one-line",
@@ -187,7 +204,7 @@ function createDependencies(
       },
     ],
     rateLimiter: createInMemoryRateLimiter(
-      { create: 10, join: 10, rejoin: 10, ticket: 10, status: 10, snapshot: 10 },
+      { create: 10, join: 10, rejoin: 10, ticket: 10, status: 10, snapshot: 10, command: 10 },
       60_000,
     ),
     requesterKey: (request) => request.headers.get("x-forwarded-for") ?? "unidentified",
@@ -508,7 +525,7 @@ describe("lobby entry HTTP API", () => {
 
   test("uses independent create, join, and rejoin rate-limit buckets", async () => {
     const limiter = createInMemoryRateLimiter(
-      { create: 1, join: 1, rejoin: 1, ticket: 1, status: 1, snapshot: 1 },
+      { create: 1, join: 1, rejoin: 1, ticket: 1, status: 1, snapshot: 1, command: 1 },
       60_000,
     );
     const handle = createLobbyEntryHttpHandler(
@@ -579,7 +596,7 @@ describe("lobby entry HTTP API", () => {
 
   test("isolates limiter buckets by the trusted requester identity", async () => {
     const limiter = createInMemoryRateLimiter(
-      { create: 1, join: 1, rejoin: 1, ticket: 1, status: 1, snapshot: 1 },
+      { create: 1, join: 1, rejoin: 1, ticket: 1, status: 1, snapshot: 1, command: 1 },
       60_000,
     );
     const handle = createLobbyEntryHttpHandler(
@@ -603,7 +620,7 @@ describe("lobby entry HTTP API", () => {
 
   test("resets a fixed-window bucket at the exact deadline", () => {
     const limiter = createInMemoryRateLimiter(
-      { create: 1, join: 1, rejoin: 1, ticket: 1, status: 1, snapshot: 1 },
+      { create: 1, join: 1, rejoin: 1, ticket: 1, status: 1, snapshot: 1, command: 1 },
       1_000,
     );
     const startedAt = new Date(NOW);
@@ -629,7 +646,7 @@ describe("lobby entry HTTP API", () => {
 
   test("bounds active requester buckets and reclaims expired capacity", () => {
     const limiter = createInMemoryRateLimiter(
-      { create: 1, join: 1, rejoin: 1, ticket: 1, status: 1, snapshot: 1 },
+      { create: 1, join: 1, rejoin: 1, ticket: 1, status: 1, snapshot: 1, command: 1 },
       1_000,
       2,
     );
@@ -716,6 +733,7 @@ describe("lobby entry HTTP API", () => {
       ticket: 10,
       status: 1,
       snapshot: 1,
+      command: 1,
     } as const;
     const handle = createLobbyEntryHttpHandler(
       createDependencies(store, { rateLimiter: createInMemoryRateLimiter(limits, 60_000) }),
@@ -991,4 +1009,385 @@ describe("lobby entry HTTP API", () => {
       expect(response.headers.get("cache-control")).toBe("no-store");
     },
   );
+});
+
+describe("round-control HTTP API", () => {
+  const hostCommands = [
+    [
+      "/api/v1/lobbies/ABC234/configuration",
+      {
+        schemaVersion: CONTRACT_SCHEMA_VERSION,
+        type: "configure",
+        commandId: "command-configure",
+        patternId: "standard-one-line",
+        callConfiguration: { mode: "manual" },
+      },
+    ],
+    [
+      "/api/v1/lobbies/ABC234/rounds",
+      {
+        schemaVersion: CONTRACT_SCHEMA_VERSION,
+        type: "create-round",
+        commandId: "command-create-round",
+      },
+    ],
+    [
+      "/api/v1/lobbies/ABC234/rounds/current/start",
+      {
+        schemaVersion: CONTRACT_SCHEMA_VERSION,
+        type: "start-round",
+        commandId: "command-start",
+      },
+    ],
+    [
+      "/api/v1/lobbies/ABC234/rounds/current/pause",
+      {
+        schemaVersion: CONTRACT_SCHEMA_VERSION,
+        type: "pause-round",
+        commandId: "command-pause",
+      },
+    ],
+    [
+      "/api/v1/lobbies/ABC234/rounds/current/resume",
+      {
+        schemaVersion: CONTRACT_SCHEMA_VERSION,
+        type: "resume-round",
+        commandId: "command-resume",
+      },
+    ],
+    [
+      "/api/v1/lobbies/ABC234/rounds/current/call-next",
+      {
+        schemaVersion: CONTRACT_SCHEMA_VERSION,
+        type: "call-next",
+        commandId: "command-call-next",
+      },
+    ],
+    [
+      "/api/v1/lobbies/ABC234/rounds/current/continue",
+      {
+        schemaVersion: CONTRACT_SCHEMA_VERSION,
+        type: "continue-round",
+        commandId: "command-continue",
+        patternId: "standard-two-lines",
+      },
+    ],
+    [
+      "/api/v1/lobbies/ABC234/rounds/current/end",
+      {
+        schemaVersion: CONTRACT_SCHEMA_VERSION,
+        type: "end-round",
+        commandId: "command-end",
+      },
+    ],
+  ] as const;
+
+  test.each(hostCommands)("dispatches %s as a committed host command", async (path, command) => {
+    const executions: unknown[] = [];
+    const store = {
+      ...createStore(),
+      executeRoundCommand: async (input: unknown) => {
+        executions.push(input);
+        return {
+          ok: true as const,
+          acknowledgement: {
+            commandId: command.commandId,
+            scope: "active-lobby" as const,
+            eventSequence: 7,
+            occurredAt: NOW,
+            idempotentReplay: false,
+          },
+        };
+      },
+    };
+    const handle = createLobbyEntryHttpHandler(createDependencies(store));
+
+    const response = await handle(
+      request(path, {
+        method: "POST",
+        body: JSON.stringify(command),
+        headers: { cookie: `${PARTICIPANT_SESSION_COOKIE_NAME}=${SESSION_TOKEN}` },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await responseJson(response)).toEqual({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "ack",
+      commandId: command.commandId,
+      scope: "active-lobby",
+      eventSequence: 7,
+      occurredAt: NOW.toISOString(),
+      idempotentReplay: false,
+    });
+    expect(executions).toHaveLength(1);
+    expect(executions[0]).toMatchObject({ lobbyId: "lobby-1", command });
+    expect((executions[0] as { sessionTokenHash: Uint8Array }).sessionTokenHash).toHaveLength(32);
+    expect(JSON.stringify(executions[0])).not.toContain(SESSION_TOKEN);
+  });
+
+  test("returns a participant-private acknowledgement for an own-card mark", async () => {
+    const command = {
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "mark-card",
+      commandId: "command-mark",
+      ball: 42,
+    } as const;
+    const store = {
+      ...createStore(),
+      executeRoundCommand: async () => ({
+        ok: true as const,
+        acknowledgement: {
+          commandId: command.commandId,
+          scope: "participant-private" as const,
+          eventSequence: null,
+          occurredAt: NOW,
+          idempotentReplay: true,
+        },
+      }),
+    };
+    const handle = createLobbyEntryHttpHandler(createDependencies(store));
+
+    const response = await handle(
+      request("/api/v1/lobbies/ABC234/cards/own/marks", {
+        method: "POST",
+        body: JSON.stringify(command),
+        headers: { cookie: `${PARTICIPANT_SESSION_COOKIE_NAME}=${SESSION_TOKEN}` },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await responseJson(response)).toEqual({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "ack",
+      commandId: command.commandId,
+      scope: "participant-private",
+      eventSequence: null,
+      occurredAt: NOW.toISOString(),
+      idempotentReplay: true,
+    });
+  });
+
+  test.each([
+    { mode: "manual", intervalSeconds: 30 },
+    { mode: "automatic" },
+    { mode: "automatic", intervalSeconds: 15 },
+    { mode: "automatic", intervalSeconds: "30" },
+  ])("rejects invalid call configuration $mode/$intervalSeconds", async (callConfiguration) => {
+    let executions = 0;
+    const store = {
+      ...createStore(),
+      executeRoundCommand: async () => {
+        executions += 1;
+        throw new Error("invalid configuration reached persistence");
+      },
+    };
+    const handle = createLobbyEntryHttpHandler(createDependencies(store));
+
+    const response = await handle(
+      request("/api/v1/lobbies/ABC234/configuration", {
+        method: "POST",
+        body: JSON.stringify({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "configure",
+          commandId: "command-invalid-configuration",
+          patternId: "standard-one-line",
+          callConfiguration,
+        }),
+        headers: { cookie: `${PARTICIPANT_SESSION_COOKIE_NAME}=${SESSION_TOKEN}` },
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await responseJson(response)).toMatchObject({ code: "INVALID_PAYLOAD" });
+    expect(executions).toBe(0);
+  });
+
+  test.each([5, 10, 30, 60, 120])(
+    "accepts the supported %i-second automatic interval",
+    async (intervalSeconds) => {
+      let executions = 0;
+      const store = {
+        ...createStore(),
+        executeRoundCommand: async () => {
+          executions += 1;
+          return {
+            ok: true as const,
+            acknowledgement: {
+              commandId: `command-automatic-${intervalSeconds}`,
+              scope: "active-lobby" as const,
+              eventSequence: 2,
+              occurredAt: NOW,
+              idempotentReplay: false,
+            },
+          };
+        },
+      };
+      const handle = createLobbyEntryHttpHandler(createDependencies(store));
+
+      const response = await handle(
+        request("/api/v1/lobbies/ABC234/configuration", {
+          method: "POST",
+          body: JSON.stringify({
+            schemaVersion: CONTRACT_SCHEMA_VERSION,
+            type: "configure",
+            commandId: `command-automatic-${intervalSeconds}`,
+            patternId: "standard-one-line",
+            callConfiguration: { mode: "automatic", intervalSeconds },
+          }),
+          headers: { cookie: `${PARTICIPANT_SESSION_COOKIE_NAME}=${SESSION_TOKEN}` },
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      expect(executions).toBe(1);
+    },
+  );
+
+  test("requires the scoped cookie before command execution", async () => {
+    let executions = 0;
+    const store = {
+      ...createStore(),
+      executeRoundCommand: async () => {
+        executions += 1;
+        throw new Error("unauthenticated command reached persistence");
+      },
+    };
+    const handle = createLobbyEntryHttpHandler(createDependencies(store));
+    const body = JSON.stringify({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "pause-round",
+      commandId: "command-unauthenticated",
+    });
+
+    for (const cookie of [undefined, "malformed"]) {
+      const response = await handle(
+        request("/api/v1/lobbies/ABC234/rounds/current/pause", {
+          method: "POST",
+          body,
+          ...(cookie === undefined
+            ? {}
+            : { headers: { cookie: `${PARTICIPANT_SESSION_COOKIE_NAME}=${cookie}` } }),
+        }),
+      );
+      expect(response.status).toBe(401);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+    }
+    expect(executions).toBe(0);
+  });
+
+  test.each([
+    ["UNAUTHORIZED", 401],
+    ["FORBIDDEN", 403],
+    ["INVALID_COMMAND", 409],
+  ] as const)("maps command result %s to a stable error", async (code, status) => {
+    const store = {
+      ...createStore(),
+      executeRoundCommand: async () => ({ ok: false as const, error: { code } }),
+    };
+    const handle = createLobbyEntryHttpHandler(createDependencies(store));
+
+    const response = await handle(
+      request("/api/v1/lobbies/ABC234/rounds/current/start", {
+        method: "POST",
+        body: JSON.stringify({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "start-round",
+          commandId: "command-rejected",
+        }),
+        headers: { cookie: `${PARTICIPANT_SESSION_COOKIE_NAME}=${SESSION_TOKEN}` },
+      }),
+    );
+
+    expect(response.status).toBe(status);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await responseJson(response)).toMatchObject({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "error",
+      code,
+      commandId: "command-rejected",
+    });
+  });
+
+  test("rejects a body command that does not match the endpoint", async () => {
+    let executions = 0;
+    const store = {
+      ...createStore(),
+      executeRoundCommand: async () => {
+        executions += 1;
+        throw new Error("mismatched command reached persistence");
+      },
+    };
+    const handle = createLobbyEntryHttpHandler(createDependencies(store));
+
+    const response = await handle(
+      request("/api/v1/lobbies/ABC234/rounds/current/start", {
+        method: "POST",
+        body: JSON.stringify({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "end-round",
+          commandId: "command-wrong-endpoint",
+        }),
+        headers: { cookie: `${PARTICIPANT_SESSION_COOKIE_NAME}=${SESSION_TOKEN}` },
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(executions).toBe(0);
+  });
+
+  test("rate-limits commands before they acquire the lobby transaction fence", async () => {
+    let executions = 0;
+    const store = {
+      ...createStore(),
+      executeRoundCommand: async (input: { command: { commandId: string } }) => {
+        executions += 1;
+        return {
+          ok: true as const,
+          acknowledgement: {
+            commandId: input.command.commandId,
+            scope: "active-lobby" as const,
+            eventSequence: executions,
+            occurredAt: NOW,
+            idempotentReplay: false,
+          },
+        };
+      },
+    };
+    const rateLimiter = createInMemoryRateLimiter(
+      {
+        create: 10,
+        join: 10,
+        rejoin: 10,
+        ticket: 10,
+        status: 10,
+        snapshot: 10,
+        command: 1,
+      },
+      60_000,
+    );
+    const handle = createLobbyEntryHttpHandler(createDependencies(store, { rateLimiter }));
+    const execute = (commandId: string) =>
+      handle(
+        request("/api/v1/lobbies/ABC234/rounds/current/start", {
+          method: "POST",
+          body: JSON.stringify({
+            schemaVersion: CONTRACT_SCHEMA_VERSION,
+            type: "start-round",
+            commandId,
+          }),
+          headers: { cookie: `${PARTICIPANT_SESSION_COOKIE_NAME}=${SESSION_TOKEN}` },
+        }),
+      );
+
+    expect((await execute("command-rate-1")).status).toBe(200);
+    const limited = await execute("command-rate-2");
+
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).toBe("60");
+    expect(limited.headers.get("cache-control")).toBe("no-store");
+    expect(executions).toBe(1);
+  });
 });

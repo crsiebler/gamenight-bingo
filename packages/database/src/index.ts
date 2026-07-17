@@ -55,6 +55,15 @@ export {
   type TransactionalLobbyRepository,
 } from "./lobby-state-repository.js";
 export {
+  isRoundCommandAuthorized,
+  resolveRoundPatternMode,
+  type RoundCommandAcknowledgement,
+  type RoundCommandExecutionResult,
+  type RoundCommandExecutor,
+  type RoundCommandPattern,
+  type RoundCommandRuntimeOptions,
+} from "./round-command-executor.js";
+export {
   TransactionRetryExhaustedError,
   type TransactionRetryEvent,
   type TransactionRetryOptions,

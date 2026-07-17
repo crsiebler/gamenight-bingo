@@ -124,6 +124,13 @@ invalid counts, timestamps, or durations.
   before broadcasting. Broadcast only after the transaction commits.
 - A repeated command ID returns its original committed result without repeating
   effects.
+- Persist canonical command intent with idempotent results so reusing a command
+  ID with changed configuration, pattern, ball, or action is rejected. Resolve
+  the active session, actor role, current round, and own card inside the same
+  lobby-fenced transaction that applies the command. Before replacing the
+  current round, detach its active-event and command-result round scopes so
+  command replay tombstones survive without retaining prior-round gameplay
+  state. Run due participant-session expiry before selecting a new-round roster.
 - Serializable command callbacks are scoped to one lobby and may run more than
   once after rolled-back conflicts, so they must not perform external effects.
   Only a freshly committed active-lobby command returns an event to broadcast;
@@ -171,7 +178,8 @@ invalid counts, timestamps, or durations.
   Require an authenticated proxy marker that clients cannot supply, hash
   requester addresses, bound active in-memory buckets, and use one bounded
   unidentified bucket when no valid trusted address is available. Rate-limit
-  session-status and snapshot reads before they can acquire lobby fences.
+  session-status, snapshot reads, and state-changing commands before they can
+  acquire lobby fences.
 - Set `Cache-Control: no-store` on private responses.
 - Require command IDs on mutation endpoints and return committed sequence and
   idempotent result data.

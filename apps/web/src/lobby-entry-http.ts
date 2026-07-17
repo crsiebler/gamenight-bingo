@@ -2,21 +2,32 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
 
 import {
+  CallNextCommandSchema,
+  CommandAckSchema,
   CONTRACT_SCHEMA_VERSION,
+  ConfigureCommandSchema,
+  ContinueRoundCommandSchema,
   CreateLobbyRequestSchema,
+  CreateRoundCommandSchema,
+  EndRoundCommandSchema,
   ErrorSchema,
   JoinLobbyRequestSchema,
   LobbyCodeSchema,
   LobbyEntryResponseSchema,
+  MarkCardCommandSchema,
+  PauseRoundCommandSchema,
   PatternCatalogResponseSchema,
   RealtimeTicketRequestSchema,
   RealtimeTicketResponseSchema,
   RejoinLobbyRequestSchema,
+  ResumeRoundCommandSchema,
   SameDeviceSessionStatusResponseSchema,
   SnapshotMessageSchema,
+  StartRoundCommandSchema,
   type ContractError,
   type ErrorCode,
   type LobbyEntryResponse,
+  type MutationCommand,
   type Snapshot,
 } from "@gamenight-bingo/contracts";
 import { normalizeLobbyCodeEntry } from "@gamenight-bingo/domain";
@@ -33,7 +44,8 @@ const SESSION_ENTROPY_BYTES = 32;
 const MAX_CREDENTIAL_ATTEMPTS = 3;
 const PRIVATE_HEADERS = { "cache-control": "no-store" } as const;
 
-export type EntryRateLimitScope = "create" | "join" | "rejoin" | "ticket" | "status" | "snapshot";
+export type EntryRateLimitScope =
+  "create" | "join" | "rejoin" | "ticket" | "status" | "snapshot" | "command";
 
 export interface EntryRateLimiter {
   consume(input: {
@@ -96,6 +108,23 @@ export type EntryStoreResult =
       readonly error: { readonly code: EntryStoreErrorCode | "TOKEN_HASH_COLLISION" };
     };
 
+export interface RoundCommandAcknowledgement {
+  readonly commandId: string;
+  readonly scope: "active-lobby" | "participant-private";
+  readonly eventSequence: number | null;
+  readonly occurredAt: Date;
+  readonly idempotentReplay: boolean;
+}
+
+export type RoundCommandExecutionResult =
+  | { readonly ok: true; readonly acknowledgement: RoundCommandAcknowledgement }
+  | {
+      readonly ok: false;
+      readonly error: {
+        readonly code: "UNAUTHORIZED" | "FORBIDDEN" | "INVALID_COMMAND" | "NOT_FOUND";
+      };
+    };
+
 export interface LobbyEntryStore extends ParticipantSessionStore {
   createLobbyWithHost(input: CreateLobbyWithHostInput): Promise<EntryStoreResult>;
   joinLobbyWithSession(input: JoinLobbyWithSessionInput): Promise<EntryStoreResult>;
@@ -123,8 +152,17 @@ export interface LobbyEntryStore extends ParticipantSessionStore {
   >;
 }
 
+export interface RoundCommandExecutor {
+  execute(input: {
+    readonly lobbyId: string;
+    readonly sessionTokenHash: Uint8Array;
+    readonly command: MutationCommand;
+  }): Promise<RoundCommandExecutionResult>;
+}
+
 export interface LobbyEntryHttpDependencies {
   readonly store: LobbyEntryStore;
+  readonly roundCommandExecutor: RoundCommandExecutor;
   readonly patterns: readonly unknown[];
   readonly rateLimiter: EntryRateLimiter;
   readonly requesterKey: (request: Request) => string;
@@ -335,6 +373,32 @@ function privateJson(body: unknown, status = 200, cookie?: string): Response {
   return Response.json(body, { status, headers });
 }
 
+function parseRoundCommand(resource: string, value: unknown): MutationCommand | null {
+  const schema =
+    resource === "configuration"
+      ? ConfigureCommandSchema
+      : resource === "rounds"
+        ? CreateRoundCommandSchema
+        : resource === "rounds/current/start"
+          ? StartRoundCommandSchema
+          : resource === "rounds/current/pause"
+            ? PauseRoundCommandSchema
+            : resource === "rounds/current/resume"
+              ? ResumeRoundCommandSchema
+              : resource === "rounds/current/call-next"
+                ? CallNextCommandSchema
+                : resource === "rounds/current/continue"
+                  ? ContinueRoundCommandSchema
+                  : resource === "rounds/current/end"
+                    ? EndRoundCommandSchema
+                    : resource === "cards/own/marks"
+                      ? MarkCardCommandSchema
+                      : null;
+  if (schema === null) return null;
+  const parsed = schema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
 export function createInMemoryRateLimiter(
   limits: Readonly<Record<EntryRateLimitScope, number>>,
   windowMs: number,
@@ -358,6 +422,7 @@ export function createInMemoryRateLimiter(
     ["ticket", new Map()],
     ["status", new Map()],
     ["snapshot", new Map()],
+    ["command", new Map()],
   ]);
   return {
     consume({ scope, key, now }) {
@@ -478,6 +543,59 @@ export function createLobbyEntryHttpHandler(dependencies: LobbyEntryHttpDependen
         if (error !== null) return error;
       }
       return errorResponse("INTERNAL_ERROR", 500, now, parsed.data.commandId);
+    }
+
+    const commandMatch =
+      /^\/api\/v1\/lobbies\/([^/]+)\/(configuration|rounds|rounds\/current\/(?:start|pause|resume|call-next|continue|end)|cards\/own\/marks)$/.exec(
+        pathname,
+      );
+    if (commandMatch !== null) {
+      const now = dependencies.clock();
+      if (request.method !== "POST") return errorResponse("NOT_FOUND", 404, now);
+      if (!hasValidOrigin(request)) return errorResponse("FORBIDDEN", 403, now);
+      const code = normalizeCode(commandMatch[1] ?? "");
+      if (code === null) return errorResponse("NOT_FOUND", 404, now);
+      const limited = consumeRateLimit(dependencies, "command", request, null);
+      if (limited !== null) return limited;
+      const parsedBody = await parseBody(request);
+      if (!parsedBody.ok) return errorResponse("INVALID_PAYLOAD", parsedBody.status, now);
+      const command = parseRoundCommand(commandMatch[2] ?? "", parsedBody.value);
+      if (command === null) return errorResponse("INVALID_PAYLOAD", 400, now);
+      const cookie = parseCookie(request);
+      const sessionTokenHash =
+        cookie === undefined ? null : hashCanonicalParticipantSessionToken(cookie);
+      if (sessionTokenHash === null) {
+        return errorResponse("UNAUTHORIZED", 401, now, command.commandId);
+      }
+      const lobbyId = await dependencies.store.findActiveLobbyIdByCode(code);
+      if (lobbyId === null) return errorResponse("NOT_FOUND", 404, now, command.commandId);
+      const result = await dependencies.roundCommandExecutor.execute({
+        lobbyId,
+        sessionTokenHash,
+        command,
+      });
+      if (!result.ok) {
+        const statusByCode = {
+          UNAUTHORIZED: 401,
+          FORBIDDEN: 403,
+          INVALID_COMMAND: 409,
+          NOT_FOUND: 404,
+        } as const;
+        return errorResponse(
+          result.error.code,
+          statusByCode[result.error.code],
+          now,
+          command.commandId,
+        );
+      }
+      return privateJson(
+        CommandAckSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "ack",
+          ...result.acknowledgement,
+          occurredAt: result.acknowledgement.occurredAt.toISOString(),
+        }),
+      );
     }
 
     const match =
