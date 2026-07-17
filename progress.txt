@@ -1016,3 +1016,47 @@ Review remediation for US-011 at 2026-07-16 19:25:50 MST:
 - Added a failing regression for repeated rejected bytes, then bounded unbiased index sampling to 256 attempts with an explicit failure.
 - Post-fix checks: focused card suite (7 tests pass), `bun run lint` (pass), `bun run format:check` (pass), `bun run typecheck` (pass), `bun run test` (152 tests pass), `bun run test:e2e` (pass), and staged/unstaged diff checks (pass).
 - Targeted re-review: `code-reviewer`, `qa-expert`, and `security-engineer` returned empty actionable finding lists with no residual risks; all in-scope blockers are resolved.
+
+## 2026-07-16 19:34:38 MST - US-012
+- What was implemented
+  - Added a server-internal 75-ball draw-order generator that shuffles every number exactly once using injected cryptographic random bytes and bounded rejection sampling.
+  - Added a one-step draw transition that returns only the newly committed ball, 1-based position, and committed count, with a stable `DRAW_ORDER_EXHAUSTED` result after position 75.
+  - Extracted the existing unbiased Fisher-Yates implementation into a shared domain utility and retained Bingo-card behavior through regression coverage.
+- Files changed: `packages/domain/src/bingo-card.ts`, `packages/domain/src/draw-order.ts`, `packages/domain/src/index.ts`, `packages/domain/src/random.ts`, `tests/draw-order.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-012 - Generate the draw order`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run tests/draw-order.test.ts` (expected fail before implementation: 8 failures because the draw-order API did not exist)
+  - `bunx vitest run tests/draw-order.test.ts tests/bingo-card.test.ts` (pass after implementation with 15 tests; pass after review remediation with 16 tests)
+  - `bun run lint` (pass)
+  - `bun run format:check` (initial fail on the new test; pass after formatting)
+  - `bun run typecheck` (initial fail because ES2023 `toSorted` was outside the ES2022 target; pass after using copied-array sorting)
+  - `bun run test` (pass before review with 160 tests; pass after remediation with 7 Vitest files and 161 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `security-engineer`
+  - Used: `security-engineer` for randomness, privacy-boundary, API, and test guidance
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and randomness-triggered `security-engineer`; targeted re-review by `qa-expert` planned after the test remediation
+  - Findings: added explicit first-boundary rejection coverage for the initial 75-way sample; security returned no actionable findings, and the low PRD bookkeeping note is resolved by the required post-review staging sequence
+- Decisions (why):
+  - Generated the complete permutation once and advanced it by an authoritative committed count because later persistence stories will transact the cursor and committed call without consuming new randomness per call.
+  - Returned no draw order or remaining-ball collection from the transition because future positions are server-private and must not enter client contracts, acknowledgements, or logs.
+  - Shared one bounded rejection-sampling shuffle between cards and draw order because duplicating cryptographic selection logic would create avoidable drift and bias risk.
+  - Kept database commits out of this story because durable models and serializable idempotent transactions belong to US-021 and US-022; this domain transition supplies exactly one next position for those later adapters.
+- **Learnings for future iterations:**
+  - Persist the generated permutation as private server state and expose only committed call records; never serialize the remaining order through shared client contracts or structured logs.
+  - Later transactional callers should pass the persisted committed count to `commitNextDrawPosition` and atomically store its single returned position with the call and event.
+- Known issues / follow-ups:
+  - Runtime CSPRNG adapters, private draw-order persistence, and transactional call commits land in later dependency-ordered stories.
+- Next iteration start:
+  - If review passes, implement US-013 canonical pattern semantics; otherwise resume the recorded blocking finding.
+---
+
+Review remediation for US-012 at 2026-07-16 19:38:43 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced one blocking medium finding: the rejection test did not pin byte 225 as the first rejected value for a 75-way sample, so a biased boundary implementation could evade the suite.
+- Added deterministic coverage that supplies 225 followed by 224, proves the first byte is rejected through the extra random-byte request, and verifies the accepted boundary leaves the first shuffle position correct.
+- The security review returned no actionable findings. The code review's low note that `prd.json` was not yet staged follows Ralph's required post-review metadata sequence and needs no pre-review change.
+- Post-fix checks: focused draw/card suite (16 tests pass), `bun run lint` (pass), `bun run format:check` (pass), `bun run typecheck` (pass), `bun run test` (161 tests pass), `bun run test:e2e` (pass), and staged/unstaged diff checks (pass).
+- Targeted re-review: `qa-expert` confirmed the boundary finding is resolved and returned no actionable findings; residual runtime CSPRNG and persistence work remains explicitly deferred to later stories.

@@ -188,7 +188,7 @@
         "Typecheck passes."
       ],
       "priority": 12,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @security-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {

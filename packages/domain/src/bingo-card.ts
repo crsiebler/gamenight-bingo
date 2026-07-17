@@ -1,32 +1,14 @@
+import { shuffledValues } from "./random.js";
+import type { CryptographicRandomBytes } from "./random.js";
+
 export const FREE_BINGO_CELL = "FREE" as const;
 
 export type BingoCardCell = number | typeof FREE_BINGO_CELL;
 export type BingoCard = readonly BingoCardCell[];
-export type CryptographicRandomBytes = (length: number) => Uint8Array;
 
 const CARD_SIZE = 25;
 const MAX_ROUND_SIZE = 25;
-const MAX_RANDOM_INDEX_ATTEMPTS = 256;
 const MAX_UNIQUE_CARD_ATTEMPTS = 100;
-const BYTE_VALUE_COUNT = 256;
-
-function randomIndex(maxExclusive: number, randomBytes: CryptographicRandomBytes): number {
-  const unbiasedLimit = BYTE_VALUE_COUNT - (BYTE_VALUE_COUNT % maxExclusive);
-
-  for (let attempt = 0; attempt < MAX_RANDOM_INDEX_ATTEMPTS; attempt += 1) {
-    const bytes = randomBytes(1);
-    if (bytes.length !== 1) {
-      throw new RangeError("The random byte source must return the requested number of bytes.");
-    }
-
-    const value = bytes[0];
-    if (value !== undefined && value < unbiasedLimit) {
-      return value % maxExclusive;
-    }
-  }
-
-  throw new Error("Unable to sample an unbiased random index.");
-}
 
 function shuffledRange(
   minimum: number,
@@ -34,19 +16,7 @@ function shuffledRange(
   randomBytes: CryptographicRandomBytes,
 ): number[] {
   const values = Array.from({ length: maximum - minimum + 1 }, (_, index) => minimum + index);
-
-  for (let index = values.length - 1; index > 0; index -= 1) {
-    const swapIndex = randomIndex(index + 1, randomBytes);
-    const current = values[index];
-    const selected = values[swapIndex];
-    if (current === undefined || selected === undefined) {
-      throw new Error("Unable to shuffle Bingo column values.");
-    }
-    values[index] = selected;
-    values[swapIndex] = current;
-  }
-
-  return values;
+  return shuffledValues(values, randomBytes);
 }
 
 function generateBingoCard(randomBytes: CryptographicRandomBytes): BingoCard {
