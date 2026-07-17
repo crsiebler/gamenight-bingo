@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 
 import { Pool } from "pg";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 
 import {
   CommandReplayMismatchError,
@@ -12,6 +12,8 @@ import {
   type DurableLobbyState,
   type JsonObject,
   type NewActiveLobbyState,
+  type NewLobbyParticipant,
+  type ReserveParticipantResult,
   type TransactionRetryEvent,
 } from "./index.js";
 
@@ -326,8 +328,12 @@ describeDatabase("PostgreSQL durable game state", () => {
     pool = new Pool({ connectionString: testDatabaseUrl, max: 2 });
   });
 
-  afterAll(async () => {
+  afterEach(async () => {
     await Promise.all(connections.map(async (connection) => connection.disconnect()));
+    connections.length = 0;
+  });
+
+  afterAll(async () => {
     await pool?.end();
   });
 
@@ -409,6 +415,31 @@ describeDatabase("PostgreSQL durable game state", () => {
     throw new Error("Timed out waiting for concurrent lobby admissions to block.");
   }
 
+  async function waitForBlockedParticipantReservations(
+    expectedCount: number,
+    timeoutMs = 5_000,
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      const result = await pool.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count
+           FROM pg_stat_activity
+          WHERE datname = current_database()
+            AND wait_event_type = 'Lock'
+            AND query LIKE '%UPDATE "lobbies"%'
+            AND query LIKE '%"status" IN%'`,
+      );
+      if (result.rows[0]?.count === expectedCount) {
+        return;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    throw new Error("Timed out waiting for concurrent participant reservations to block.");
+  }
+
   function commandRequest(
     state: DurableLobbyState,
     commandId: string,
@@ -422,6 +453,20 @@ describeDatabase("PostgreSQL durable game state", () => {
       roundId: state.round!.id,
       createdAt: new Date("2026-07-17T09:00:00.000Z"),
       decodeResult: (result) => result,
+    };
+  }
+
+  function newParticipant(
+    lobbyId: string,
+    username = `Player ${randomUUID()}`,
+  ): NewLobbyParticipant {
+    return {
+      id: `participant-${randomUUID()}`,
+      lobbyId,
+      username,
+      role: "player",
+      roundEligibility: "playing",
+      joinedAt: new Date("2026-07-17T08:03:00.000Z"),
     };
   }
 
@@ -506,6 +551,190 @@ describeDatabase("PostgreSQL durable game state", () => {
       },
     });
     await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toBeNull();
+  });
+
+  test("reserves lobby-unique normalized usernames", async () => {
+    const connection = await connect();
+    const state = createLobbyState();
+    await createPersistedLobby(connection, state);
+    const participant = newParticipant(state.lobby.id, "  CASE  Player ");
+
+    await expect(
+      connection.lobbyStates.reserveParticipant(participant, { maxPlayersPerLobby: 3 }),
+    ).resolves.toEqual({ ok: true, participantId: participant.id });
+    await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toMatchObject({
+      participants: expect.arrayContaining([
+        {
+          id: participant.id,
+          username: "CASE Player",
+          normalizedUsername: "case player",
+          role: "player",
+          roundEligibility: "playing",
+          joinedAt: participant.joinedAt,
+          departedAt: null,
+        },
+      ]),
+    });
+    await expect(
+      connection.lobbyStates.reserveParticipant(newParticipant(state.lobby.id, "case player"), {
+        maxPlayersPerLobby: 4,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "USERNAME_TAKEN",
+        message: "That username is already in use.",
+      },
+    });
+  });
+
+  test("scopes normalized username reservations to one lobby", async () => {
+    const connection = await connect();
+    const firstLobby = createLobbyState();
+    const secondLobby = createLobbyState();
+    await createPersistedLobby(connection, firstLobby);
+    await createPersistedLobby(connection, secondLobby);
+    const first = newParticipant(firstLobby.lobby.id, "Shared Name");
+    const second = newParticipant(secondLobby.lobby.id, "shared name");
+
+    await expect(
+      connection.lobbyStates.reserveParticipant(first, { maxPlayersPerLobby: 3 }),
+    ).resolves.toEqual({ ok: true, participantId: first.id });
+    await expect(
+      connection.lobbyStates.reserveParticipant(second, { maxPlayersPerLobby: 3 }),
+    ).resolves.toEqual({ ok: true, participantId: second.id });
+  });
+
+  test("rejects participant limits above the product maximum", async () => {
+    const connection = await connect();
+    const state = createLobbyState();
+    await createPersistedLobby(connection, state);
+
+    await expect(
+      connection.lobbyStates.reserveParticipant(newParticipant(state.lobby.id), {
+        maxPlayersPerLobby: 26,
+      }),
+    ).rejects.toThrow("The participant limit must be a safe integer between 1 and 25.");
+  });
+
+  test("enforces configured participant limits without reserving a username", async () => {
+    const connection = await connect();
+    const state = createLobbyState();
+    await createPersistedLobby(connection, state);
+    const rejected = newParticipant(state.lobby.id);
+    const accepted = newParticipant(state.lobby.id);
+
+    await expect(
+      connection.lobbyStates.reserveParticipant(rejected, {
+        maxPlayersPerLobby: state.participants.length,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "LOBBY_FULL", message: "The lobby is full." },
+    });
+    await expect(
+      connection.lobbyStates.reserveParticipant(accepted, {
+        maxPlayersPerLobby: state.participants.length + 1,
+      }),
+    ).resolves.toEqual({ ok: true, participantId: accepted.id });
+    await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toMatchObject({
+      participants: expect.not.arrayContaining([expect.objectContaining({ id: rejected.id })]),
+    });
+  });
+
+  test("never exceeds the participant limit under concurrent reservations", async () => {
+    const retryEvents: TransactionRetryEvent[] = [];
+    const firstConnection = await connectWithRetryObserver(retryEvents);
+    const secondConnection = await connectWithRetryObserver(retryEvents);
+    const state = createLobbyState();
+    await createPersistedLobby(firstConnection, state);
+    const first = newParticipant(state.lobby.id);
+    const second = newParticipant(state.lobby.id);
+    const blocker = await pool.connect();
+    let firstReservation: Promise<ReserveParticipantResult> | undefined;
+    let secondReservation: Promise<ReserveParticipantResult> | undefined;
+
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query(
+        `UPDATE lobbies SET last_event_sequence = last_event_sequence WHERE id = $1`,
+        [state.lobby.id],
+      );
+      firstReservation = firstConnection.lobbyStates.reserveParticipant(first, {
+        maxPlayersPerLobby: state.participants.length + 1,
+      });
+      secondReservation = secondConnection.lobbyStates.reserveParticipant(second, {
+        maxPlayersPerLobby: state.participants.length + 1,
+      });
+      await waitForBlockedParticipantReservations(2);
+      await blocker.query("COMMIT");
+    } finally {
+      await blocker.query("ROLLBACK");
+      blocker.release();
+    }
+
+    const results = await Promise.all([firstReservation!, secondReservation!]);
+    const restored = await firstConnection.lobbyStates.findById(state.lobby.id);
+
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(results.filter((result) => !result.ok)).toEqual([
+      {
+        ok: false,
+        error: { code: "LOBBY_FULL", message: "The lobby is full." },
+      },
+    ]);
+    expect(restored?.participants).toHaveLength(state.participants.length + 1);
+    expect(retryEvents.some((event) => event.kind === "retry")).toBe(true);
+  });
+
+  test("returns a stable result for concurrent normalized-username collisions", async () => {
+    const firstConnection = await connect();
+    const secondConnection = await connect();
+    const state = createLobbyState();
+    await createPersistedLobby(firstConnection, state);
+    const first = newParticipant(state.lobby.id, "  Concurrent   Name ");
+    const second = newParticipant(state.lobby.id, "concurrent name");
+    const blocker = await pool.connect();
+    let firstReservation: Promise<ReserveParticipantResult> | undefined;
+    let secondReservation: Promise<ReserveParticipantResult> | undefined;
+
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query(
+        `UPDATE lobbies SET last_event_sequence = last_event_sequence WHERE id = $1`,
+        [state.lobby.id],
+      );
+      firstReservation = firstConnection.lobbyStates.reserveParticipant(first, {
+        maxPlayersPerLobby: 4,
+      });
+      secondReservation = secondConnection.lobbyStates.reserveParticipant(second, {
+        maxPlayersPerLobby: 4,
+      });
+      await waitForBlockedParticipantReservations(2);
+      await blocker.query("COMMIT");
+    } finally {
+      await blocker.query("ROLLBACK");
+      blocker.release();
+    }
+
+    const results = await Promise.all([firstReservation!, secondReservation!]);
+    const restored = await firstConnection.lobbyStates.findById(state.lobby.id);
+
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(results.filter((result) => !result.ok)).toEqual([
+      {
+        ok: false,
+        error: {
+          code: "USERNAME_TAKEN",
+          message: "That username is already in use.",
+        },
+      },
+    ]);
+    expect(
+      restored?.participants.filter(
+        (participant) => participant.normalizedUsername === "concurrent name",
+      ),
+    ).toHaveLength(1);
   });
 
   test("never exceeds the active-lobby limit under concurrent creation", async () => {

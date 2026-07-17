@@ -30,6 +30,7 @@ export {
   type LobbyStateRepository,
   type LobbyStatus,
   type NewActiveLobbyState,
+  type NewLobbyParticipant,
   type ParticipantRole,
   type PauseReason,
   type PendingActiveLobbyEvent,
@@ -37,6 +38,8 @@ export {
   type PresenceStatus,
   type RoundEligibility,
   type RoundStage,
+  type ReserveParticipantOptions,
+  type ReserveParticipantResult,
   type SessionStatus,
   type TransactionalLobbyRepository,
 } from "./lobby-state-repository.js";

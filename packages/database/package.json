@@ -12,6 +12,7 @@
   "dependencies": {
     "@prisma/adapter-pg": "7.6.0",
     "@prisma/client": "7.6.0",
+    "@gamenight-bingo/domain": "workspace:*",
     "pg": "8.16.3"
   },
   "devDependencies": {

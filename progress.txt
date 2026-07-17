@@ -34,6 +34,7 @@ Next story: US-001
 - PostgreSQL concurrency tests must coordinate actual transaction overlap before asserting Serializable retries; observing the second command waiting on the lobby fence avoids flaky assumptions about `Promise.all` scheduling.
 - Retry classification scans nested Prisma/adapter `cause`, `meta`, and `driverAdapterError` metadata before falling back to generic conflict codes; PostgreSQL `40P01` deadlocks take precedence over outer Prisma `P2034` wrappers so telemetry stays accurate.
 - Active lobby creation goes through `LobbyStateRepository.createActive`: generate each candidate outside retryable transactions, serialize PostgreSQL admission before counting waiting/active lobbies, and retry only active-code collisions so capacity cannot be oversubscribed.
+- Normalize usernames at the trusted reservation boundary by rejecting Unicode control/format characters, trimming and collapsing Unicode whitespace, applying NFC, enforcing the 128-character display/key limit, then lowercasing for lobby-scoped uniqueness; serialize reservations on the lobby row before checking names and configured capacity.
 
 Append-only iteration log
 -------------------------
@@ -1802,3 +1803,59 @@ Targeted re-review outcome for US-023 at 2026-07-17 03:10:46 MST:
 - The ASCII-only normalization and narrow late active-code collision retry resolve both initial findings without masking unrelated integrity failures.
 - Residual risk is limited to runtime cryptographic wiring plus HTTP authorization/rate limiting intentionally assigned to later stories, and the bounded 128-candidate exhaustion path is not separately integration-tested.
 - No in-scope critical, high, or medium findings remain. US-023 can be marked passing and committed.
+
+## 2026-07-17 03:19:22 MST - US-024
+- What was implemented
+  - Added domain username normalization that preserves display casing, trims and collapses Unicode whitespace, applies NFC, derives the lowercase uniqueness key, and returns stable errors for empty, control/format, or overlength names.
+  - Added lobby-scoped participant reservation that serializes on the active lobby, rejects normalized-name collisions, enforces the supplied player limit, and returns stable full/not-found/taken results.
+  - Added Unicode, whitespace, control-character, collision, configurable-limit, rejected-insert, and concurrent-capacity tests.
+- Files changed: `packages/domain/src/username.ts`, `packages/domain/src/index.ts`, `tests/username.test.ts`, `packages/database/package.json`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/index.ts`, `packages/database/src/database.integration.test.ts`, `bun.lock`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-024 - Normalize and reserve usernames`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run tests/username.test.ts` (expected fail before implementation because the normalization API was absent; review regressions then failed for canonical, format-control, and length handling; pass after remediation with 7 tests)
+  - `TEST_DATABASE_URL=... bunx vitest run packages/database/src/database.integration.test.ts` (expected fail before implementation because participant reservation was absent; review regressions then failed against caller-controlled keys and limits above 25; pass after remediation with 26 tests)
+  - `bun install --frozen-lockfile` (pass; package-local domain dependency is reproducible)
+  - `bun run lint` (pass)
+  - `bun run format:check` (expected fail only on three pre-existing untracked US-018 browser report artifacts)
+  - Intended-file Prettier check (pass)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `TEST_DATABASE_URL=... bun run test` (pass after review remediation; 18 Vitest files and 275 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: none
+  - Used: skipped because this was a standard, focused domain/repository change with clear existing transaction and test patterns
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and untrusted-input/data-integrity specialist `security-engineer`; targeted re-review by `qa-expert` and `security-engineer` planned after substantive fixes
+  - Findings: caller-controlled uniqueness, Unicode canonical/format/length validation, product-limit validation, persisted/scoped forms, and deterministic concurrency coverage fixed before targeted re-review
+- Decisions (why):
+  - Rejected control characters before whitespace normalization so tabs, newlines, and every other Unicode `Cc` value cannot be silently converted into acceptable spacing.
+  - Made the repository normalize raw names through the domain API because accepting an independent uniqueness key allowed callers to bypass canonical display and collision rules.
+  - Reused the lobby-row write fence and Serializable retry policy because name uniqueness and participant capacity must remain correct under concurrent joins.
+  - Passed the configured player limit into each reservation while enforcing 25 as the repository's absolute ceiling, so validated overrides work without allowing a miswired caller to exceed the product maximum.
+- **Learnings for future iterations:**
+  - JavaScript Unicode lowercasing preserves required non-ASCII behavior, including context-sensitive mappings such as Greek final sigma; NFC prevents canonically equivalent spellings from reserving separate names.
+  - Control-character validation must precede whitespace collapse because several prohibited controls are also matched as whitespace.
+  - The participant unique index and repository lookup are both scoped by lobby, while the serialized count prevents concurrent reservations from exceeding configured capacity.
+- Known issues / follow-ups:
+  - Root `bun run format:check` still scans three pre-existing untracked US-018 report files; they remain untouched and unstaged, while every intended file passes Prettier.
+  - Session issuance, departed-slot behavior, and active-round waiting eligibility remain assigned to US-025, US-026, and US-036.
+- Next iteration start:
+  - If review passes, implement US-025 same-device lobby session issuance; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-024 at 2026-07-17 03:28:27 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced four blocking root causes: the repository trusted a caller-supplied uniqueness key; canonical/invisible/overlength Unicode forms lacked stable validation; values above the product maximum of 25 were accepted; and persistence/scope/concurrent race coverage was incomplete or scheduler-dependent.
+- Added failing domain regressions for NFC, Unicode format controls, overlength display values, and lowercased-key expansion, then implemented canonicalization and stable length/control errors.
+- Removed the caller-supplied normalized key from the reservation API and made the database repository invoke the domain normalizer before persistence; added the explicit 1-25 repository guard and package-local domain dependency.
+- Strengthened integration coverage to verify exact persisted forms, same-name reuse across lobbies, deterministic overlapping capacity and normalized-name races, stable collision results, and observed Serializable retries.
+- Changed database-test connection cleanup to run after each test after the expanded suite exposed PostgreSQL connection exhaustion.
+- Post-fix checks: focused 7 domain and 26 database tests pass, frozen install passes, lint passes, intended Prettier passes, typecheck passes, the full PostgreSQL-enabled suite passes with 275 tests, and Playwright smoke passes.
+- Targeted re-review: pending `qa-expert` and `security-engineer` because the substantive fixes address their findings; `code-reviewer` is not repeated because its only low bookkeeping observation is resolved by the required post-review PRD staging sequence.
+
+Targeted re-review outcome for US-024 at 2026-07-17 03:28:27 MST:
+- `qa-expert` and `security-engineer` reviewed the revised complete staged diff and returned empty actionable finding lists with no residual risks.
+- Deterministic concurrency, exact persistence, lobby scoping, trusted canonicalization, Unicode validation, schema-length alignment, and the absolute product limit are covered.
+- The initial code review's low `prd.json` bookkeeping observation is resolved by staging the required post-review passing-status update now; it was not an implementation defect.
+- No in-scope critical, high, or medium findings remain. US-024 can be marked passing and committed.

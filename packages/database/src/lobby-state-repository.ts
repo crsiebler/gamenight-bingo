@@ -1,4 +1,5 @@
 import { PrismaPg } from "@prisma/adapter-pg";
+import { normalizeUsername, type UsernameNormalizationResult } from "@gamenight-bingo/domain";
 
 import {
   Prisma,
@@ -173,6 +174,42 @@ export interface CreateActiveLobbyOptions {
   readonly nextCode: () => string;
 }
 
+export interface NewLobbyParticipant {
+  readonly id: string;
+  readonly lobbyId: string;
+  readonly username: string;
+  readonly role: "player";
+  readonly roundEligibility: RoundEligibility;
+  readonly joinedAt: Date;
+}
+
+export interface ReserveParticipantOptions {
+  readonly maxPlayersPerLobby: number;
+}
+
+export type ReserveParticipantResult =
+  | {
+      readonly ok: true;
+      readonly participantId: string;
+    }
+  | {
+      readonly ok: false;
+      readonly error:
+        | Extract<UsernameNormalizationResult, { readonly ok: false }>["error"]
+        | {
+            readonly code: "LOBBY_FULL";
+            readonly message: "The lobby is full.";
+          }
+        | {
+            readonly code: "USERNAME_TAKEN";
+            readonly message: "That username is already in use.";
+          }
+        | {
+            readonly code: "LOBBY_NOT_FOUND";
+            readonly message: "The active lobby was not found.";
+          };
+    };
+
 export type CreateActiveLobbyResult =
   | {
       readonly ok: true;
@@ -192,6 +229,10 @@ export interface LobbyStateRepository {
     state: NewActiveLobbyState,
     options: CreateActiveLobbyOptions,
   ): Promise<CreateActiveLobbyResult>;
+  reserveParticipant(
+    participant: NewLobbyParticipant,
+    options: ReserveParticipantOptions,
+  ): Promise<ReserveParticipantResult>;
   findById(lobbyId: string): Promise<DurableLobbyState | null>;
   findActiveLobbyIdByCode(code: string): Promise<string | null>;
 }
@@ -688,6 +729,100 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
     }
 
     throw new Error("Unable to generate a unique active lobby code.");
+  }
+
+  async reserveParticipant(
+    participant: NewLobbyParticipant,
+    options: ReserveParticipantOptions,
+  ): Promise<ReserveParticipantResult> {
+    if (
+      !Number.isSafeInteger(options.maxPlayersPerLobby) ||
+      options.maxPlayersPerLobby < 1 ||
+      options.maxPlayersPerLobby > 25
+    ) {
+      throw new RangeError("The participant limit must be a safe integer between 1 and 25.");
+    }
+
+    const normalized = normalizeUsername(participant.username);
+    if (!normalized.ok) {
+      return { ok: false, error: normalized.error };
+    }
+
+    return runTransactionWithRetry(
+      async () =>
+        this.prisma.$transaction(
+          async (transaction) => {
+            const lobbies = await transaction.$queryRaw<readonly { id: string }[]>`
+              UPDATE "lobbies"
+                 SET "last_event_sequence" = "last_event_sequence"
+               WHERE "id" = ${participant.lobbyId}
+                 AND "status" IN ('WAITING', 'ACTIVE')
+               RETURNING "id"
+            `;
+            if (lobbies.length !== 1) {
+              return {
+                ok: false,
+                error: {
+                  code: "LOBBY_NOT_FOUND",
+                  message: "The active lobby was not found.",
+                },
+              } as const;
+            }
+
+            const existing = await transaction.participant.findUnique({
+              where: {
+                lobbyId_normalizedUsername: {
+                  lobbyId: participant.lobbyId,
+                  normalizedUsername: normalized.normalizedUsername,
+                },
+              },
+              select: { id: true },
+            });
+            if (existing !== null) {
+              return {
+                ok: false,
+                error: {
+                  code: "USERNAME_TAKEN",
+                  message: "That username is already in use.",
+                },
+              } as const;
+            }
+
+            const participantCount = await transaction.participant.count({
+              where: { lobbyId: participant.lobbyId },
+            });
+            if (participantCount >= options.maxPlayersPerLobby) {
+              return {
+                ok: false,
+                error: {
+                  code: "LOBBY_FULL",
+                  message: "The lobby is full.",
+                },
+              } as const;
+            }
+
+            await transaction.participant.create({
+              data: {
+                id: participant.id,
+                lobbyId: participant.lobbyId,
+                username: normalized.username,
+                normalizedUsername: normalized.normalizedUsername,
+                role: "PLAYER",
+                roundEligibility: roundEligibilities.toDatabase(participant.roundEligibility),
+                joinedAt: participant.joinedAt,
+                departedAt: null,
+              },
+            });
+            return { ok: true, participantId: participant.id } as const;
+          },
+          {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+            maxWait: 5_000,
+            timeout: 10_000,
+          },
+        ),
+      this.retryOptions,
+    );
   }
 
   async findById(lobbyId: string): Promise<DurableLobbyState | null> {

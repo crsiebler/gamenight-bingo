@@ -53,6 +53,7 @@
       "name": "@gamenight-bingo/database",
       "version": "0.0.0",
       "dependencies": {
+        "@gamenight-bingo/domain": "workspace:*",
         "@prisma/adapter-pg": "7.6.0",
         "@prisma/client": "7.6.0",
         "pg": "8.16.3",
