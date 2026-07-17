@@ -1309,3 +1309,55 @@ Targeted re-review outcome for US-016 at 2026-07-17 00:10:21 MST:
 - Both specialists confirmed that the A-Y review records and direct source-inventory-to-runtime assertions resolve the original parity gap without introducing brittle or tautological coverage.
 - Residual risk is limited to manual rather than automated image-level comparison against the source PDF and browser verification outside Chromium; neither is required by this story.
 - No in-scope critical, high, or medium findings remain. US-016 can be marked passing and committed.
+
+## 2026-07-17 00:19:19 MST - US-017
+- What was implemented
+  - Encoded canonical exact number patterns 0 through 19 with stable `number-*` IDs, source references, and the source-inventory masks, including the approved 10 through 19 masks without pending sign-off flags.
+  - Added source-linked number preview modeling, a responsive standalone HTML gallery, a committed JSON golden, generated catalog documentation, and completed 25-cell source-to-runtime review records for all 20 diagrams.
+  - Added focused catalog, documentation parity, golden, and DOM coverage while preserving number identity independently from unrelated category entries.
+- Files changed: `packages/patterns/src/catalog.ts`, `packages/patterns/src/index.ts`, `packages/patterns/src/previews.ts`, `docs/bingo-pattern-catalog.md`, `docs/number-pattern-previews.html`, `tests/fixtures/patterns/number-previews.v1.json`, `tests/pattern-catalog-doc.test.ts`, `tests/pattern-number-previews.test.tsx`, `tests/patterns.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-017 - Encode, preview, and test numbers`
+- Auto approval: `disabled`
+- Checks:
+  - `bunx vitest run tests/patterns.test.ts tests/pattern-catalog-doc.test.ts tests/pattern-number-previews.test.tsx` (expected fail before implementation: six failures for missing number entries, review records, and preview API)
+  - `bunx vitest run tests/patterns.test.ts tests/pattern-catalog-doc.test.ts tests/pattern-number-previews.test.tsx tests/pattern-letter-previews.test.tsx tests/pattern-shape-previews.test.tsx` (pass; 5 files and 46 tests)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (pass)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `bun run test` (pass; 11 Vitest files and 195 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `git diff --check` (pass)
+  - Browser verification with `dev-browser` at 390px touch and 1440px desktop (pass; 20 entries, 20 thumbnails, source order 0-19, no horizontal overflow, three desktop columns, semantic labels, and no console warnings/errors)
+- Implementation agents:
+  - Recommended: none
+  - Used: skipped because the established category-preview pattern made this a straightforward standard implementation and no domain adviser was needed
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, `documentation-engineer`, `ui-designer`, and `ux-researcher`; targeted re-review by `documentation-engineer`
+  - Findings: fixed stale future-tense catalog language; discarded the expected pre-review `prd.json` status finding because Ralph requires that metadata update only after review passes
+- Decisions (why):
+  - Reused the shared source-filtered preview model and semantic renderer with number-specific public functions because it preserves category isolation without duplicating rendering behavior.
+  - Kept every mask in the canonical runtime catalog and generated documentation, goldens, and the standalone gallery from that data so maintained visual artifacts cannot become another mask authority.
+  - Used `number-0` through `number-19` because category-specific stable IDs preserve selection identity and match the catalog's established shape and letter conventions.
+- **Learnings for future iterations:**
+  - The source PDF heading says “Letters + numbers,” but its complete diagram set is exactly numbers 0 through 19 in reading order.
+  - Number category artifacts use the same source-filtered preview and generated-parity workflow as shape and letter artifacts; Christmas can add its category wrapper without changing shared output behavior.
+- Known issues / follow-ups:
+  - Christmas catalog entries, goldens, and preview pages remain intentionally assigned to US-018.
+  - Existing local letter-preview screenshots and Lighthouse reports remain untracked and excluded because they are unrelated verification outputs.
+- Next iteration start:
+  - If review passes, implement US-018 Christmas encoding, duplicate-identity preservation, source-linked previews, and golden fixtures; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-017 at 2026-07-17 00:19:19 MST:
+- The initial `code-reviewer`, `qa-expert`, `documentation-engineer`, `ui-designer`, and `ux-researcher` pass produced one valid blocking medium finding: the source-inventory and duplicate-mask explanations still described implemented shape, letter, and number mappings as future work.
+- Updated those explanations to distinguish current runtime IDs from the remaining Christmas mappings.
+- Discarded the separate pre-review `prd.json` finding because Ralph explicitly requires the status file to remain `passes: false` and unstaged until the staged implementation review passes.
+- Post-fix checks: focused 38 documentation/catalog tests, formatting, typecheck, all 195 Vitest tests, and staged/unstaged whitespace checks pass.
+- Targeted re-review: `documentation-engineer` returned an empty findings list and confirmed the documentation-accuracy root cause is fully resolved.
+
+Targeted re-review outcome for US-017 at 2026-07-17 00:19:19 MST:
+- `documentation-engineer` reviewed the revised complete staged diff and returned no actionable findings.
+- The corrected inventory and duplicate-mask explanations now accurately distinguish implemented shape, letter, and number IDs from the remaining Christmas work.
+- Residual risk is limited to manual rather than automated image-level PDF comparison and browser verification outside Chromium; neither is required by this story.
+- No in-scope critical, high, or medium findings remain. US-017 can be marked passing and committed.

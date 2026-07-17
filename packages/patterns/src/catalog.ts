@@ -224,6 +224,22 @@ function exactLetter(letter: string, reference: string, mask: string) {
   } as const;
 }
 
+function exactNumber(number: number, reference: string, mask: string) {
+  return {
+    id: `number-${number}`,
+    name: String(number),
+    category: "number",
+    version: 1,
+    mode: "exact",
+    source: {
+      file: "number-bingo-patterns.pdf",
+      references: [reference],
+      alias: null,
+    },
+    masks: [mask],
+  } as const;
+}
+
 export const patternCatalog = deepFreeze(
   PatternCatalogSchema.parse([
     {
@@ -320,5 +336,25 @@ export const patternCatalog = deepFreeze(
     exactLetter("W", "p1/d23", "#...#/#...#/#.#.#/##.##/#...#"),
     exactLetter("X", "p1/d24", "#...#/.#.#./..#../.#.#./#...#"),
     exactLetter("Y", "p1/d25", "#...#/.#.#./..#../..#../..#.."),
+    exactNumber(0, "p1/d01", ".###./#..##/#.#.#/##..#/.###."),
+    exactNumber(1, "p1/d02", "..#../.##../..#../..#../.###."),
+    exactNumber(2, "p1/d03", ".###./#...#/..##./.#.../#####"),
+    exactNumber(3, "p1/d04", ".###./#...#/..##./#...#/.###."),
+    exactNumber(4, "p1/d05", "#...#/#...#/#####/....#/....#"),
+    exactNumber(5, "p1/d06", "#####/#..../####./....#/####."),
+    exactNumber(6, "p1/d07", ".###./#..../####./#...#/.###."),
+    exactNumber(7, "p1/d08", "#####/#...#/...#./..#../..#.."),
+    exactNumber(8, "p1/d09", ".###./#...#/.###./#...#/.###."),
+    exactNumber(9, "p1/d10", ".###./#...#/.####/....#/.###."),
+    exactNumber(10, "p1/d11", "#.###/#.#.#/#.#.#/#.#.#/#.###"),
+    exactNumber(11, "p1/d12", ".#..#/##.##/.#..#/.#..#/.#..#"),
+    exactNumber(12, "p1/d13", "#.###/#...#/#.###/#.#../#.###"),
+    exactNumber(13, "p1/d14", "#.###/#...#/#.###/#...#/#.###"),
+    exactNumber(14, "p1/d15", "#.#.#/#.#.#/#.###/#...#/#...#"),
+    exactNumber(15, "p1/d16", "#.###/#.#../#.###/#...#/#.###"),
+    exactNumber(16, "p1/d17", "#.###/#.#../#.###/#.#.#/#.###"),
+    exactNumber(17, "p1/d18", "#.###/#.#.#/#...#/#...#/#...#"),
+    exactNumber(18, "p1/d19", "#.###/#.#.#/#.###/#.#.#/#.###"),
+    exactNumber(19, "p1/d20", "#.###/#.#.#/#.###/#...#/#...#"),
   ]),
 );

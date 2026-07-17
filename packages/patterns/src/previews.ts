@@ -77,6 +77,12 @@ export function createLetterPatternPreviews(
   return createSourcePatternPreviews(patterns, "letter-bingo-patterns.pdf");
 }
 
+export function createNumberPatternPreviews(
+  patterns: readonly PatternDefinition[],
+): PatternPreview[] {
+  return createSourcePatternPreviews(patterns, "number-bingo-patterns.pdf");
+}
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -188,5 +194,13 @@ export function generateLetterPatternPreviewHtml(previews: readonly PatternPrevi
     documentTitle: "GameNight Bingo letter pattern previews",
     heading: "Letter pattern previews",
     description: `${sharedDescription} The source catalog ends at Y and contains no Z diagram.`,
+  });
+}
+
+export function generateNumberPatternPreviewHtml(previews: readonly PatternPreview[]): string {
+  return generatePatternPreviewHtml(previews, {
+    documentTitle: "GameNight Bingo number pattern previews",
+    heading: "Number pattern previews",
+    description: sharedDescription,
   });
 }

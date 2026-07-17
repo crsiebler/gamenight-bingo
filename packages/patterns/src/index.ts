@@ -13,8 +13,10 @@ export { generateCorePatternDocumentation } from "./documentation.js";
 export { PatternCardStateSchema, matchesPattern, type PatternCardState } from "./matcher.js";
 export {
   createLetterPatternPreviews,
+  createNumberPatternPreviews,
   createShapePatternPreviews,
   generateLetterPatternPreviewHtml,
+  generateNumberPatternPreviewHtml,
   generateShapePatternPreviewHtml,
   type PatternPreview,
   type PatternPreviewClassification,

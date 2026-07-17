@@ -268,7 +268,7 @@
         "Verify in browser using dev-browser skill."
       ],
       "priority": 17,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {

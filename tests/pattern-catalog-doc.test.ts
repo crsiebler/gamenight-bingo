@@ -146,6 +146,7 @@ function parseSourceReviewRows(markdown: string, category: string): SourceReview
 
 const shapeReviewRows = parseSourceReviewRows(catalog, "Shape");
 const letterReviewRows = parseSourceReviewRows(catalog, "Letter");
+const numberReviewRows = parseSourceReviewRows(catalog, "Number");
 
 const expectedShapeReviewMappings = [
   ["p1/d01", "Bunny Ears", "shape-bunny-ears", "exact-mask-match"],
@@ -183,6 +184,13 @@ const expectedLetterReviewMappings = "ABCDEFGHIJKLMNOPQRSTUVWXY"
     `letter-${letter.toLowerCase()}`,
     "exact-mask-match",
   ]);
+
+const expectedNumberReviewMappings = Array.from({ length: 20 }, (_, index) => [
+  `p1/d${String(index + 1).padStart(2, "0")}`,
+  String(index),
+  `number-${index}`,
+  "exact-mask-match",
+]);
 
 function generatedSection(markdown: string): string | undefined {
   return markdown.match(
@@ -293,6 +301,39 @@ describe("canonical pattern catalog documentation", () => {
         category: "letter",
         source: {
           file: "letter-bingo-patterns.pdf",
+          references: [review.reference],
+        },
+        masks: [source!.mask],
+      });
+    }
+  });
+
+  test("records source-to-runtime parity for every reviewed number diagram", () => {
+    expect(numberReviewRows).toHaveLength(20);
+    expect(
+      numberReviewRows.map(({ reference, sourceName, runtimeId, review }) => [
+        reference,
+        sourceName,
+        runtimeId,
+        review,
+      ]),
+    ).toEqual(expectedNumberReviewMappings);
+    expect(numberReviewRows.every((row) => row.cellsReviewed === "25/25")).toBe(true);
+
+    for (const review of numberReviewRows) {
+      const source = rows.find(
+        (row) =>
+          row.sourceFile === "number-bingo-patterns.pdf" && row.reference === review.reference,
+      );
+      const runtimePattern = patternCatalog.find((pattern) => pattern.id === review.runtimeId);
+
+      expect(source, review.reference).toBeDefined();
+      expect(runtimePattern, review.runtimeId).toBeDefined();
+      expect(runtimePattern).toMatchObject({
+        name: review.sourceName,
+        category: "number",
+        source: {
+          file: "number-bingo-patterns.pdf",
           references: [review.reference],
         },
         masks: [source!.mask],

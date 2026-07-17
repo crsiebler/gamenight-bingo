@@ -101,6 +101,29 @@ const expectedLetterPatterns = [
   ["letter-y", "Y", "p1/d25", "#...#/.#.#./..#../..#../..#.."],
 ] as const;
 
+const expectedNumberPatterns = [
+  ["number-0", "0", "p1/d01", ".###./#..##/#.#.#/##..#/.###."],
+  ["number-1", "1", "p1/d02", "..#../.##../..#../..#../.###."],
+  ["number-2", "2", "p1/d03", ".###./#...#/..##./.#.../#####"],
+  ["number-3", "3", "p1/d04", ".###./#...#/..##./#...#/.###."],
+  ["number-4", "4", "p1/d05", "#...#/#...#/#####/....#/....#"],
+  ["number-5", "5", "p1/d06", "#####/#..../####./....#/####."],
+  ["number-6", "6", "p1/d07", ".###./#..../####./#...#/.###."],
+  ["number-7", "7", "p1/d08", "#####/#...#/...#./..#../..#.."],
+  ["number-8", "8", "p1/d09", ".###./#...#/.###./#...#/.###."],
+  ["number-9", "9", "p1/d10", ".###./#...#/.####/....#/.###."],
+  ["number-10", "10", "p1/d11", "#.###/#.#.#/#.#.#/#.#.#/#.###"],
+  ["number-11", "11", "p1/d12", ".#..#/##.##/.#..#/.#..#/.#..#"],
+  ["number-12", "12", "p1/d13", "#.###/#...#/#.###/#.#../#.###"],
+  ["number-13", "13", "p1/d14", "#.###/#...#/#.###/#...#/#.###"],
+  ["number-14", "14", "p1/d15", "#.#.#/#.#.#/#.###/#...#/#...#"],
+  ["number-15", "15", "p1/d16", "#.###/#.#../#.###/#...#/#.###"],
+  ["number-16", "16", "p1/d17", "#.###/#.#../#.###/#.#.#/#.###"],
+  ["number-17", "17", "p1/d18", "#.###/#.#.#/#...#/#...#/#...#"],
+  ["number-18", "18", "p1/d19", "#.###/#.#.#/#.###/#.#.#/#.###"],
+  ["number-19", "19", "p1/d20", "#.###/#.#.#/#.###/#...#/#...#"],
+] as const;
+
 function catalogPattern(id: string) {
   const pattern = patternCatalog.find((candidate) => candidate.id === id);
   expect(pattern, id).toBeDefined();
@@ -342,6 +365,33 @@ describe("canonical core pattern catalog", () => {
     expect(catalogPattern("letter-x").masks).toEqual(catalogPattern("shape-x").masks);
     expect(catalogPattern("letter-o").id).not.toBe(catalogPattern("shape-outside-edge").id);
     expect(catalogPattern("letter-x").id).not.toBe(catalogPattern("shape-x").id);
+  });
+
+  test("encodes 0 through 19 with category-specific stable IDs and approved source masks", () => {
+    const numbers = patternCatalog.filter((pattern) => pattern.category === "number");
+
+    expect(
+      numbers.map((pattern) => [
+        pattern.id,
+        pattern.name,
+        pattern.source.references[0],
+        pattern.masks[0],
+      ]),
+    ).toEqual(expectedNumberPatterns);
+
+    for (const number of numbers) {
+      expect(number).toMatchObject({
+        category: "number",
+        version: 1,
+        mode: "exact",
+        source: {
+          file: "number-bingo-patterns.pdf",
+          alias: null,
+        },
+      });
+      expect(number.source.references).toHaveLength(1);
+      expect(number.masks).toHaveLength(1);
+    }
   });
 
   test("is deeply immutable", () => {

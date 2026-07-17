@@ -6,8 +6,8 @@ four supplied pattern PDFs. Each source PDF has one page. A reference such as
 
 Runtime canonical data lives in `packages/patterns/src/catalog.ts`. The core
 section below is generated and tested from the runtime catalog so the two
-representations cannot diverge. Later catalog stories add the remaining number
-and Christmas exact entries to that canonical runtime data.
+representations cannot diverge. A later catalog story adds the remaining
+Christmas exact entries to that canonical runtime data.
 
 ## Mask Notation
 
@@ -96,14 +96,35 @@ A transformed pattern must have its own explicitly sourced catalog entry.
 | `letter-w` | W | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d23` | 1 | `4543681cd80301da` |
 | `letter-x` | X | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d24` | 1 | `72e71d8ab21ee4a6` |
 | `letter-y` | Y | letter | 1 | `exact` | `docs/letter-bingo-patterns.pdf` `p1/d25` | 1 | `46ba1505f11510e2` |
+| `number-0` | 0 | number | 1 | `exact` | `docs/number-bingo-patterns.pdf` `p1/d01` | 1 | `9213a77b4a15b4ce` |
+| `number-1` | 1 | number | 1 | `exact` | `docs/number-bingo-patterns.pdf` `p1/d02` | 1 | `e54bba2620faf837` |
+| `number-2` | 2 | number | 1 | `exact` | `docs/number-bingo-patterns.pdf` `p1/d03` | 1 | `76e6348cf2b6ddc6` |
+| `number-3` | 3 | number | 1 | `exact` | `docs/number-bingo-patterns.pdf` `p1/d04` | 1 | `e8bb1746f83c1f53` |
+| `number-4` | 4 | number | 1 | `exact` | `docs/number-bingo-patterns.pdf` `p1/d05` | 1 | `51e01c4efc983c3e` |
+| `number-5` | 5 | number | 1 | `exact` | `docs/number-bingo-patterns.pdf` `p1/d06` | 1 | `52116bcf6e83cfc6` |
+| `number-6` | 6 | number | 1 | `exact` | `docs/number-bingo-patterns.pdf` `p1/d07` | 1 | `096fea0a07857686` |
+| `number-7` | 7 | number | 1 | `exact` | `docs/number-bingo-patterns.pdf` `p1/d08` | 1 | `cc945613b8472a47` |
+| `number-8` | 8 | number | 1 | `exact` | `docs/number-bingo-patterns.pdf` `p1/d09` | 1 | `142fdd47e2c0b6be` |
+| `number-9` | 9 | number | 1 | `exact` | `docs/number-bingo-patterns.pdf` `p1/d10` | 1 | `4c37c5273472aa4e` |
+| `number-10` | 10 | number | 1 | `exact` | `docs/number-bingo-patterns.pdf` `p1/d11` | 1 | `6b4fda03a95a4abe` |
+| `number-11` | 11 | number | 1 | `exact` | `docs/number-bingo-patterns.pdf` `p1/d12` | 1 | `98341727d1ed9e19` |
+| `number-12` | 12 | number | 1 | `exact` | `docs/number-bingo-patterns.pdf` `p1/d13` | 1 | `f8b585d256b97a8b` |
+| `number-13` | 13 | number | 1 | `exact` | `docs/number-bingo-patterns.pdf` `p1/d14` | 1 | `83eab660e237d587` |
+| `number-14` | 14 | number | 1 | `exact` | `docs/number-bingo-patterns.pdf` `p1/d15` | 1 | `c4080eb2a991bde3` |
+| `number-15` | 15 | number | 1 | `exact` | `docs/number-bingo-patterns.pdf` `p1/d16` | 1 | `eae275a757f23feb` |
+| `number-16` | 16 | number | 1 | `exact` | `docs/number-bingo-patterns.pdf` `p1/d17` | 1 | `182d6090c7586d94` |
+| `number-17` | 17 | number | 1 | `exact` | `docs/number-bingo-patterns.pdf` `p1/d18` | 1 | `d8462005b4db2f48` |
+| `number-18` | 18 | number | 1 | `exact` | `docs/number-bingo-patterns.pdf` `p1/d19` | 1 | `eff88f5c5b9a701b` |
+| `number-19` | 19 | number | 1 | `exact` | `docs/number-bingo-patterns.pdf` `p1/d20` | 1 | `e57d854aabcfcece` |
 <!-- END GENERATED CORE PATTERNS -->
 <!-- prettier-ignore-end -->
 
 ## Source Inventory
 
 Every row records the source display mask, including flexible examples and alias
-artwork. `Catalog name` is the future runtime/user-facing mapping; category-
-specific stable IDs will keep separate entries distinct in the runtime catalog.
+artwork. `Catalog name` is the runtime/user-facing mapping for implemented
+entries and the intended mapping for the remaining Christmas entries. Category-
+specific stable IDs keep implemented entries distinct in the runtime catalog.
 
 ### `docs/shapes-bingo-patterns.pdf`
 
@@ -271,6 +292,34 @@ The PDF page heading says “Letters + numbers,” but its diagrams are the numb
 
 The 10–19 rows use the confirmed masks exactly as approved.
 
+### Number Cell Review Records
+
+Each record confirms that all 25 source cells were checked against the PDF and
+that the canonical runtime mask matches the source inventory above.
+
+| Reference | Source name | Runtime ID  | Review             | Cells reviewed |
+| --------- | ----------- | ----------- | ------------------ | -------------: |
+| `p1/d01`  | 0           | `number-0`  | `exact-mask-match` |          25/25 |
+| `p1/d02`  | 1           | `number-1`  | `exact-mask-match` |          25/25 |
+| `p1/d03`  | 2           | `number-2`  | `exact-mask-match` |          25/25 |
+| `p1/d04`  | 3           | `number-3`  | `exact-mask-match` |          25/25 |
+| `p1/d05`  | 4           | `number-4`  | `exact-mask-match` |          25/25 |
+| `p1/d06`  | 5           | `number-5`  | `exact-mask-match` |          25/25 |
+| `p1/d07`  | 6           | `number-6`  | `exact-mask-match` |          25/25 |
+| `p1/d08`  | 7           | `number-7`  | `exact-mask-match` |          25/25 |
+| `p1/d09`  | 8           | `number-8`  | `exact-mask-match` |          25/25 |
+| `p1/d10`  | 9           | `number-9`  | `exact-mask-match` |          25/25 |
+| `p1/d11`  | 10          | `number-10` | `exact-mask-match` |          25/25 |
+| `p1/d12`  | 11          | `number-11` | `exact-mask-match` |          25/25 |
+| `p1/d13`  | 12          | `number-12` | `exact-mask-match` |          25/25 |
+| `p1/d14`  | 13          | `number-13` | `exact-mask-match` |          25/25 |
+| `p1/d15`  | 14          | `number-14` | `exact-mask-match` |          25/25 |
+| `p1/d16`  | 15          | `number-15` | `exact-mask-match` |          25/25 |
+| `p1/d17`  | 16          | `number-16` | `exact-mask-match` |          25/25 |
+| `p1/d18`  | 17          | `number-17` | `exact-mask-match` |          25/25 |
+| `p1/d19`  | 18          | `number-18` | `exact-mask-match` |          25/25 |
+| `p1/d20`  | 19          | `number-19` | `exact-mask-match` |          25/25 |
+
 ### `docs/christmas-bingo-patterns.pdf`
 
 | Reference | Source name    | Mode  | Catalog name   | Source mask                     |
@@ -291,8 +340,9 @@ The 10–19 rows use the confirmed masks exactly as approved.
 ## Duplicate Masks
 
 Identical masks do not imply identical pattern identity. These source pairs
-remain separate category-specific catalog entries and later receive distinct
-stable IDs:
+remain separate category-specific catalog entries. The shape and letter entries
+already have distinct stable IDs; the Christmas entries receive their own IDs
+when that category is added:
 
 | Entries                             | Shared mask                     |
 | ----------------------------------- | ------------------------------- |
