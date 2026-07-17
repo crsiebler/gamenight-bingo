@@ -60,6 +60,9 @@
     "packages/patterns": {
       "name": "@gamenight-bingo/patterns",
       "version": "0.0.0",
+      "dependencies": {
+        "zod": "4.0.1",
+      },
     },
     "packages/test-support": {
       "name": "@gamenight-bingo/test-support",

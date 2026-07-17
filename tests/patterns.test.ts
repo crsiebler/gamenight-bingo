@@ -1,0 +1,257 @@
+import { describe, expect, test } from "vitest";
+
+import {
+  PatternCardStateSchema,
+  PatternDefinitionSchema,
+  patternCatalog,
+  matchesPattern,
+} from "../packages/patterns/src/index.js";
+
+const emptyCard = () => Array<boolean>(25).fill(false);
+
+function cardWith(...indexes: number[]): boolean[] {
+  const card = emptyCard();
+  for (const index of indexes) card[index] = true;
+  return card;
+}
+
+function maskWith(...indexes: number[]): string {
+  const required = new Set(indexes);
+  return Array.from({ length: 25 }, (_, index) => (required.has(index) ? "#" : "."))
+    .join("")
+    .match(/.{5}/g)!
+    .join("/");
+}
+
+const expectedLines = [
+  [0, 1, 2, 3, 4],
+  [5, 6, 7, 8, 9],
+  [10, 11, 12, 13, 14],
+  [15, 16, 17, 18, 19],
+  [20, 21, 22, 23, 24],
+  [0, 5, 10, 15, 20],
+  [1, 6, 11, 16, 21],
+  [2, 7, 12, 17, 22],
+  [3, 8, 13, 18, 23],
+  [4, 9, 14, 19, 24],
+  [0, 6, 12, 18, 24],
+  [4, 8, 12, 16, 20],
+] as const;
+
+const expectedTwoLines: string[] = [];
+for (let first = 0; first < expectedLines.length; first += 1) {
+  for (let second = first + 1; second < expectedLines.length; second += 1) {
+    expectedTwoLines.push(
+      maskWith(...new Set([...(expectedLines[first] ?? []), ...(expectedLines[second] ?? [])])),
+    );
+  }
+}
+
+function catalogPattern(id: string) {
+  const pattern = patternCatalog.find((candidate) => candidate.id === id);
+  expect(pattern, id).toBeDefined();
+  return pattern!;
+}
+
+describe("pattern definition schema", () => {
+  test("accepts one strict, versioned exact-mask definition", () => {
+    const parsed = PatternDefinitionSchema.parse({
+      id: "shape-asymmetric",
+      name: "Asymmetric",
+      category: "shape",
+      version: 1,
+      mode: "exact",
+      source: {
+        file: "shapes-bingo-patterns.pdf",
+        references: ["p1/d99"],
+        alias: null,
+      },
+      masks: ["##.../.#.../..#../...#./....#"],
+    });
+
+    expect(parsed.id).toBe("shape-asymmetric");
+  });
+
+  test("rejects malformed masks, extra fields, and invalid exact definitions", () => {
+    const valid = {
+      id: "shape-asymmetric",
+      name: "Asymmetric",
+      category: "shape",
+      version: 1,
+      mode: "exact",
+      source: {
+        file: "shapes-bingo-patterns.pdf",
+        references: ["p1/d99"],
+        alias: null,
+      },
+      masks: ["##.../.#.../..#../...#./....#"],
+    } as const;
+
+    expect(PatternDefinitionSchema.safeParse({ ...valid, extra: true }).success).toBe(false);
+    expect(PatternDefinitionSchema.safeParse({ ...valid, masks: ["#####"] }).success).toBe(false);
+    expect(
+      PatternDefinitionSchema.safeParse({ ...valid, masks: [...valid.masks, ...valid.masks] })
+        .success,
+    ).toBe(false);
+  });
+
+  test("requires exactly 25 boolean card cells", () => {
+    expect(PatternCardStateSchema.safeParse(emptyCard()).success).toBe(true);
+    expect(PatternCardStateSchema.safeParse(Array<boolean>(24).fill(false)).success).toBe(false);
+    expect(PatternCardStateSchema.safeParse([...emptyCard(), "marked"]).success).toBe(false);
+  });
+});
+
+describe("canonical core pattern catalog", () => {
+  test("defines stable metadata without a second Full House entry", () => {
+    expect(
+      patternCatalog.map(({ id, name, category, version, mode }) => ({
+        id,
+        name,
+        category,
+        version,
+        mode,
+      })),
+    ).toEqual([
+      {
+        id: "standard-one-line",
+        name: "One Line",
+        category: "standard",
+        version: 1,
+        mode: "one-line",
+      },
+      {
+        id: "standard-two-lines",
+        name: "Two Lines",
+        category: "standard",
+        version: 1,
+        mode: "two-lines",
+      },
+      {
+        id: "standard-blackout",
+        name: "Blackout",
+        category: "standard",
+        version: 1,
+        mode: "blackout",
+      },
+    ]);
+
+    expect(catalogPattern("standard-one-line").masks).toHaveLength(12);
+    expect(catalogPattern("standard-two-lines").masks).toHaveLength(66);
+    expect(catalogPattern("standard-blackout")).toMatchObject({
+      source: {
+        file: "shapes-bingo-patterns.pdf",
+        references: ["p1/d06"],
+        alias: "Full House",
+      },
+      masks: ["#####/#####/#####/#####/#####"],
+    });
+    expect(patternCatalog.some((pattern) => pattern.name === "Full House")).toBe(false);
+  });
+
+  test("is deeply immutable", () => {
+    const oneLine = catalogPattern("standard-one-line");
+
+    expect(Object.isFrozen(patternCatalog)).toBe(true);
+    expect(Object.isFrozen(oneLine)).toBe(true);
+    expect(Object.isFrozen(oneLine.source)).toBe(true);
+    expect(Object.isFrozen(oneLine.source.references)).toBe(true);
+    expect(Object.isFrozen(oneLine.masks)).toBe(true);
+    expect(() => {
+      (oneLine.masks as string[])[0] = "#####/#####/#####/#####/#####";
+    }).toThrow(TypeError);
+  });
+
+  test("contains exactly every valid line and distinct line-pair union", () => {
+    const oneLine = catalogPattern("standard-one-line");
+    const twoLines = catalogPattern("standard-two-lines");
+
+    expect(oneLine.masks).toEqual(expectedLines.map((line) => maskWith(...line)));
+    expect(twoLines.masks).toEqual(expectedTwoLines);
+
+    for (const line of expectedLines) {
+      expect(matchesPattern(oneLine, cardWith(...line.filter((index) => index !== 12)))).toBe(true);
+    }
+
+    for (const mask of expectedTwoLines) {
+      const indexes = Array.from(mask.replaceAll("/", ""))
+        .map((cell, index) => (cell === "#" && index !== 12 ? index : -1))
+        .filter((index) => index >= 0);
+      expect(matchesPattern(twoLines, cardWith(...indexes))).toBe(true);
+    }
+  });
+});
+
+describe("pattern matching", () => {
+  test("requires an exact mask, tolerates extra daubs, and does not transform it", () => {
+    const pattern = PatternDefinitionSchema.parse({
+      id: "shape-asymmetric",
+      name: "Asymmetric",
+      category: "shape",
+      version: 1,
+      mode: "exact",
+      source: {
+        file: "shapes-bingo-patterns.pdf",
+        references: ["p1/d99"],
+        alias: null,
+      },
+      masks: ["##.../.#.../#..../...../....."],
+    });
+
+    expect(matchesPattern(pattern, cardWith(0, 1, 6, 10))).toBe(true);
+    expect(matchesPattern(pattern, cardWith(0, 1, 6, 10, 24))).toBe(true);
+
+    const transformedIndexes = {
+      reflected: [3, 4, 8, 14],
+      rotated: [2, 4, 8, 9],
+      translated: [6, 7, 12, 16],
+    } as const;
+    for (const indexes of Object.values(transformedIndexes)) {
+      expect(matchesPattern(pattern, cardWith(...indexes))).toBe(false);
+    }
+  });
+
+  test("always satisfies a required center cell", () => {
+    const pattern = PatternDefinitionSchema.parse({
+      id: "shape-center",
+      name: "Center",
+      category: "shape",
+      version: 1,
+      mode: "exact",
+      source: {
+        file: "shapes-bingo-patterns.pdf",
+        references: ["p1/d99"],
+        alias: null,
+      },
+      masks: ["...../...../..#../...../....."],
+    });
+
+    expect(matchesPattern(pattern, emptyCard())).toBe(true);
+  });
+
+  test("accepts any complete row, column, or diagonal for One Line", () => {
+    const oneLine = catalogPattern("standard-one-line");
+
+    expect(matchesPattern(oneLine, cardWith(0, 1, 2, 3, 4))).toBe(true);
+    expect(matchesPattern(oneLine, cardWith(2, 7, 17, 22))).toBe(true);
+    expect(matchesPattern(oneLine, cardWith(0, 6, 18, 24))).toBe(true);
+    expect(matchesPattern(oneLine, cardWith(0, 1, 2, 3))).toBe(false);
+  });
+
+  test("requires any two distinct lines and permits intersections for Two Lines", () => {
+    const twoLines = catalogPattern("standard-two-lines");
+
+    expect(matchesPattern(twoLines, cardWith(0, 1, 2, 3, 4, 5, 10, 15, 20))).toBe(true);
+    expect(matchesPattern(twoLines, cardWith(0, 1, 2, 3, 4))).toBe(false);
+  });
+
+  test("requires every noncenter cell for Blackout", () => {
+    const blackout = catalogPattern("standard-blackout");
+    const allNoncenter = Array<boolean>(25).fill(true);
+    allNoncenter[12] = false;
+
+    expect(matchesPattern(blackout, allNoncenter)).toBe(true);
+    allNoncenter[24] = false;
+    expect(matchesPattern(blackout, allNoncenter)).toBe(false);
+  });
+});

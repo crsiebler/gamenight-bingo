@@ -4,10 +4,10 @@ This document is the human-reviewable transcription of every diagram in the
 four supplied pattern PDFs. Each source PDF has one page. A reference such as
 `p1/d06` means page 1, diagram 6, counting left to right and then top to bottom.
 
-Runtime canonical data will later live in
-`packages/patterns/src/catalog.ts`. Once that runtime catalog exists, this
-document must be generated and tested from the runtime catalog so the two
-representations cannot diverge.
+Runtime canonical data lives in `packages/patterns/src/catalog.ts`. The core
+section below is generated and tested from the runtime catalog so the two
+representations cannot diverge. Later catalog stories add the source-specific
+exact entries to that canonical runtime data.
 
 ## Mask Notation
 
@@ -41,6 +41,16 @@ A transformed pattern must have its own explicitly sourced catalog entry.
 - **Blackout:** Every noncenter cell. `Full House` is only the source PDF alias
   for the single runtime and user-facing Blackout entry. Full House must never
   become a second selectable pattern.
+
+<!-- prettier-ignore-start -->
+<!-- BEGIN GENERATED CORE PATTERNS -->
+| Stable ID | Name | Category | Version | Mode | Source | Masks | Mask digest |
+| --------- | ---- | -------- | ------: | ---- | ------ | ----: | ----------- |
+| `standard-one-line` | One Line | standard | 1 | `one-line` | Rule definition (no PDF diagram) | 12 | `3492b0e7da1646e3` |
+| `standard-two-lines` | Two Lines | standard | 1 | `two-lines` | `docs/shapes-bingo-patterns.pdf` `p1/d02`, `p1/d25` | 66 | `ba76535978800bab` |
+| `standard-blackout` | Blackout | standard | 1 | `blackout` | Full House alias at `docs/shapes-bingo-patterns.pdf` `p1/d06` | 1 | `47244f978d15f546` |
+<!-- END GENERATED CORE PATTERNS -->
+<!-- prettier-ignore-end -->
 
 ## Source Inventory
 

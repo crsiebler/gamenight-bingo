@@ -200,11 +200,11 @@ The source pattern diagrams are preserved in:
 - [Number patterns](docs/number-bingo-patterns.pdf)
 - [Christmas patterns](docs/christmas-bingo-patterns.pdf)
 
-`packages/patterns` will become the canonical runtime catalog for stable IDs,
-source references, 5x5 masks, exact/flexible semantics, matching, and generated
-previews. Catalog documentation and golden tests must stay synchronized with
-that package; masks are never implicitly rotated, reflected, translated, or
-deduplicated.
+`packages/patterns` is the canonical runtime catalog for core stable IDs, source
+references, 5x5 masks, exact/flexible semantics, and matching. Source-specific
+exact entries and generated previews land in later catalog stories. Catalog
+documentation and golden tests must stay synchronized with that package; masks
+are never implicitly rotated, reflected, translated, or deduplicated.
 
 `packages/themes` will hold semantic tokens, original visual/audio assets, and
 asset provenance. Every theme must preserve readable game state, visible focus,

@@ -18,8 +18,10 @@ Next story: US-001
 - Runtime entry points pass `process.env` to `parseRuntimeConfig` from `packages/contracts`; downstream and domain code consume the immutable parsed type rather than reading environment state directly, and startup subprocess tests isolate environment/module state.
 - After workspace dependency manifests change, run `bun install` to refresh `bun.lock`, then verify reproducibility with `bun install --frozen-lockfile`.
 - Versioned Zod wire contracts live under `packages/contracts/src/v1`; every nested object is strict, top-level messages carry `schemaVersion`, identifiers and active-lobby sequences are branded, client commands contain intent rather than authoritative state, and authorized snapshots structurally omit credentials, foreign cards, future draws, prior-round history, and active event history. Lobby-wide sequences belong only on messages delivered to every authorized lobby consumer; private-only events omit them, acknowledgements declare their scope, and snapshot refinements enforce cross-object roster/state consistency.
-- `docs/bingo-pattern-catalog.md` inventories source diagrams as `p1/dNN` in reading order with exact, flexible-example, or alias modes and tested 5x5 source masks; when `packages/patterns/src/catalog.ts` lands, generate and parity-test the documentation from runtime canonical data rather than maintaining a second mask source.
+- `docs/bingo-pattern-catalog.md` inventories source diagrams as `p1/dNN` in reading order with exact, flexible-example, or alias modes and tested 5x5 source masks; its generated core section is parity-tested from `packages/patterns/src/catalog.ts` rather than maintaining a second runtime mask source.
 - Domain randomization accepts injected `CryptographicRandomBytes`; runtime adapters own the secure byte source, deterministic tests inject seeded bytes, and bounded integer selection uses rejection sampling rather than biased modulo reduction.
+- Runtime pattern definitions store every accepted required-cell arrangement as a 5x5 mask: One Line has 12 line masks, Two Lines has all 66 distinct line-pair unions, exact patterns retain one untransformed source mask, and matching always satisfies index 12 as the free center.
+- Exact generated Markdown parity blocks use `prettier-ignore` markers around the generated boundaries so formatting cannot silently rewrite canonical generator output.
 
 Append-only iteration log
 -------------------------
@@ -1060,3 +1062,49 @@ Review remediation for US-012 at 2026-07-16 19:38:43 MST:
 - The security review returned no actionable findings. The code review's low note that `prd.json` was not yet staged follows Ralph's required post-review metadata sequence and needs no pre-review change.
 - Post-fix checks: focused draw/card suite (16 tests pass), `bun run lint` (pass), `bun run format:check` (pass), `bun run typecheck` (pass), `bun run test` (161 tests pass), `bun run test:e2e` (pass), and staged/unstaged diff checks (pass).
 - Targeted re-review: `qa-expert` confirmed the boundary finding is resolved and returned no actionable findings; residual runtime CSPRNG and persistence work remains explicitly deferred to later stories.
+
+## 2026-07-16 19:46:45 MST - US-013
+- What was implemented
+  - Added a strict, versioned runtime pattern schema and canonical core entries for One Line, Two Lines, and Blackout with stable IDs, categories, source references, and the Full House source alias.
+  - Generated the 12 row/column/diagonal masks and all 66 distinct two-line unions, while preserving one untransformed mask for exact patterns and one all-cell mask for Blackout.
+  - Added matching that tolerates extra daubs, always satisfies the free center, and accepts no implicit rotation, reflection, or translation.
+  - Added an exact generated documentation section and parity test so runtime core metadata and documentation cannot diverge.
+- Files changed: `README.md`, `bun.lock`, `docs/bingo-pattern-catalog.md`, `packages/patterns/package.json`, `packages/patterns/src/catalog.ts`, `packages/patterns/src/documentation.ts`, `packages/patterns/src/index.ts`, `packages/patterns/src/matcher.ts`, `tests/pattern-catalog-doc.test.ts`, `tests/patterns.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-013 - Implement canonical pattern semantics`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run tests/patterns.test.ts tests/pattern-catalog-doc.test.ts` (expected fail before implementation: 10 failures because the runtime APIs and generated section did not exist; expected fail during review remediation: 2 failures for nested mutability and mask-content-insensitive documentation; pass after remediation with 25 tests)
+  - `bun install --frozen-lockfile` (pass; 248 installs checked with no changes)
+  - `bun run lint` (pass)
+  - `bun run format:check` (initial fail on new files; pass after formatting and generated-block stabilization)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `bun run test` (pass after review remediation; 8 Vitest files and 174 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: none
+  - Used: skipped because the core pattern rules and dependency-ordered scope were clear and standard mode did not require an implementation adviser
+- Specialist review:
+  - Agents used: `code-reviewer` and `qa-expert`; targeted re-review by both specialists
+  - Findings: initial nested immutability, mask-content parity, complete flexible-arrangement coverage, and exact-transform coverage findings fixed; targeted re-review returned no actionable findings
+- Decisions (why):
+  - Limited the runtime catalog to One Line, Two Lines, and Blackout because US-014 and US-016 through US-018 explicitly own the 79 source-specific exact entries; the generic exact matcher is ready for those additions.
+  - Represented flexible rules as all accepted required-cell masks because the same canonical data can drive matching, later progress calculations, and previews without separate rule-specific transformations.
+  - Kept Full House only as Blackout source metadata rather than a selectable entry because the documentation and PRD define it solely as an alias.
+  - Added Zod directly to `packages/patterns` because catalog definitions are runtime-parsed at their canonical boundary and the workspace does not rely on undeclared transitive dependencies.
+- **Learnings for future iterations:**
+  - A 5x5 Bingo board has exactly 12 valid lines: five rows, five columns, and two corner-to-corner diagonals; choosing any two distinct lines yields 66 canonical Two Lines masks.
+  - Generated Markdown that is compared byte-for-byte must be isolated from Prettier, or formatting can create parity failures without changing canonical data.
+  - Later exact catalog entries should use `PatternDefinitionSchema` and one source-orientation mask; matcher behavior already tolerates additional daubs and satisfies the center.
+- Known issues / follow-ups:
+  - Shape, letter, number, and Christmas exact entries remain intentionally deferred to their dependency-ordered catalog stories.
+- Next iteration start:
+  - If review passes, implement US-014 shape pattern encoding and cell-by-cell source review records; otherwise resume the recorded blocking finding.
+---
+
+Review remediation for US-013 at 2026-07-16 19:54:07 MST:
+- The initial `code-reviewer` and `qa-expert` pass produced four deduplicated medium blockers: nested catalog values remained mutable, documentation parity serialized only mask counts, tests did not independently prove every valid flexible arrangement, and exact no-transform coverage checked only one reflection.
+- Added failing regressions for nested mutation and mask-content-insensitive documentation, then recursively froze parsed catalog values and exposed deeply readonly definitions.
+- Added a deterministic 64-bit mask-content digest to generated documentation, independently asserted all 12 line masks and 66 line-pair unions, exercised every flexible arrangement with the center omitted, and added reflected, rotated, and translated exact-mask negatives.
+- Post-fix checks: focused pattern/catalog suite (25 tests pass), `bun install --frozen-lockfile` (pass), `bun run lint` (pass), `bun run format:check` (pass), `bun run typecheck` (pass), `bun run test` (174 tests pass), and `bun run test:e2e` (pass).
+- Targeted re-review: `code-reviewer` and `qa-expert` returned empty actionable finding lists; residual work is limited to the source-specific exact entries intentionally assigned to later stories.

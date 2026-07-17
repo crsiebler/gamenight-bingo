@@ -3,6 +3,11 @@ import { resolve } from "node:path";
 
 import { describe, expect, test } from "vitest";
 
+import {
+  generateCorePatternDocumentation,
+  patternCatalog,
+} from "../packages/patterns/src/index.js";
+
 const catalogPath = resolve("docs/bingo-pattern-catalog.md");
 const catalog = existsSync(catalogPath) ? readFileSync(catalogPath, "utf8") : "";
 
@@ -101,6 +106,12 @@ function parseCatalogRows(markdown: string): CatalogRow[] {
 }
 
 const rows = parseCatalogRows(catalog);
+
+function generatedSection(markdown: string): string | undefined {
+  return markdown.match(
+    /<!-- BEGIN GENERATED CORE PATTERNS -->\n([\s\S]*?)\n<!-- END GENERATED CORE PATTERNS -->/,
+  )?.[1];
+}
 
 function findRow(sourceFile: SourceFile, sourceName: string): CatalogRow {
   const row = rows.find(
@@ -218,6 +229,25 @@ describe("canonical pattern catalog documentation", () => {
     expect(normalizedCatalog).toContain("`packages/patterns/src/catalog.ts`");
     expect(normalizedCatalog).toContain(
       "generated and tested from the runtime catalog so the two representations cannot diverge",
+    );
+  });
+
+  test("keeps generated core documentation equal to runtime canonical data", () => {
+    expect(generatedSection(catalog)).toBe(generateCorePatternDocumentation(patternCatalog));
+  });
+
+  test("changes generated documentation when canonical mask content changes", () => {
+    const changedCatalog = patternCatalog.map((pattern, index) =>
+      index === 0
+        ? {
+            ...pattern,
+            masks: ["#####/#####/#####/#####/#####", ...pattern.masks.slice(1)],
+          }
+        : pattern,
+    );
+
+    expect(generateCorePatternDocumentation(changedCatalog)).not.toBe(
+      generateCorePatternDocumentation(patternCatalog),
     );
   });
 });
