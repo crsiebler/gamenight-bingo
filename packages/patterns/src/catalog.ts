@@ -10,6 +10,12 @@ export const PatternModeSchema = z.enum(["exact", "one-line", "two-lines", "blac
 
 export const PatternMaskSchema = z.string().regex(MASK);
 
+export const PatternSourceExampleSchema = z.strictObject({
+  reference: z.string().regex(SOURCE_REFERENCE),
+  classification: z.literal("flexible-rule-example"),
+  mask: PatternMaskSchema,
+});
+
 export const PatternSourceSchema = z
   .strictObject({
     file: z
@@ -22,9 +28,13 @@ export const PatternSourceSchema = z
       .nullable(),
     references: z.array(z.string().regex(SOURCE_REFERENCE)).max(2),
     alias: z.string().min(1).max(128).nullable(),
+    examples: z.array(PatternSourceExampleSchema).max(2).optional(),
   })
   .superRefine((source, context) => {
-    if (source.file === null && (source.references.length > 0 || source.alias !== null)) {
+    if (
+      source.file === null &&
+      (source.references.length > 0 || source.alias !== null || (source.examples?.length ?? 0) > 0)
+    ) {
       context.addIssue({
         code: "custom",
         message: "A source file is required for references and aliases.",
@@ -72,6 +82,45 @@ export const PatternDefinitionSchema = z
         message: "Pattern masks must be unique.",
         path: ["masks"],
       });
+    }
+
+    const examples = pattern.source.examples ?? [];
+    if (examples.length > 0) {
+      if (pattern.mode !== "two-lines") {
+        context.addIssue({
+          code: "custom",
+          message: "Source examples are supported only for flexible Two Lines patterns.",
+          path: ["source", "examples"],
+        });
+      }
+
+      if (
+        examples.length !== pattern.source.references.length ||
+        new Set(examples.map((example) => example.reference)).size !== examples.length
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Source examples must map each source reference exactly once.",
+          path: ["source", "examples"],
+        });
+      }
+
+      for (const [index, example] of examples.entries()) {
+        if (!pattern.source.references.includes(example.reference)) {
+          context.addIssue({
+            code: "custom",
+            message: "Source example references must belong to the pattern source.",
+            path: ["source", "examples", index, "reference"],
+          });
+        }
+        if (!pattern.masks.includes(example.mask)) {
+          context.addIssue({
+            code: "custom",
+            message: "Source example masks must be accepted by the runtime rule.",
+            path: ["source", "examples", index, "mask"],
+          });
+        }
+      }
     }
   });
 
@@ -180,6 +229,18 @@ export const patternCatalog = deepFreeze(
         file: "shapes-bingo-patterns.pdf",
         references: ["p1/d02", "p1/d25"],
         alias: null,
+        examples: [
+          {
+            reference: "p1/d02",
+            classification: "flexible-rule-example",
+            mask: "#####/#..../#..../#..../#....",
+          },
+          {
+            reference: "p1/d25",
+            classification: "flexible-rule-example",
+            mask: ".#.#./.#.#./.#.#./.#.#./.#.#.",
+          },
+        ],
       },
       masks: twoLineMasks,
     },

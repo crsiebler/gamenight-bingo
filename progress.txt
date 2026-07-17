@@ -23,6 +23,7 @@ Next story: US-001
 - Runtime pattern definitions store every accepted required-cell arrangement as a 5x5 mask: One Line has 12 line masks, Two Lines has all 66 distinct line-pair unions, exact patterns retain one untransformed source mask, and matching always satisfies index 12 as the free center.
 - Exact generated Markdown parity blocks use `prettier-ignore` markers around the generated boundaries so formatting cannot silently rewrite canonical generator output.
 - Source review records map every PDF diagram to its runtime ID and disposition (`exact-mask-match`, `flexible-rule-example`, or `source-alias`), record all 25 cells reviewed, and parity-test exact records against canonical runtime masks without duplicating masks in the review table.
+- Pattern preview galleries derive a normalized model from `patternCatalog`; flexible-rule source examples live with the canonical pattern source, committed JSON goldens cover every runtime selection, and standalone generated HTML is parity-tested and isolated from Prettier with an exact-node ignore marker.
 
 Append-only iteration log
 -------------------------
@@ -1151,3 +1152,103 @@ Review outcome for US-014 at 2026-07-16 20:09:15 MST:
 - `code-reviewer` and `qa-expert` reviewed the complete staged catalog, documentation, tests, and progress diff and returned empty actionable finding lists.
 - Residual risk is limited to automated PDF-image comparison, generated previews, and golden fixtures explicitly assigned to US-015.
 - No in-scope critical, high, or medium findings remain; US-014 can be marked passing and committed.
+
+## 2026-07-16 23:34:03 MST - US-015
+- What was implemented
+  - Added a catalog-derived shape preview model covering all 24 runtime shape selections and all 25 source diagrams, including both canonical Two Lines examples.
+  - Added a responsive standalone HTML gallery showing each pattern's name, stable ID, mode, source, classification, raw mask, and accessible visual thumbnail.
+  - Added a reviewed JSON golden fixture and DOM tests that detect missing, extra, stale, malformed, or incorrectly rendered shape previews.
+- Files changed: `packages/patterns/src/catalog.ts`, `packages/patterns/src/index.ts`, `packages/patterns/src/previews.ts`, `docs/shape-pattern-previews.html`, `tests/fixtures/patterns/shape-previews.v1.json`, `tests/pattern-shape-previews.test.tsx`, `tests/patterns.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-015 - Preview and golden-test shapes`
+- Auto approval: `disabled`
+- Checks:
+  - `bunx vitest run tests/pattern-shape-previews.test.tsx --project dom` (expected fail before implementation: 4 failures because the preview API did not exist; pass after implementation with 4 tests)
+  - `bunx vitest run tests/pattern-shape-previews.test.tsx tests/patterns.test.ts tests/pattern-catalog-doc.test.ts` (pass; 3 files and 32 tests)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (pass)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `bun run test` (pass after review remediation; 9 Vitest files and 182 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `git diff --check` (pass)
+  - Browser verification with `dev-browser` at desktop and 390px touch viewport (pass; 24 entries, 25 thumbnails, no horizontal overflow, no console warnings/errors)
+  - Lighthouse mobile snapshot (pass; accessibility 100 and best practices 100)
+- Implementation agents:
+  - Recommended: `frontend-developer`, `test-automator`
+  - Used: `frontend-developer`, `test-automator` for framework-independent rendering, accessibility, source-example modeling, golden-fixture strategy, and focused test guidance
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, `ui-designer`, and `ux-researcher`; targeted re-review by specialists relevant to the fixed findings planned
+  - Findings: fixed the blocking mode-label test weakness plus specific source-invariant/test and mobile mask-overflow findings before targeted re-review
+- Decisions (why):
+  - Used a standalone semantic HTML gallery instead of adding React or Next.js runtime behavior because those application runtimes belong to later dependency-ordered stories.
+  - Stored the two reviewed Two Lines source examples with the canonical runtime rule and validated each mask against its 66 accepted arrangements so renderer code does not become a second mask source.
+  - Golden-tested the normalized preview model rather than browser pixels because metadata, order, classifications, sources, and masks remain deterministic across environments while screenshots do not.
+  - Used visible ASCII mask notation plus accessible image labels so required cells are not communicated by color alone.
+  - Did not update `AGENTS.md` because its existing canonical-data and generated-preview guidance already covers the reusable implementation rule.
+- **Learnings for future iterations:**
+  - The 24 shape selections produce 25 thumbnails because the single Two Lines runtime rule has two source-diagram examples.
+  - A standalone generated review page enables browser verification before the Next.js runtime story without introducing placeholder application behavior.
+  - Prettier can preserve a byte-for-byte generated HTML root when `<!-- prettier-ignore -->` immediately precedes the `<html>` node.
+- Known issues / follow-ups:
+  - Letter, number, and Christmas preview models/goldens remain intentionally assigned to US-016 through US-018.
+- Next iteration start:
+  - If review passes, implement US-016 letter encoding, source-linked previews, and golden fixtures; otherwise resume the recorded blocking finding.
+---
+
+Review remediation for US-015 at 2026-07-16 23:42:27 MST:
+- The initial `code-reviewer`, `qa-expert`, `ui-designer`, and `ux-researcher` pass produced one blocking medium finding: exact-mode cards could lose their rendered mode label while the test still passed on the thumbnail's `exact` classification text.
+- Added a dedicated generated `data-mode` contract and a failing assertion that distinguishes the card's mode metadata from classification content.
+- Also fixed three specific low-cost findings directly tied to the story: standalone source schemas now reject examples without a source file, focused negative tests cover mode/reference/mask example invariants, and intrinsic mask sizing prevents glyph overflow inside the thumbnail border.
+- Focused remediation tests failed in the two expected areas before implementation and pass afterward with 18 tests.
+- Post-fix checks: `bun run lint` (pass), `bun run format:check` (pass), `bun run typecheck` (pass), `bun run test` (182 tests pass), staged/unstaged diff checks (pass), and 390px browser overflow/console verification (pass).
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `ui-designer` review because their findings received substantive fixes; `ux-researcher` is not repeated because its initial findings list was empty.
+
+Targeted re-review outcome for US-015 at 2026-07-16 23:48:00 MST:
+- `code-reviewer` and `ui-designer` returned empty actionable finding lists and confirmed the standalone source invariant and mobile mask-overflow fixes.
+- `qa-expert` identified one remaining medium blocker: the new `data-mode` assertion proves machine metadata but still does not independently prove the visible mode eyebrow because exact thumbnail classifications duplicate the same text.
+- `qa-expert` also identified one low test-isolation issue: the non-Two-Lines example case can fail because its second example mask is outside the reduced exact mask set rather than because examples are prohibited for that mode.
+- Per the one-targeted-re-review limit, no further implementation changes or commit are permitted in this iteration. `US-015` remains `passes: false` and `prd.json` remains unchanged.
+- Next iteration start: add a failing assertion against the dedicated visible mode element and isolate the non-Two-Lines schema fixture so only the mode rule can reject it, rerun all checks, and restart the complete staged review loop.
+
+## 2026-07-16 23:50:21 MST - US-015
+- What was implemented
+  - Resumed the shape-preview story by adding a dedicated visible mode-label contract and exact-text DOM coverage for every gallery card.
+  - Isolated the non-Two-Lines source-example fixture so its only schema issue is the unsupported mode, eliminating the prior false-positive path.
+  - Regenerated the committed standalone gallery with the visible mode marker while preserving responsive and generator-parity behavior.
+- Files changed: `packages/patterns/src/catalog.ts`, `packages/patterns/src/index.ts`, `packages/patterns/src/previews.ts`, `docs/shape-pattern-previews.html`, `tests/fixtures/patterns/shape-previews.v1.json`, `tests/pattern-shape-previews.test.tsx`, `tests/patterns.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-015 - Preview and golden-test shapes`
+- Auto approval: `disabled`
+- Checks:
+  - `bunx vitest run tests/pattern-shape-previews.test.tsx tests/patterns.test.ts` (expected fail before implementation: visible mode marker was absent; pass after implementation with 18 tests)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (pass)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `bun run test` (pass; 9 Vitest files and 182 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `git diff --check && git diff --cached --check` (pass)
+  - Browser verification with `dev-browser` at 390px touch and 1440px desktop (pass; 24 visible mode labels, 24 entries, 25 thumbnails, no horizontal overflow, no console warnings/errors)
+- Implementation agents:
+  - Recommended: `frontend-developer`, `test-automator`
+  - Used: skipped in this resumed iteration because both recommended agents already advised US-015 and the remaining work directly addressed concrete prior specialist findings
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, `ui-designer`, and `ux-researcher` planned for the complete restaged test-sensitive frontend diff
+  - Findings: pending staged-diff review
+- Decisions (why):
+  - Added a dedicated visible-element marker instead of relying on aggregate card text or machine-only metadata because exact thumbnail classification text can duplicate the mode value.
+  - Reduced the exact-pattern fixture to one reference, one matching example, and one accepted mask so no unrelated source-reference or mask issue can satisfy the rejection assertion.
+  - Reused the existing standalone gallery and canonical preview model rather than introducing application runtime behavior owned by later stories.
+- **Learnings for future iterations:**
+  - Visible metadata tests should select the dedicated rendered element and compare its complete text; aggregate text and data attributes cannot prove that users see the label.
+  - Negative schema fixtures should assert the exact issue set and satisfy every invariant except the one under test.
+- Known issues / follow-ups:
+  - Letter, number, and Christmas preview models/goldens remain intentionally assigned to US-016 through US-018.
+- Next iteration start:
+  - If review passes, implement US-016 letter encoding, source-linked previews, and golden fixtures; otherwise resume the recorded blocking finding.
+---
+
+Review outcome for US-015 at 2026-07-16 23:50:21 MST:
+- `code-reviewer`, `qa-expert`, `ui-designer`, and `ux-researcher` reviewed the complete restaged diff and returned empty actionable finding lists.
+- The visible mode-label coverage and isolated non-Two-Lines schema fixture resolve the prior targeted-review findings.
+- Residual risk is limited to manual rather than image-based source-PDF comparison and browser verification outside Chromium; neither is required by this story.
+- No in-scope critical, high, or medium findings remain. US-015 can be marked passing and committed.

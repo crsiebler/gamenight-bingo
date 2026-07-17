@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import {
   PatternCardStateSchema,
   PatternDefinitionSchema,
+  PatternSourceSchema,
   patternCatalog,
   matchesPattern,
 } from "../packages/patterns/src/index.js";
@@ -117,6 +118,68 @@ describe("pattern definition schema", () => {
     expect(
       PatternDefinitionSchema.safeParse({ ...valid, masks: [...valid.masks, ...valid.masks] })
         .success,
+    ).toBe(false);
+  });
+
+  test("rejects inconsistent flexible source examples", () => {
+    const twoLines = catalogPattern("standard-two-lines");
+    const sourceExample = twoLines.source.examples![0]!;
+    const parsedSourceWithoutFile = PatternSourceSchema.safeParse({
+      file: null,
+      references: [],
+      alias: null,
+      examples: [sourceExample],
+    });
+
+    expect(parsedSourceWithoutFile.success).toBe(false);
+    const exactWithSourceExample = PatternDefinitionSchema.safeParse({
+      ...twoLines,
+      mode: "exact",
+      source: {
+        ...twoLines.source,
+        references: [sourceExample.reference],
+        examples: [sourceExample],
+      },
+      masks: [sourceExample.mask],
+    });
+    expect(exactWithSourceExample.success).toBe(false);
+    if (!exactWithSourceExample.success) {
+      expect(exactWithSourceExample.error.issues.map((issue) => issue.message)).toEqual([
+        "Source examples are supported only for flexible Two Lines patterns.",
+      ]);
+    }
+    expect(
+      PatternDefinitionSchema.safeParse({
+        ...twoLines,
+        source: {
+          ...twoLines.source,
+          examples: [sourceExample, sourceExample],
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      PatternDefinitionSchema.safeParse({
+        ...twoLines,
+        source: {
+          ...twoLines.source,
+          examples: [sourceExample, { ...twoLines.source.examples![1]!, reference: "p1/d99" }],
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      PatternDefinitionSchema.safeParse({
+        ...twoLines,
+        source: {
+          ...twoLines.source,
+          examples: [
+            sourceExample,
+            {
+              ...twoLines.source.examples![1]!,
+              mask: "#####/#####/#####/#####/#####",
+            },
+          ],
+        },
+      }).success,
     ).toBe(false);
   });
 
