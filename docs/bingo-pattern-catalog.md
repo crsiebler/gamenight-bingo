@@ -6,8 +6,7 @@ four supplied pattern PDFs. Each source PDF has one page. A reference such as
 
 Runtime canonical data lives in `packages/patterns/src/catalog.ts`. The core
 section below is generated and tested from the runtime catalog so the two
-representations cannot diverge. A later catalog story adds the remaining
-Christmas exact entries to that canonical runtime data.
+representations cannot diverge.
 
 ## Mask Notation
 
@@ -116,15 +115,26 @@ A transformed pattern must have its own explicitly sourced catalog entry.
 | `number-17` | 17 | number | 1 | `exact` | `docs/number-bingo-patterns.pdf` `p1/d18` | 1 | `d8462005b4db2f48` |
 | `number-18` | 18 | number | 1 | `exact` | `docs/number-bingo-patterns.pdf` `p1/d19` | 1 | `eff88f5c5b9a701b` |
 | `number-19` | 19 | number | 1 | `exact` | `docs/number-bingo-patterns.pdf` `p1/d20` | 1 | `e57d854aabcfcece` |
+| `christmas-tree` | Christmas Tree | christmas | 1 | `exact` | `docs/christmas-bingo-patterns.pdf` `p1/d01` | 1 | `7f3bc61c5f762b6e` |
+| `christmas-tinsel` | Tinsel | christmas | 1 | `exact` | `docs/christmas-bingo-patterns.pdf` `p1/d02` | 1 | `56ce766dc839301e` |
+| `christmas-reindeer` | Reindeer | christmas | 1 | `exact` | `docs/christmas-bingo-patterns.pdf` `p1/d03` | 1 | `3c9220b668d76a79` |
+| `christmas-skis` | Skis | christmas | 1 | `exact` | `docs/christmas-bingo-patterns.pdf` `p1/d04` | 1 | `be1269dc0595ca29` |
+| `christmas-wreath` | Wreath | christmas | 1 | `exact` | `docs/christmas-bingo-patterns.pdf` `p1/d05` | 1 | `10cfbcd9a63added` |
+| `christmas-cross` | Cross | christmas | 1 | `exact` | `docs/christmas-bingo-patterns.pdf` `p1/d06` | 1 | `3c2cb612ae2b6996` |
+| `christmas-bell` | Bell | christmas | 1 | `exact` | `docs/christmas-bingo-patterns.pdf` `p1/d07` | 1 | `10c2fe61d14bf1b6` |
+| `christmas-snow-boot` | Snow Boot | christmas | 1 | `exact` | `docs/christmas-bingo-patterns.pdf` `p1/d08` | 1 | `5e378a23edf9235c` |
+| `christmas-mittens` | Mittens | christmas | 1 | `exact` | `docs/christmas-bingo-patterns.pdf` `p1/d09` | 1 | `166c2160484dc5e6` |
+| `christmas-snow` | Snow | christmas | 1 | `exact` | `docs/christmas-bingo-patterns.pdf` `p1/d10` | 1 | `81eb978df2da2a66` |
+| `christmas-gift` | Gift | christmas | 1 | `exact` | `docs/christmas-bingo-patterns.pdf` `p1/d11` | 1 | `da7e09aab0af64f6` |
+| `christmas-snowmobile` | Snowmobile | christmas | 1 | `exact` | `docs/christmas-bingo-patterns.pdf` `p1/d12` | 1 | `4d7b2bd26cfae01f` |
 <!-- END GENERATED CORE PATTERNS -->
 <!-- prettier-ignore-end -->
 
 ## Source Inventory
 
 Every row records the source display mask, including flexible examples and alias
-artwork. `Catalog name` is the runtime/user-facing mapping for implemented
-entries and the intended mapping for the remaining Christmas entries. Category-
-specific stable IDs keep implemented entries distinct in the runtime catalog.
+artwork. `Catalog name` is the runtime/user-facing mapping. Category-specific
+stable IDs keep entries distinct in the runtime catalog.
 
 ### `docs/shapes-bingo-patterns.pdf`
 
@@ -337,12 +347,30 @@ that the canonical runtime mask matches the source inventory above.
 | `p1/d11`  | Gift           | exact | Gift           | `#####/#.#.#/#####/#.#.#/#####` |
 | `p1/d12`  | Snowmobile     | exact | Snowmobile     | `.#.../#..../#####/.#.#./#####` |
 
+### Christmas Cell Review Records
+
+Each record confirms that all 25 source cells were checked against the PDF and
+that the canonical runtime mask matches the source inventory above.
+
+| Reference | Source name    | Runtime ID             | Review             | Cells reviewed |
+| --------- | -------------- | ---------------------- | ------------------ | -------------: |
+| `p1/d01`  | Christmas Tree | `christmas-tree`       | `exact-mask-match` |          25/25 |
+| `p1/d02`  | Tinsel         | `christmas-tinsel`     | `exact-mask-match` |          25/25 |
+| `p1/d03`  | Reindeer       | `christmas-reindeer`   | `exact-mask-match` |          25/25 |
+| `p1/d04`  | Skis           | `christmas-skis`       | `exact-mask-match` |          25/25 |
+| `p1/d05`  | Wreath         | `christmas-wreath`     | `exact-mask-match` |          25/25 |
+| `p1/d06`  | Cross          | `christmas-cross`      | `exact-mask-match` |          25/25 |
+| `p1/d07`  | Bell           | `christmas-bell`       | `exact-mask-match` |          25/25 |
+| `p1/d08`  | Snow Boot      | `christmas-snow-boot`  | `exact-mask-match` |          25/25 |
+| `p1/d09`  | Mittens        | `christmas-mittens`    | `exact-mask-match` |          25/25 |
+| `p1/d10`  | Snow           | `christmas-snow`       | `exact-mask-match` |          25/25 |
+| `p1/d11`  | Gift           | `christmas-gift`       | `exact-mask-match` |          25/25 |
+| `p1/d12`  | Snowmobile     | `christmas-snowmobile` | `exact-mask-match` |          25/25 |
+
 ## Duplicate Masks
 
 Identical masks do not imply identical pattern identity. These source pairs
-remain separate category-specific catalog entries. The shape and letter entries
-already have distinct stable IDs; the Christmas entries receive their own IDs
-when that category is added:
+remain separate category-specific catalog entries with distinct stable IDs:
 
 | Entries                             | Shared mask                     |
 | ----------------------------------- | ------------------------------- |

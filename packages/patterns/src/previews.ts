@@ -83,6 +83,12 @@ export function createNumberPatternPreviews(
   return createSourcePatternPreviews(patterns, "number-bingo-patterns.pdf");
 }
 
+export function createChristmasPatternPreviews(
+  patterns: readonly PatternDefinition[],
+): PatternPreview[] {
+  return createSourcePatternPreviews(patterns, "christmas-bingo-patterns.pdf");
+}
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -201,6 +207,14 @@ export function generateNumberPatternPreviewHtml(previews: readonly PatternPrevi
   return generatePatternPreviewHtml(previews, {
     documentTitle: "GameNight Bingo number pattern previews",
     heading: "Number pattern previews",
+    description: sharedDescription,
+  });
+}
+
+export function generateChristmasPatternPreviewHtml(previews: readonly PatternPreview[]): string {
+  return generatePatternPreviewHtml(previews, {
+    documentTitle: "GameNight Bingo Christmas pattern previews",
+    heading: "Christmas pattern previews",
     description: sharedDescription,
   });
 }

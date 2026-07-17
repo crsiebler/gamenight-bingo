@@ -147,6 +147,7 @@ function parseSourceReviewRows(markdown: string, category: string): SourceReview
 const shapeReviewRows = parseSourceReviewRows(catalog, "Shape");
 const letterReviewRows = parseSourceReviewRows(catalog, "Letter");
 const numberReviewRows = parseSourceReviewRows(catalog, "Number");
+const christmasReviewRows = parseSourceReviewRows(catalog, "Christmas");
 
 const expectedShapeReviewMappings = [
   ["p1/d01", "Bunny Ears", "shape-bunny-ears", "exact-mask-match"],
@@ -191,6 +192,21 @@ const expectedNumberReviewMappings = Array.from({ length: 20 }, (_, index) => [
   `number-${index}`,
   "exact-mask-match",
 ]);
+
+const expectedChristmasReviewMappings = [
+  ["p1/d01", "Christmas Tree", "christmas-tree", "exact-mask-match"],
+  ["p1/d02", "Tinsel", "christmas-tinsel", "exact-mask-match"],
+  ["p1/d03", "Reindeer", "christmas-reindeer", "exact-mask-match"],
+  ["p1/d04", "Skis", "christmas-skis", "exact-mask-match"],
+  ["p1/d05", "Wreath", "christmas-wreath", "exact-mask-match"],
+  ["p1/d06", "Cross", "christmas-cross", "exact-mask-match"],
+  ["p1/d07", "Bell", "christmas-bell", "exact-mask-match"],
+  ["p1/d08", "Snow Boot", "christmas-snow-boot", "exact-mask-match"],
+  ["p1/d09", "Mittens", "christmas-mittens", "exact-mask-match"],
+  ["p1/d10", "Snow", "christmas-snow", "exact-mask-match"],
+  ["p1/d11", "Gift", "christmas-gift", "exact-mask-match"],
+  ["p1/d12", "Snowmobile", "christmas-snowmobile", "exact-mask-match"],
+] as const;
 
 function generatedSection(markdown: string): string | undefined {
   return markdown.match(
@@ -334,6 +350,39 @@ describe("canonical pattern catalog documentation", () => {
         category: "number",
         source: {
           file: "number-bingo-patterns.pdf",
+          references: [review.reference],
+        },
+        masks: [source!.mask],
+      });
+    }
+  });
+
+  test("records source-to-runtime parity for every reviewed Christmas diagram", () => {
+    expect(christmasReviewRows).toHaveLength(12);
+    expect(
+      christmasReviewRows.map(({ reference, sourceName, runtimeId, review }) => [
+        reference,
+        sourceName,
+        runtimeId,
+        review,
+      ]),
+    ).toEqual(expectedChristmasReviewMappings);
+    expect(christmasReviewRows.every((row) => row.cellsReviewed === "25/25")).toBe(true);
+
+    for (const review of christmasReviewRows) {
+      const source = rows.find(
+        (row) =>
+          row.sourceFile === "christmas-bingo-patterns.pdf" && row.reference === review.reference,
+      );
+      const runtimePattern = patternCatalog.find((pattern) => pattern.id === review.runtimeId);
+
+      expect(source, review.reference).toBeDefined();
+      expect(runtimePattern, review.runtimeId).toBeDefined();
+      expect(runtimePattern).toMatchObject({
+        name: review.sourceName,
+        category: "christmas",
+        source: {
+          file: "christmas-bingo-patterns.pdf",
           references: [review.reference],
         },
         masks: [source!.mask],

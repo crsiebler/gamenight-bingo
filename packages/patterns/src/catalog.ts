@@ -240,6 +240,22 @@ function exactNumber(number: number, reference: string, mask: string) {
   } as const;
 }
 
+function exactChristmas(id: string, name: string, reference: string, mask: string) {
+  return {
+    id: `christmas-${id}`,
+    name,
+    category: "christmas",
+    version: 1,
+    mode: "exact",
+    source: {
+      file: "christmas-bingo-patterns.pdf",
+      references: [reference],
+      alias: null,
+    },
+    masks: [mask],
+  } as const;
+}
+
 export const patternCatalog = deepFreeze(
   PatternCatalogSchema.parse([
     {
@@ -356,5 +372,17 @@ export const patternCatalog = deepFreeze(
     exactNumber(17, "p1/d18", "#.###/#.#.#/#...#/#...#/#...#"),
     exactNumber(18, "p1/d19", "#.###/#.#.#/#.###/#.#.#/#.###"),
     exactNumber(19, "p1/d20", "#.###/#.#.#/#.###/#...#/#...#"),
+    exactChristmas("tree", "Christmas Tree", "p1/d01", "..#../.###./#####/..#../..#.."),
+    exactChristmas("tinsel", "Tinsel", "p1/d02", "#.#.#/#.#.#/#.#.#/#.#.#/#.#.#"),
+    exactChristmas("reindeer", "Reindeer", "p1/d03", "#...#/##.##/.###./.#.#./.###."),
+    exactChristmas("skis", "Skis", "p1/d04", "#..../#####/...../#..../#####"),
+    exactChristmas("wreath", "Wreath", "p1/d05", ".###./#####/##.##/#####/.###."),
+    exactChristmas("cross", "Cross", "p1/d06", "..#../#####/..#../..#../..#.."),
+    exactChristmas("bell", "Bell", "p1/d07", "..#../.###./.###./#####/..#.."),
+    exactChristmas("snow-boot", "Snow Boot", "p1/d08", "..###/..###/..###/#####/#####"),
+    exactChristmas("mittens", "Mittens", "p1/d09", "..##./.#..#/.#..#/##..#/.####"),
+    exactChristmas("snow", "Snow", "p1/d10", "#.#.#/.#.#./#.#.#/.#.#./#.#.#"),
+    exactChristmas("gift", "Gift", "p1/d11", "#####/#.#.#/#####/#.#.#/#####"),
+    exactChristmas("snowmobile", "Snowmobile", "p1/d12", ".#.../#..../#####/.#.#./#####"),
   ]),
 );

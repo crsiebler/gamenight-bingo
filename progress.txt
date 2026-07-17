@@ -1361,3 +1361,51 @@ Targeted re-review outcome for US-017 at 2026-07-17 00:19:19 MST:
 - The corrected inventory and duplicate-mask explanations now accurately distinguish implemented shape, letter, and number IDs from the remaining Christmas work.
 - Residual risk is limited to manual rather than automated image-level PDF comparison and browser verification outside Chromium; neither is required by this story.
 - No in-scope critical, high, or medium findings remain. US-017 can be marked passing and committed.
+
+## 2026-07-17 00:37:07 MST - US-018
+- What was implemented
+  - Encoded all 12 Christmas source patterns as exact runtime entries with category-specific stable IDs, source references, and canonical source masks.
+  - Preserved Christmas Cross and Christmas Snow as independent selections despite matching Shape Cross and Shape Checkerboard masks.
+  - Added source-linked Christmas preview modeling, a responsive standalone HTML gallery, a committed JSON golden, generated catalog documentation, and completed 25-cell source-to-runtime review records for every diagram.
+- Files changed: `packages/patterns/src/catalog.ts`, `packages/patterns/src/index.ts`, `packages/patterns/src/previews.ts`, `docs/bingo-pattern-catalog.md`, `docs/christmas-pattern-previews.html`, `tests/fixtures/patterns/christmas-previews.v1.json`, `tests/pattern-catalog-doc.test.ts`, `tests/pattern-christmas-previews.test.tsx`, `tests/patterns.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-018 - Encode, preview, and test Christmas patterns`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run tests/patterns.test.ts tests/pattern-catalog-doc.test.ts tests/pattern-christmas-previews.test.tsx` (expected fail before implementation: six failures for missing Christmas entries, review records, preview API, golden, and gallery; pass after implementation with 40 tests)
+  - `bunx vitest run tests/patterns.test.ts tests/pattern-catalog-doc.test.ts tests/pattern-christmas-previews.test.tsx tests/pattern-number-previews.test.tsx tests/pattern-letter-previews.test.tsx tests/pattern-shape-previews.test.tsx` (pass; 6 files and 52 tests)
+  - `bun install --frozen-lockfile` (pass; 248 installs checked with no changes)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (initial fail on new edits; pass after formatting)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `bun run test` (pass; 12 Vitest files and 201 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `git diff --check` (pass)
+  - Browser verification with `dev-browser` at 390px touch and 1440px desktop (pass; 12 ordered entries and thumbnails, complete semantic labels, no horizontal overflow, three desktop columns, and no console warnings/errors)
+  - Lighthouse desktop snapshot (pass; accessibility 100 and best practices 100)
+- Implementation agents:
+  - Recommended: none
+  - Used: skipped because the established category catalog/preview workflow made this a straightforward standard implementation
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, `documentation-engineer`, `ui-designer`, and `ux-researcher`
+  - Findings: none; all five specialists returned empty actionable finding lists
+- Decisions (why):
+  - Reused the shared source-filtered preview model and semantic renderer with Christmas-specific public functions because category artifacts should remain isolated without duplicating rendering behavior.
+  - Used `christmas-tree` rather than `christmas-christmas-tree` while retaining the `christmas-*` category prefix because the source display name already contains the category word and stable IDs should remain concise.
+  - Kept Christmas Cross and Snow masks unchanged and assigned distinct IDs because source/category identity cannot be deduplicated by matching geometry.
+  - Did not update `AGENTS.md` or Codebase Patterns because the existing canonical-data, duplicate-identity, source-review, and category-preview guidance already covers the reusable implementation rules.
+- **Learnings for future iterations:**
+  - The complete Christmas PDF maps one-to-one to 12 exact runtime selections in source order with no aliases or flexible examples.
+  - Christmas uses the same generated documentation, review-record parity, golden-model, and standalone-browser workflow as the prior source categories.
+- Known issues / follow-ups:
+  - Browser verification report artifacts remain untracked and excluded from the candidate story because they are local review outputs rather than maintained product artifacts.
+  - Automated pixel-level comparison against the source PDF and non-Chromium browser verification were not required.
+- Next iteration start:
+  - If review passes, implement US-019 complete catalog auditing; otherwise resume any recorded blocking finding.
+---
+
+Review outcome for US-018 at 2026-07-17 00:37:07 MST:
+- `code-reviewer`, `qa-expert`, `documentation-engineer`, `ui-designer`, and `ux-researcher` reviewed the complete staged catalog, documentation, generated artifacts, tests, and progress diff and returned no actionable findings.
+- UI and UX specialists independently used `dev-browser` to verify the generated Christmas gallery at mobile and desktop widths.
+- Residual risk is limited to manual rather than pixel-automated PDF transcription, Chromium-only browser verification, and no real screen-reader pronunciation test for punctuation-heavy masks; these do not violate the story requirements.
+- No in-scope critical, high, or medium findings remain. US-018 can be marked passing and committed.

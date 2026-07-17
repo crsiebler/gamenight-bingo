@@ -124,6 +124,21 @@ const expectedNumberPatterns = [
   ["number-19", "19", "p1/d20", "#.###/#.#.#/#.###/#...#/#...#"],
 ] as const;
 
+const expectedChristmasPatterns = [
+  ["christmas-tree", "Christmas Tree", "p1/d01", "..#../.###./#####/..#../..#.."],
+  ["christmas-tinsel", "Tinsel", "p1/d02", "#.#.#/#.#.#/#.#.#/#.#.#/#.#.#"],
+  ["christmas-reindeer", "Reindeer", "p1/d03", "#...#/##.##/.###./.#.#./.###."],
+  ["christmas-skis", "Skis", "p1/d04", "#..../#####/...../#..../#####"],
+  ["christmas-wreath", "Wreath", "p1/d05", ".###./#####/##.##/#####/.###."],
+  ["christmas-cross", "Cross", "p1/d06", "..#../#####/..#../..#../..#.."],
+  ["christmas-bell", "Bell", "p1/d07", "..#../.###./.###./#####/..#.."],
+  ["christmas-snow-boot", "Snow Boot", "p1/d08", "..###/..###/..###/#####/#####"],
+  ["christmas-mittens", "Mittens", "p1/d09", "..##./.#..#/.#..#/##..#/.####"],
+  ["christmas-snow", "Snow", "p1/d10", "#.#.#/.#.#./#.#.#/.#.#./#.#.#"],
+  ["christmas-gift", "Gift", "p1/d11", "#####/#.#.#/#####/#.#.#/#####"],
+  ["christmas-snowmobile", "Snowmobile", "p1/d12", ".#.../#..../#####/.#.#./#####"],
+] as const;
+
 function catalogPattern(id: string) {
   const pattern = patternCatalog.find((candidate) => candidate.id === id);
   expect(pattern, id).toBeDefined();
@@ -392,6 +407,42 @@ describe("canonical core pattern catalog", () => {
       expect(number.source.references).toHaveLength(1);
       expect(number.masks).toHaveLength(1);
     }
+  });
+
+  test("encodes every Christmas source pattern with category-specific stable IDs and masks", () => {
+    const christmasPatterns = patternCatalog.filter((pattern) => pattern.category === "christmas");
+
+    expect(
+      christmasPatterns.map((pattern) => [
+        pattern.id,
+        pattern.name,
+        pattern.source.references[0],
+        pattern.masks[0],
+      ]),
+    ).toEqual(expectedChristmasPatterns);
+
+    for (const pattern of christmasPatterns) {
+      expect(pattern).toMatchObject({
+        category: "christmas",
+        version: 1,
+        mode: "exact",
+        source: {
+          file: "christmas-bingo-patterns.pdf",
+          alias: null,
+        },
+      });
+      expect(pattern.source.references).toHaveLength(1);
+      expect(pattern.masks).toHaveLength(1);
+    }
+  });
+
+  test("keeps Christmas Cross and Snow independent from identical shape masks", () => {
+    expect(catalogPattern("christmas-cross").masks).toEqual(catalogPattern("shape-cross").masks);
+    expect(catalogPattern("christmas-snow").masks).toEqual(
+      catalogPattern("shape-checkerboard").masks,
+    );
+    expect(catalogPattern("christmas-cross").id).not.toBe(catalogPattern("shape-cross").id);
+    expect(catalogPattern("christmas-snow").id).not.toBe(catalogPattern("shape-checkerboard").id);
   });
 
   test("is deeply immutable", () => {
