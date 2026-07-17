@@ -47,6 +47,31 @@ for (let first = 0; first < expectedLines.length; first += 1) {
   }
 }
 
+const expectedShapePatterns = [
+  ["shape-bunny-ears", "Bunny Ears", "p1/d01", ".###./#.#.#/#.#.#/#.#.#/#.#.#"],
+  ["shape-four-corners", "Four Corners", "p1/d03", "#...#/...../...../...../#...#"],
+  ["shape-windmill", "Windmill", "p1/d04", "##.##/##.##/..#../##.##/##.##"],
+  ["shape-outside-edge", "Outside Edge", "p1/d05", "#####/#...#/#...#/#...#/#####"],
+  ["shape-airplane", "Airplane", "p1/d07", "...#./#..#./#####/#..#./...#."],
+  ["shape-wine-glass", "Wine Glass", "p1/d08", "#####/.###./..#../..#../.###."],
+  ["shape-x", "X", "p1/d09", "#...#/.#.#./..#../.#.#./#...#"],
+  ["shape-turtle", "Turtle", "p1/d10", "..#../#####/.###./.###./#...#"],
+  ["shape-stairs", "Stairs", "p1/d11", "....#/...##/..###/.####/#####"],
+  ["shape-bow-tie", "Bow Tie", "p1/d12", "...../##.##/#####/##.##/....."],
+  ["shape-cross", "Cross", "p1/d13", "..#../#####/..#../..#../..#.."],
+  ["shape-plus", "Plus", "p1/d14", "..#../..#../#####/..#../..#.."],
+  ["shape-rectangle", "Rectangle", "p1/d15", "...../#####/#...#/#####/....."],
+  ["shape-heart", "Heart", "p1/d16", ".#.#./#####/#####/.###./..#.."],
+  ["shape-hat", "Hat", "p1/d17", "...../.###./.###./#####/....."],
+  ["shape-hour-glass", "Hour Glass", "p1/d18", "#####/.###./..#../.###./#####"],
+  ["shape-pyramid", "Pyramid", "p1/d19", "...../...../..#../.###./#####"],
+  ["shape-checkerboard", "Checkerboard", "p1/d20", "#.#.#/.#.#./#.#.#/.#.#./#.#.#"],
+  ["shape-inside-square", "Inside Square", "p1/d21", "...../.###./.###./.###./....."],
+  ["shape-kite", "Kite", "p1/d22", "...##/...##/..#../.#.../#...."],
+  ["shape-smiley-face", "Smiley Face", "p1/d23", "...../.#.#./..#../#...#/.###."],
+  ["shape-block-of-nine", "Block of Nine", "p1/d24", "###../###../###../...../....."],
+] as const;
+
 function catalogPattern(id: string) {
   const pattern = patternCatalog.find((candidate) => candidate.id === id);
   expect(pattern, id).toBeDefined();
@@ -105,13 +130,15 @@ describe("pattern definition schema", () => {
 describe("canonical core pattern catalog", () => {
   test("defines stable metadata without a second Full House entry", () => {
     expect(
-      patternCatalog.map(({ id, name, category, version, mode }) => ({
-        id,
-        name,
-        category,
-        version,
-        mode,
-      })),
+      patternCatalog
+        .filter((pattern) => pattern.category === "standard")
+        .map(({ id, name, category, version, mode }) => ({
+          id,
+          name,
+          category,
+          version,
+          mode,
+        })),
     ).toEqual([
       {
         id: "standard-one-line",
@@ -147,6 +174,48 @@ describe("canonical core pattern catalog", () => {
       masks: ["#####/#####/#####/#####/#####"],
     });
     expect(patternCatalog.some((pattern) => pattern.name === "Full House")).toBe(false);
+  });
+
+  test("encodes every approved exact shape with stable IDs, sources, and masks", () => {
+    const shapes = patternCatalog.filter((pattern) => pattern.category === "shape");
+
+    expect(shapes).toHaveLength(22);
+    expect(
+      shapes.map((pattern) => [
+        pattern.id,
+        pattern.name,
+        pattern.source.references[0],
+        pattern.masks[0],
+      ]),
+    ).toEqual(expectedShapePatterns);
+
+    for (const shape of shapes) {
+      expect(shape).toMatchObject({
+        category: "shape",
+        version: 1,
+        mode: "exact",
+        source: {
+          file: "shapes-bingo-patterns.pdf",
+          alias: null,
+        },
+      });
+      expect(shape.source.references).toHaveLength(1);
+      expect(shape.masks).toHaveLength(1);
+    }
+  });
+
+  test("offers 24 source-derived shape selections without duplicate flexible or alias entries", () => {
+    const shapeSelections = patternCatalog.filter(
+      (pattern) =>
+        pattern.category === "shape" ||
+        pattern.id === "standard-two-lines" ||
+        pattern.id === "standard-blackout",
+    );
+
+    expect(shapeSelections).toHaveLength(24);
+    expect(shapeSelections.filter((pattern) => pattern.name === "Two Lines")).toHaveLength(1);
+    expect(shapeSelections.filter((pattern) => pattern.name === "Blackout")).toHaveLength(1);
+    expect(shapeSelections.some((pattern) => pattern.name === "Full House")).toBe(false);
   });
 
   test("is deeply immutable", () => {

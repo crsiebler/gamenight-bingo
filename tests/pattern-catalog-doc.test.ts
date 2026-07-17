@@ -69,6 +69,14 @@ interface CatalogRow {
   mask: string;
 }
 
+interface ShapeReviewRow {
+  reference: string;
+  sourceName: string;
+  runtimeId: string;
+  review: "exact-mask-match" | "flexible-rule-example" | "source-alias";
+  cellsReviewed: string;
+}
+
 function parseCatalogRows(markdown: string): CatalogRow[] {
   const rows: CatalogRow[] = [];
   let sourceFile: SourceFile | undefined;
@@ -77,6 +85,11 @@ function parseCatalogRows(markdown: string): CatalogRow[] {
     const heading = line.match(/^### `docs\/(.+\.pdf)`$/);
     if (heading?.[1] && heading[1] in sourceNames) {
       sourceFile = heading[1] as SourceFile;
+      continue;
+    }
+
+    if (/^#{2,3} /.test(line)) {
+      sourceFile = undefined;
       continue;
     }
 
@@ -106,6 +119,58 @@ function parseCatalogRows(markdown: string): CatalogRow[] {
 }
 
 const rows = parseCatalogRows(catalog);
+
+function parseShapeReviewRows(markdown: string): ShapeReviewRow[] {
+  const section = markdown.match(/### Shape Cell Review Records\n([\s\S]*?)(?=\n#{2,3} |$)/)?.[1];
+  if (!section) return [];
+
+  return section
+    .split("\n")
+    .map((line) =>
+      line
+        .split("|")
+        .slice(1, -1)
+        .map((cell) => cell.trim().replaceAll("`", "")),
+    )
+    .filter((cells) => /^p1\/d\d{2}$/.test(cells[0] ?? ""))
+    .map(([reference, sourceName, runtimeId, review, cellsReviewed]) => ({
+      reference: reference!,
+      sourceName: sourceName!,
+      runtimeId: runtimeId!,
+      review: review as ShapeReviewRow["review"],
+      cellsReviewed: cellsReviewed!,
+    }));
+}
+
+const shapeReviewRows = parseShapeReviewRows(catalog);
+
+const expectedShapeReviewMappings = [
+  ["p1/d01", "Bunny Ears", "shape-bunny-ears", "exact-mask-match"],
+  ["p1/d02", "Two Lines", "standard-two-lines", "flexible-rule-example"],
+  ["p1/d03", "Four Corners", "shape-four-corners", "exact-mask-match"],
+  ["p1/d04", "Windmill", "shape-windmill", "exact-mask-match"],
+  ["p1/d05", "Outside Edge", "shape-outside-edge", "exact-mask-match"],
+  ["p1/d06", "Full House", "standard-blackout", "source-alias"],
+  ["p1/d07", "Airplane", "shape-airplane", "exact-mask-match"],
+  ["p1/d08", "Wine Glass", "shape-wine-glass", "exact-mask-match"],
+  ["p1/d09", "X", "shape-x", "exact-mask-match"],
+  ["p1/d10", "Turtle", "shape-turtle", "exact-mask-match"],
+  ["p1/d11", "Stairs", "shape-stairs", "exact-mask-match"],
+  ["p1/d12", "Bow Tie", "shape-bow-tie", "exact-mask-match"],
+  ["p1/d13", "Cross", "shape-cross", "exact-mask-match"],
+  ["p1/d14", "Plus", "shape-plus", "exact-mask-match"],
+  ["p1/d15", "Rectangle", "shape-rectangle", "exact-mask-match"],
+  ["p1/d16", "Heart", "shape-heart", "exact-mask-match"],
+  ["p1/d17", "Hat", "shape-hat", "exact-mask-match"],
+  ["p1/d18", "Hour Glass", "shape-hour-glass", "exact-mask-match"],
+  ["p1/d19", "Pyramid", "shape-pyramid", "exact-mask-match"],
+  ["p1/d20", "Checkerboard", "shape-checkerboard", "exact-mask-match"],
+  ["p1/d21", "Inside Square", "shape-inside-square", "exact-mask-match"],
+  ["p1/d22", "Kite", "shape-kite", "exact-mask-match"],
+  ["p1/d23", "Smiley Face", "shape-smiley-face", "exact-mask-match"],
+  ["p1/d24", "Block of Nine", "shape-block-of-nine", "exact-mask-match"],
+  ["p1/d25", "Two Lines", "standard-two-lines", "flexible-rule-example"],
+] as const;
 
 function generatedSection(markdown: string): string | undefined {
   return markdown.match(
@@ -159,6 +224,35 @@ describe("canonical pattern catalog documentation", () => {
     expect(twoLines).toHaveLength(2);
     expect(twoLines.map((row) => row.mode)).toEqual(["flexible-example", "flexible-example"]);
     expect(twoLines.map((row) => row.catalogName)).toEqual(["Two Lines", "Two Lines"]);
+  });
+
+  test("records a completed cell-by-cell review for every shape source diagram", () => {
+    expect(shapeReviewRows).toHaveLength(25);
+    expect(
+      shapeReviewRows.map(({ reference, sourceName, runtimeId, review }) => [
+        reference,
+        sourceName,
+        runtimeId,
+        review,
+      ]),
+    ).toEqual(expectedShapeReviewMappings);
+    expect(shapeReviewRows.every((row) => row.cellsReviewed === "25/25")).toBe(true);
+
+    for (const review of shapeReviewRows) {
+      const source = rows.find(
+        (row) =>
+          row.sourceFile === "shapes-bingo-patterns.pdf" && row.reference === review.reference,
+      );
+      const runtimePattern = patternCatalog.find((pattern) => pattern.id === review.runtimeId);
+      expect(source, review.reference).toBeDefined();
+      expect(runtimePattern, review.runtimeId).toBeDefined();
+
+      if (review.review === "exact-mask-match") {
+        expect(runtimePattern!.masks).toEqual([source!.mask]);
+      } else {
+        expect(runtimePattern!.source.references).toContain(review.reference);
+      }
+    }
   });
 
   test("treats Full House only as the source alias for Blackout", () => {

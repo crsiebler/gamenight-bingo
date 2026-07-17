@@ -22,6 +22,7 @@ Next story: US-001
 - Domain randomization accepts injected `CryptographicRandomBytes`; runtime adapters own the secure byte source, deterministic tests inject seeded bytes, and bounded integer selection uses rejection sampling rather than biased modulo reduction.
 - Runtime pattern definitions store every accepted required-cell arrangement as a 5x5 mask: One Line has 12 line masks, Two Lines has all 66 distinct line-pair unions, exact patterns retain one untransformed source mask, and matching always satisfies index 12 as the free center.
 - Exact generated Markdown parity blocks use `prettier-ignore` markers around the generated boundaries so formatting cannot silently rewrite canonical generator output.
+- Source review records map every PDF diagram to its runtime ID and disposition (`exact-mask-match`, `flexible-rule-example`, or `source-alias`), record all 25 cells reviewed, and parity-test exact records against canonical runtime masks without duplicating masks in the review table.
 
 Append-only iteration log
 -------------------------
@@ -1108,3 +1109,45 @@ Review remediation for US-013 at 2026-07-16 19:54:07 MST:
 - Added a deterministic 64-bit mask-content digest to generated documentation, independently asserted all 12 line masks and 66 line-pair unions, exercised every flexible arrangement with the center omitted, and added reflected, rotated, and translated exact-mask negatives.
 - Post-fix checks: focused pattern/catalog suite (25 tests pass), `bun install --frozen-lockfile` (pass), `bun run lint` (pass), `bun run format:check` (pass), `bun run typecheck` (pass), `bun run test` (174 tests pass), and `bun run test:e2e` (pass).
 - Targeted re-review: `code-reviewer` and `qa-expert` returned empty actionable finding lists; residual work is limited to the source-specific exact entries intentionally assigned to later stories.
+
+## 2026-07-16 20:03:39 MST - US-014
+- What was implemented
+  - Added all 22 exact shape entries with category-specific stable IDs, source references, versioned exact mode, and untransformed canonical masks.
+  - Reused the single existing Two Lines flexible rule for both source examples and the single Blackout runtime entry for the Full House source alias, yielding 24 source-derived shape selections without duplicate entries.
+  - Added 25 cell-by-cell source review records and parity coverage that maps each PDF diagram to its runtime ID/disposition and compares exact records to canonical runtime masks.
+- Files changed: `packages/patterns/src/catalog.ts`, `docs/bingo-pattern-catalog.md`, `tests/patterns.test.ts`, `tests/pattern-catalog-doc.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-014 - Encode and review shape patterns`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run tests/patterns.test.ts tests/pattern-catalog-doc.test.ts` (expected fail before implementation: 3 failures for missing exact shapes, selection count, and source review records; pass after implementation with 28 tests)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (pass)
+  - `bun run typecheck` (pass; root and all nine workspaces)
+  - `bun run test` (pass; 8 Vitest files and 177 tests)
+  - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: none
+  - Used: skipped because the canonical source inventory, runtime schema, and exact-entry conventions made this a straightforward standard catalog change
+- Specialist review:
+  - Agents used: `code-reviewer` and `qa-expert` for the complete staged test-sensitive diff
+  - Findings: none; both specialists returned empty actionable finding lists
+- Decisions (why):
+  - Used `shape-<name>` IDs for exact entries while retaining `standard-two-lines` and `standard-blackout` because flexible rules and aliases must remain single cross-category runtime concepts.
+  - Kept source masks only in canonical runtime data and the existing source inventory; review records contain mapping, disposition, and cell counts rather than creating another mask source.
+  - Added shape rows to the existing generated documentation block so metadata and mask digests continue to fail parity checks when runtime data changes.
+  - Did not update `AGENTS.md` because its existing canonical-mask, no-transform, and no-second-source guidance already covers this implementation.
+- **Learnings for future iterations:**
+  - The shapes PDF has 25 diagrams that map to 24 selectable patterns: 22 exact shapes, one Two Lines flexible rule represented by two examples, and one Blackout entry represented by the Full House alias.
+  - Source review records can prove cell review without duplicating masks by linking each diagram to canonical runtime data and parity-checking exact mappings against the source inventory.
+- Known issues / follow-ups:
+  - Shape thumbnails and golden fixtures are intentionally deferred to US-015.
+- Next iteration start:
+  - Implement US-015 generated shape previews and golden fixtures, then verify the rendered output in a browser.
+---
+
+Review outcome for US-014 at 2026-07-16 20:09:15 MST:
+- `code-reviewer` and `qa-expert` reviewed the complete staged catalog, documentation, tests, and progress diff and returned empty actionable finding lists.
+- Residual risk is limited to automated PDF-image comparison, generated previews, and golden fixtures explicitly assigned to US-015.
+- No in-scope critical, high, or medium findings remain; US-014 can be marked passing and committed.

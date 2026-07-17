@@ -143,6 +143,22 @@ for (let first = 0; first < lineIndexes.length; first += 1) {
   }
 }
 
+function exactShape(id: string, name: string, reference: string, mask: string) {
+  return {
+    id: `shape-${id}`,
+    name,
+    category: "shape",
+    version: 1,
+    mode: "exact",
+    source: {
+      file: "shapes-bingo-patterns.pdf",
+      references: [reference],
+      alias: null,
+    },
+    masks: [mask],
+  } as const;
+}
+
 export const patternCatalog = deepFreeze(
   PatternCatalogSchema.parse([
     {
@@ -180,5 +196,27 @@ export const patternCatalog = deepFreeze(
       },
       masks: ["#####/#####/#####/#####/#####"],
     },
+    exactShape("bunny-ears", "Bunny Ears", "p1/d01", ".###./#.#.#/#.#.#/#.#.#/#.#.#"),
+    exactShape("four-corners", "Four Corners", "p1/d03", "#...#/...../...../...../#...#"),
+    exactShape("windmill", "Windmill", "p1/d04", "##.##/##.##/..#../##.##/##.##"),
+    exactShape("outside-edge", "Outside Edge", "p1/d05", "#####/#...#/#...#/#...#/#####"),
+    exactShape("airplane", "Airplane", "p1/d07", "...#./#..#./#####/#..#./...#."),
+    exactShape("wine-glass", "Wine Glass", "p1/d08", "#####/.###./..#../..#../.###."),
+    exactShape("x", "X", "p1/d09", "#...#/.#.#./..#../.#.#./#...#"),
+    exactShape("turtle", "Turtle", "p1/d10", "..#../#####/.###./.###./#...#"),
+    exactShape("stairs", "Stairs", "p1/d11", "....#/...##/..###/.####/#####"),
+    exactShape("bow-tie", "Bow Tie", "p1/d12", "...../##.##/#####/##.##/....."),
+    exactShape("cross", "Cross", "p1/d13", "..#../#####/..#../..#../..#.."),
+    exactShape("plus", "Plus", "p1/d14", "..#../..#../#####/..#../..#.."),
+    exactShape("rectangle", "Rectangle", "p1/d15", "...../#####/#...#/#####/....."),
+    exactShape("heart", "Heart", "p1/d16", ".#.#./#####/#####/.###./..#.."),
+    exactShape("hat", "Hat", "p1/d17", "...../.###./.###./#####/....."),
+    exactShape("hour-glass", "Hour Glass", "p1/d18", "#####/.###./..#../.###./#####"),
+    exactShape("pyramid", "Pyramid", "p1/d19", "...../...../..#../.###./#####"),
+    exactShape("checkerboard", "Checkerboard", "p1/d20", "#.#.#/.#.#./#.#.#/.#.#./#.#.#"),
+    exactShape("inside-square", "Inside Square", "p1/d21", "...../.###./.###./.###./....."),
+    exactShape("kite", "Kite", "p1/d22", "...##/...##/..#../.#.../#...."),
+    exactShape("smiley-face", "Smiley Face", "p1/d23", "...../.#.#./..#../#...#/.###."),
+    exactShape("block-of-nine", "Block of Nine", "p1/d24", "###../###../###../...../....."),
   ]),
 );

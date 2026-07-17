@@ -6,8 +6,8 @@ four supplied pattern PDFs. Each source PDF has one page. A reference such as
 
 Runtime canonical data lives in `packages/patterns/src/catalog.ts`. The core
 section below is generated and tested from the runtime catalog so the two
-representations cannot diverge. Later catalog stories add the source-specific
-exact entries to that canonical runtime data.
+representations cannot diverge. Later catalog stories add the remaining letter,
+number, and Christmas exact entries to that canonical runtime data.
 
 ## Mask Notation
 
@@ -49,6 +49,28 @@ A transformed pattern must have its own explicitly sourced catalog entry.
 | `standard-one-line` | One Line | standard | 1 | `one-line` | Rule definition (no PDF diagram) | 12 | `3492b0e7da1646e3` |
 | `standard-two-lines` | Two Lines | standard | 1 | `two-lines` | `docs/shapes-bingo-patterns.pdf` `p1/d02`, `p1/d25` | 66 | `ba76535978800bab` |
 | `standard-blackout` | Blackout | standard | 1 | `blackout` | Full House alias at `docs/shapes-bingo-patterns.pdf` `p1/d06` | 1 | `47244f978d15f546` |
+| `shape-bunny-ears` | Bunny Ears | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d01` | 1 | `a500d6260bbd0356` |
+| `shape-four-corners` | Four Corners | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d03` | 1 | `1c30d141ce304da9` |
+| `shape-windmill` | Windmill | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d04` | 1 | `8902e832037bbb26` |
+| `shape-outside-edge` | Outside Edge | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d05` | 1 | `b2d9fba56458c581` |
+| `shape-airplane` | Airplane | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d07` | 1 | `078956c81980abea` |
+| `shape-wine-glass` | Wine Glass | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d08` | 1 | `9296ff77a5e657e6` |
+| `shape-x` | X | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d09` | 1 | `72e71d8ab21ee4a6` |
+| `shape-turtle` | Turtle | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d10` | 1 | `0a0292b032f209a9` |
+| `shape-stairs` | Stairs | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d11` | 1 | `8de48cfa07d03362` |
+| `shape-bow-tie` | Bow Tie | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d12` | 1 | `34377eb13c5b1b4e` |
+| `shape-cross` | Cross | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d13` | 1 | `3c2cb612ae2b6996` |
+| `shape-plus` | Plus | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d14` | 1 | `acb757b0546128e6` |
+| `shape-rectangle` | Rectangle | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d15` | 1 | `8bc8695861d9a0a9` |
+| `shape-heart` | Heart | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d16` | 1 | `9a5f2468c61a0d8d` |
+| `shape-hat` | Hat | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d17` | 1 | `54d86cfe277d3236` |
+| `shape-hour-glass` | Hour Glass | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d18` | 1 | `750876bae3dbe11e` |
+| `shape-pyramid` | Pyramid | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d19` | 1 | `18645d7eaf818956` |
+| `shape-checkerboard` | Checkerboard | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d20` | 1 | `81eb978df2da2a66` |
+| `shape-inside-square` | Inside Square | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d21` | 1 | `e1cdf52d5b3df246` |
+| `shape-kite` | Kite | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d22` | 1 | `a346e4fe365308d8` |
+| `shape-smiley-face` | Smiley Face | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d23` | 1 | `9d9330f89afea90d` |
+| `shape-block-of-nine` | Block of Nine | shape | 1 | `exact` | `docs/shapes-bingo-patterns.pdf` `p1/d24` | 1 | `f82f4f5710a22688` |
 <!-- END GENERATED CORE PATTERNS -->
 <!-- prettier-ignore-end -->
 
@@ -91,6 +113,42 @@ specific stable IDs will keep separate entries distinct in the runtime catalog.
 The two `Two Lines` rows are source examples for one flexible rule. The
 `Full House` row is source-alias documentation for Blackout, not a separate
 runtime or user-facing pattern.
+
+### Shape Cell Review Records
+
+Each record confirms that all 25 source cells were checked against the PDF and
+the source inventory above. An `exact-mask-match` also confirms that the
+canonical runtime mask matches those cells. Flexible examples and aliases retain
+their reviewed source masks in the inventory while mapping to one calculated
+rule or existing runtime entry rather than becoming exact selectable patterns.
+
+| Reference | Source name   | Runtime ID            | Review                  | Cells reviewed |
+| --------- | ------------- | --------------------- | ----------------------- | -------------: |
+| `p1/d01`  | Bunny Ears    | `shape-bunny-ears`    | `exact-mask-match`      |          25/25 |
+| `p1/d02`  | Two Lines     | `standard-two-lines`  | `flexible-rule-example` |          25/25 |
+| `p1/d03`  | Four Corners  | `shape-four-corners`  | `exact-mask-match`      |          25/25 |
+| `p1/d04`  | Windmill      | `shape-windmill`      | `exact-mask-match`      |          25/25 |
+| `p1/d05`  | Outside Edge  | `shape-outside-edge`  | `exact-mask-match`      |          25/25 |
+| `p1/d06`  | Full House    | `standard-blackout`   | `source-alias`          |          25/25 |
+| `p1/d07`  | Airplane      | `shape-airplane`      | `exact-mask-match`      |          25/25 |
+| `p1/d08`  | Wine Glass    | `shape-wine-glass`    | `exact-mask-match`      |          25/25 |
+| `p1/d09`  | X             | `shape-x`             | `exact-mask-match`      |          25/25 |
+| `p1/d10`  | Turtle        | `shape-turtle`        | `exact-mask-match`      |          25/25 |
+| `p1/d11`  | Stairs        | `shape-stairs`        | `exact-mask-match`      |          25/25 |
+| `p1/d12`  | Bow Tie       | `shape-bow-tie`       | `exact-mask-match`      |          25/25 |
+| `p1/d13`  | Cross         | `shape-cross`         | `exact-mask-match`      |          25/25 |
+| `p1/d14`  | Plus          | `shape-plus`          | `exact-mask-match`      |          25/25 |
+| `p1/d15`  | Rectangle     | `shape-rectangle`     | `exact-mask-match`      |          25/25 |
+| `p1/d16`  | Heart         | `shape-heart`         | `exact-mask-match`      |          25/25 |
+| `p1/d17`  | Hat           | `shape-hat`           | `exact-mask-match`      |          25/25 |
+| `p1/d18`  | Hour Glass    | `shape-hour-glass`    | `exact-mask-match`      |          25/25 |
+| `p1/d19`  | Pyramid       | `shape-pyramid`       | `exact-mask-match`      |          25/25 |
+| `p1/d20`  | Checkerboard  | `shape-checkerboard`  | `exact-mask-match`      |          25/25 |
+| `p1/d21`  | Inside Square | `shape-inside-square` | `exact-mask-match`      |          25/25 |
+| `p1/d22`  | Kite          | `shape-kite`          | `exact-mask-match`      |          25/25 |
+| `p1/d23`  | Smiley Face   | `shape-smiley-face`   | `exact-mask-match`      |          25/25 |
+| `p1/d24`  | Block of Nine | `shape-block-of-nine` | `exact-mask-match`      |          25/25 |
+| `p1/d25`  | Two Lines     | `standard-two-lines`  | `flexible-rule-example` |          25/25 |
 
 ### `docs/letter-bingo-patterns.pdf`
 
