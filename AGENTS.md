@@ -130,7 +130,8 @@ invalid counts, timestamps, or durations.
   lobby-fenced transaction that applies the command. Before replacing the
   current round, detach its active-event and command-result round scopes so
   command replay tombstones survive without retaining prior-round gameplay
-  state. Run due participant-session expiry before selecting a new-round roster.
+  state. Run due participant-session expiry before selecting a new-round roster
+  or deciding whether an absence generation can still be overridden.
 - Serializable command callbacks are scoped to one lobby and may run more than
   once after rolled-back conflicts, so they must not perform external effects.
   Only a freshly committed active-lobby command returns an event to broadcast;

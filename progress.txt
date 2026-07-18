@@ -43,7 +43,7 @@ Next story: US-001
 - Authoritative snapshot projections construct stage-specific fields only for stages that require them; an open co-winner window may contain confirmed winners before a settled result exists.
 - Framework-routing guarantees require live Next request coverage under an approved migrated `TEST_DATABASE_URL`; dispatcher unit tests and route-source assertions do not prove unsupported methods or catch-all resources retain stable errors and private cache headers.
 - Realtime tickets use 32 random bytes encoded as canonical unpadded base64url, persist only SHA-256 hashes bound to lobby/participant/session scope, and issue under the lobby fence from an active cookie session. Consumption burns the presented row whether valid or not and returns only authoritative identity for a valid unexpired active scope; issuance purges expired abandoned tickets, and session deactivation invalidates outstanding tickets so rejoin cannot revive them.
-- Round-control commands are rate-limited before lobby-fence acquisition, then resolve the active session, actor role, current round, and own card inside one Serializable transaction; command results persist canonical intent so changed-payload command-ID reuse is rejected, active-lobby replays retain their original sequence, and private mark acknowledgements allocate no lobby sequence. Before replacing a round, expire due participant sessions before roster selection and detach prior active-event and command-result round scopes so replay tombstones survive without retaining old gameplay state.
+- Round-control commands are rate-limited before lobby-fence acquisition, then resolve the active session, actor role, current round, and own card inside one Serializable transaction; command results persist canonical intent so changed-payload command-ID reuse is rejected, active-lobby replays retain their original sequence, and private mark acknowledgements allocate no lobby sequence. Expire due participant sessions under that fence before selecting a replacement-round roster or deciding whether an absence generation is still current, and detach prior active-event and command-result round scopes so replay tombstones survive without retaining old gameplay state.
 - Socket.IO accepts only strict versioned handshake auth from the configured exact browser origin, burns any canonical ticket reaching auth even in an invalid envelope, discards handshake plaintext, stores only persistence-returned identity in `socket.data`, and revalidates that identity inside command/snapshot lobby fences and before later room delivery. Engine.IO admission and namespace authentication have separate bounded direct-peer limits; mark a rejected transport terminal before awaiting its bounded ticket burn, close it, cap authenticated sockets globally and per session, and recheck both transport closure and transport-wide rejection after ticket consumption before reserving capacity or calling `next()`. Every command attempt is charged before the one-in-flight guard, and per-lobby delivery queues preserve committed sequence order through asynchronous authorization while authorizing each unique persisted identity once per delivery. Active-lobby commits emit a transaction-scoped PostgreSQL notification; the separate game-server process serially reloads and validates each committed event before sequence-deduplicated publication, so HTTP fallback mutations reach connected clients without pre-commit effects. Validate every successful acknowledgement's command ID against the incoming mutation before any delivery; fresh committed lobby events broadcast before requester acknowledgements, replays do not rebroadcast, eventless replay tombstones can acknowledge either delivery scope, and replayed private results return only to the requesting socket. Disconnect sockets on terminal command-time identity outcomes (`UNAUTHORIZED`, inactive/deleted-lobby `NOT_FOUND`, or `LOBBY_EXPIRED`) so stale clients cannot retain rooms or capacity.
 - Active-event subscription, malformed dedicated-channel notification, durable reload, or relay failure is fatal to the game-server runtime because `LISTEN` recovery cannot prove continuity without a durable cursor. Stop Socket.IO before awaiting subscription/database drain so a stalled delivery cannot keep a continuity-lost authority serving, and settle runtime completion with a safe failure if cleanup fails. Exact direct/notification echoes are idempotent only when their canonical event identity matches bounded recent delivery history; same-sequence conflicts and unknown stale deliveries fail closed.
 - Authenticated sockets establish an actor-scoped snapshot baseline before live delivery: join authorized rooms first, buffer a bounded combined set of lobby/private events during the query, emit the snapshot, discard buffered lobby sequences at or below its baseline, then release newer events; every ready-state lobby delivery must also suppress sequences at or below that baseline even when it was queued before synchronization but began socket delivery afterward. Explicit resync uses the same boundary and restores the prior safe baseline plus buffered deliveries after transient query failure; failed initialization disconnects and executes no commands.
@@ -3311,3 +3311,57 @@ Targeted re-review outcome for resumed US-033 at 2026-07-17 21:34:08 MST:
 - Queue-drain completeness, combined multi-client pause relay, inverse host precedence, and runtime recovery/cleanup wiring now have direct deterministic coverage.
 - Code and security review had already returned empty finding lists. The low residual for duplicate start/continue activation-guard tests remains non-blocking because call-next and resume exercise the same shared transaction query.
 - No in-scope critical, high, or medium findings remain; US-033 can be marked passing and committed after the final consistency check.
+
+## 2026-07-17 21:41:03 MST - US-034
+- What was implemented
+  - Implemented the existing `override-absence` command as a lobby-fenced mutation that accepts only the exact current absent generation of a non-departed player and persists the override before publication.
+  - Expired due participant sessions before target selection so the exact rejoin deadline cannot race a stale absence override.
+  - Emitted a sequenced lobby presence event that preserves the generation's original absence timestamp while recording the override transition time; retained the paused round until a separate valid host resume command.
+  - Added PostgreSQL regressions for host-only authorization, non-overridable host absence, command replay, stale-generation and exact-deadline rejection, explicit resume, both override/reconnect lock orderings, and a reconnect/disconnect cycle producing a fresh non-overridden generation.
+- Files changed: `AGENTS.md`, `packages/database/src/round-command-executor.ts`, `packages/database/src/database.integration.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-034 - Override a current player absence`
+- Auto approval: `enabled`
+- Checks:
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t 'overrides only the requested current player absence|rejects player-issued and host-targeted absence overrides'` (expected fail before implementation; pass after implementation)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t 'rejects player-issued and host-targeted absence overrides|expires a player at the rejoin deadline|serializes absence override and reconnect'` (exact-deadline regression failed before remediation; all 4 tests pass after remediation)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test:database` (pass; 100 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass after review remediation; typecheck, 25 files, and 513 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: none
+  - Used: skipped because the established command executor, presence lifecycle, and integration-test patterns made this a focused standard change within one persistence domain
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and authorization/persistence-triggered `security-engineer`; targeted re-review by `code-reviewer` and `qa-expert` planned after substantive fixes
+  - Findings: fixed lazy exact-deadline session expiry, valid-target player authorization coverage, and both override/reconnect lock orderings before targeted re-review; security review returned no findings
+- Decisions (why):
+  - Reused the existing versioned command and presence-event contracts because US-009 and US-030 already exposed and routed the exact intent without placeholder execution behavior.
+  - Stored the presence event and command replay tombstone with no round scope because the override belongs to a lobby presence generation and must survive current-round replacement.
+  - Swept due sessions before target lookup because persisted `departedAt` alone is stale until the lazy lifecycle transition runs at `now >= rejoinUntil`.
+  - Preserved `absentSince` while advancing `changedAt` because the participant remains absent and only the current generation's override state changes.
+  - Did not resume the round in the override transaction because acceptance requires a separate explicit host resume after all current blocking absences are cleared or overridden.
+- **Learnings for future iterations:**
+  - Presence overrides are active-lobby lifecycle mutations: validate the exact open generation under the lobby fence, publish the changed presence projection, and keep round progression as a separate host command.
+  - Reconnect closes the prior generation and creates a new generation with `overridden: false`, so override state must never be copied forward.
+- Known issues / follow-ups:
+  - The unrelated `apps/web/next-env.d.ts` side effect and untracked browser-report artifacts remain untouched and unstaged.
+- Next iteration start:
+  - If review passes, implement US-035 call configuration and round creation; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-034 at 2026-07-17 21:49:00 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced three deduplicated medium findings: due participant-session expiry was not run before target selection, player authorization coverage used an independently invalid host target, and reconnect/override serialization lacked deterministic lock-order tests.
+- Added failing exact-rejoin-deadline coverage before changing production code; the command initially committed an override for a player whose session was due to depart.
+- Ran due participant-session expiry inside the same lobby-fenced command transaction before selecting the absence generation, then added a realistic second-player authorization attempt and both override-first/reconnect-first lock-order regressions.
+- Updated root guidance and Codebase Patterns with the reusable lifecycle-target rule.
+- Post-fix checks: focused remediation tests pass, the database suite passes 100 tests, the PostgreSQL-enabled root suite passes typecheck with 25 files and 513 tests, lint and tracked formatting pass, Playwright passes 2 tests, and staged/unstaged whitespace checks pass.
+- Targeted re-review: pending `code-reviewer` and `qa-expert`; security is not repeated because its initial finding list was empty and the fix narrows accepted lifecycle state.
+
+Targeted re-review outcome for US-034 at 2026-07-17 21:51:00 MST:
+- `code-reviewer` and `qa-expert` reviewed the revised complete staged diff and returned empty actionable finding lists with no residual risks.
+- The exact-deadline lifecycle sweep, valid-target player authorization test, and both reconnect/override lock orderings fully resolve the initial findings.
+- Security review had already returned an empty finding list. No in-scope critical, high, or medium findings remain; US-034 can be marked passing and committed after the final consistency check.

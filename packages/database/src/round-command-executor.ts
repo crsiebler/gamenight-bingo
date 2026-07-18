@@ -82,10 +82,10 @@ export interface RoundCommandExecutor {
 
 type PendingCommand =
   | {
-      readonly roundId: string;
+      readonly roundId: string | null;
       readonly scope: "active-lobby";
       readonly event: {
-        readonly type: "stage" | "call" | "round-end";
+        readonly type: "presence" | "stage" | "call" | "round-end";
         readonly payload: Prisma.InputJsonObject;
       };
     }
@@ -384,6 +384,52 @@ async function executeMutation(
 ): Promise<PendingCommand | null> {
   const { command, lobbyId, now, participantId } = input;
   const current = await loadCurrentRound(transaction, lobbyId);
+
+  if (command.type === "override-absence") {
+    await expireDueParticipantSessions(transaction, lobbyId, now);
+    const presence = await transaction.presenceGeneration.findFirst({
+      where: {
+        lobbyId,
+        participantId: command.participantId,
+        generation: BigInt(command.presenceGeneration),
+        status: "ABSENT",
+        overridden: false,
+        endedAt: null,
+        participant: { role: "PLAYER", departedAt: null },
+      },
+      select: { absentSince: true },
+    });
+    if (presence === null) return null;
+    if (presence.absentSince === null) {
+      throw new Error("Absent presence requires a start timestamp.");
+    }
+    await transaction.presenceGeneration.update({
+      where: {
+        participantId_generation: {
+          participantId: command.participantId,
+          generation: BigInt(command.presenceGeneration),
+        },
+      },
+      data: { overridden: true, changedAt: now },
+    });
+    return {
+      roundId: null,
+      scope: "active-lobby",
+      event: {
+        type: "presence",
+        payload: {
+          presence: {
+            participantId: command.participantId,
+            generation: command.presenceGeneration,
+            status: "absent",
+            changedAt: now.toISOString(),
+            absentSince: presence.absentSince.toISOString(),
+            overridden: true,
+          },
+        },
+      },
+    };
+  }
 
   if (command.type === "create-round") {
     if (current !== null && current.stage !== "ENDED") return null;

@@ -11,6 +11,7 @@ import {
   CreateRoundCommandSchema,
   EndRoundCommandSchema,
   MarkCardCommandSchema,
+  OverrideAbsenceCommandSchema,
   PauseRoundCommandSchema,
   ParticipantPrivateEventSchema,
   ResumeRoundCommandSchema,
@@ -1024,6 +1025,472 @@ describeDatabase("PostgreSQL durable game state", () => {
         stage: "active",
         pauseReason: null,
       });
+    },
+  );
+
+  test("overrides only the requested current player absence without resuming calls", async () => {
+    let now = new Date("2026-07-17T14:30:00.000Z");
+    const connection = await connectWithRoundCommands(() => now);
+    const base = createLobbyState();
+    const state: DurableLobbyState = {
+      ...base,
+      round: {
+        ...base.round!,
+        stage: "active",
+        pausedAt: null,
+        pauseReason: null,
+        nextCallAt: new Date("2026-07-17T14:30:30.000Z"),
+        coWinnerTriggeringCallId: null,
+        coWinnerOpenedAt: null,
+        coWinnerClosesAt: null,
+        resultSettledAt: null,
+        endedAt: null,
+        coWinners: [],
+      },
+    };
+    await createPersistedLobby(connection, state);
+    const host = state.participants.find(({ role }) => role === "host")!;
+    const player = state.participants.find(({ role }) => role === "player")!;
+    const hostSession = state.sessions.find(({ participantId }) => participantId === host.id)!;
+    const playerSession = state.sessions.find(({ participantId }) => participantId === player.id)!;
+    const playerIdentity = {
+      lobbyId: state.lobby.id,
+      participantId: player.id,
+      participantSessionId: playerSession.id,
+    };
+    const grace = await connection.lobbyStates.unregisterRealtimeConnection({
+      ...playerIdentity,
+      presenceGeneration: 1,
+      reconnectWindowSeconds: 120,
+      disconnectPauseGraceSeconds: 10,
+    });
+    now = grace!.graceEndsAt;
+    await expect(connection.lobbyStates.expireRealtimePresenceGrace(grace!)).resolves.toBe(
+      "expired",
+    );
+
+    now = new Date("2026-07-17T14:30:11.000Z");
+    const command = OverrideAbsenceCommandSchema.parse({
+      schemaVersion: 1,
+      type: "override-absence",
+      commandId: `override-player-${randomUUID()}`,
+      participantId: player.id,
+      presenceGeneration: 1,
+    });
+    const executeOverride = () =>
+      connection.roundCommands.executeAuthenticated({
+        lobbyId: state.lobby.id,
+        participantId: host.id,
+        participantSessionId: hostSession.id,
+        command,
+      });
+    const committed = await executeOverride();
+    const replayed = await executeOverride();
+    let restored = await connection.lobbyStates.findById(state.lobby.id);
+
+    expect(committed).toMatchObject({
+      ok: true,
+      acknowledgement: {
+        commandId: command.commandId,
+        scope: "active-lobby",
+        idempotentReplay: false,
+      },
+      activeLobbyEvent: {
+        type: "presence",
+        occurredAt: now.toISOString(),
+        presence: {
+          participantId: player.id,
+          generation: 1,
+          status: "absent",
+          changedAt: now.toISOString(),
+          absentSince: grace!.graceEndsAt.toISOString(),
+          overridden: true,
+        },
+      },
+    });
+    expect(replayed).toMatchObject({
+      ok: true,
+      acknowledgement: { idempotentReplay: true },
+      activeLobbyEvent: null,
+    });
+    expect(
+      restored?.presenceGenerations
+        .filter(({ participantId }) => participantId === player.id)
+        .at(-1),
+    ).toMatchObject({
+      generation: 1n,
+      status: "absent",
+      changedAt: now,
+      absentSince: grace!.graceEndsAt,
+      overridden: true,
+    });
+    expect(restored?.round).toMatchObject({
+      stage: "paused",
+      pausedAt: grace!.graceEndsAt,
+      pauseReason: "participant-absent",
+      nextCallAt: null,
+    });
+    expect(restored?.events.at(-1)).toMatchObject({
+      roundId: null,
+      eventType: "presence",
+      payload: {
+        presence: {
+          participantId: player.id,
+          generation: 1,
+          status: "absent",
+          overridden: true,
+        },
+      },
+    });
+
+    now = new Date("2026-07-17T14:30:12.000Z");
+    await expect(
+      connection.roundCommands.executeAuthenticated({
+        lobbyId: state.lobby.id,
+        participantId: host.id,
+        participantSessionId: hostSession.id,
+        command: ResumeRoundCommandSchema.parse({
+          schemaVersion: 1,
+          type: "resume-round",
+          commandId: `resume-overridden-${randomUUID()}`,
+        }),
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(connection.lobbyStates.registerRealtimeConnection(playerIdentity)).resolves.toBe(
+      2,
+    );
+    const secondGrace = await connection.lobbyStates.unregisterRealtimeConnection({
+      ...playerIdentity,
+      presenceGeneration: 2,
+      reconnectWindowSeconds: 120,
+      disconnectPauseGraceSeconds: 10,
+    });
+    now = secondGrace!.graceEndsAt;
+    await expect(connection.lobbyStates.expireRealtimePresenceGrace(secondGrace!)).resolves.toBe(
+      "expired",
+    );
+
+    const staleOverride = OverrideAbsenceCommandSchema.parse({
+      ...command,
+      commandId: `override-stale-${randomUUID()}`,
+    });
+    await expect(
+      connection.roundCommands.executeAuthenticated({
+        lobbyId: state.lobby.id,
+        participantId: host.id,
+        participantSessionId: hostSession.id,
+        command: staleOverride,
+      }),
+    ).resolves.toMatchObject({ ok: false, error: { code: "INVALID_COMMAND" } });
+    restored = await connection.lobbyStates.findById(state.lobby.id);
+    expect(
+      restored?.presenceGenerations
+        .filter(({ participantId }) => participantId === player.id)
+        .at(-1),
+    ).toMatchObject({ generation: 2n, status: "absent", overridden: false });
+    expect(restored?.round).toMatchObject({
+      stage: "paused",
+      pauseReason: "participant-absent",
+    });
+  });
+
+  test("rejects player-issued and host-targeted absence overrides without mutation", async () => {
+    const now = new Date("2026-07-17T14:35:00.000Z");
+    const connection = await connectWithRoundCommands(() => now);
+    const base = createLobbyState();
+    const host = base.participants.find(({ role }) => role === "host")!;
+    const player = base.participants.find(({ role }) => role === "player")!;
+    const secondPlayerId = `participant-second-player-${randomUUID()}`;
+    const secondPlayerSessionId = `session-second-player-${randomUUID()}`;
+    const state: DurableLobbyState = {
+      ...base,
+      participants: [
+        ...base.participants,
+        {
+          id: secondPlayerId,
+          username: "Second Guest",
+          normalizedUsername: "second guest",
+          role: "player",
+          roundEligibility: "waiting",
+          joinedAt: now,
+          departedAt: null,
+        },
+      ],
+      sessions: [
+        ...base.sessions,
+        {
+          id: secondPlayerSessionId,
+          participantId: secondPlayerId,
+          tokenHash: new Uint8Array(randomBytes(32)),
+          status: "active",
+          issuedAt: now,
+          disconnectedAt: null,
+          rejoinUntil: null,
+          departedAt: null,
+        },
+      ],
+      presenceGenerations: [
+        ...base.presenceGenerations.map((presence) =>
+          presence.participantId === host.id || presence.participantId === player.id
+            ? {
+                ...presence,
+                status: "absent" as const,
+                connectionCount: 0,
+                changedAt: now,
+                absentSince: now,
+                overridden: false,
+              }
+            : presence,
+        ),
+        {
+          participantId: secondPlayerId,
+          generation: 1n,
+          status: "connected",
+          connectionCount: 1,
+          changedAt: now,
+          graceEndsAt: null,
+          absentSince: null,
+          departedAt: null,
+          overridden: false,
+          endedAt: null,
+        },
+      ],
+      round: {
+        ...base.round!,
+        stage: "paused",
+        pausedAt: now,
+        pauseReason: "host-absent",
+      },
+    };
+    await createPersistedLobby(connection, state);
+    const hostSession = state.sessions.find(({ participantId }) => participantId === host.id)!;
+    const playerCommand = OverrideAbsenceCommandSchema.parse({
+      schemaVersion: 1,
+      type: "override-absence",
+      commandId: `player-override-${randomUUID()}`,
+      participantId: player.id,
+      presenceGeneration: 1,
+    });
+
+    await expect(
+      connection.roundCommands.executeAuthenticated({
+        lobbyId: state.lobby.id,
+        participantId: secondPlayerId,
+        participantSessionId: secondPlayerSessionId,
+        command: playerCommand,
+      }),
+    ).resolves.toEqual({ ok: false, error: { code: "FORBIDDEN" } });
+    await expect(
+      connection.roundCommands.executeAuthenticated({
+        lobbyId: state.lobby.id,
+        participantId: host.id,
+        participantSessionId: hostSession.id,
+        command: OverrideAbsenceCommandSchema.parse({
+          ...playerCommand,
+          commandId: `host-override-self-${randomUUID()}`,
+          participantId: host.id,
+        }),
+      }),
+    ).resolves.toEqual({ ok: false, error: { code: "INVALID_COMMAND" } });
+    const restored = await connection.lobbyStates.findById(state.lobby.id);
+    expect(
+      restored?.presenceGenerations.filter(({ participantId }) => participantId === host.id).at(-1),
+    ).toMatchObject({ status: "absent", overridden: false });
+    expect(restored?.round).toMatchObject({ stage: "paused", pauseReason: "host-absent" });
+    expect(restored?.events).toEqual(state.events);
+    expect(restored?.commandResults).toEqual(state.commandResults);
+  });
+
+  test("expires a player at the rejoin deadline before attempting an absence override", async () => {
+    let now = new Date("2026-07-17T14:40:00.000Z");
+    const connection = await connectWithRoundCommands(() => now);
+    const base = createLobbyState();
+    const state: DurableLobbyState = {
+      ...base,
+      round: {
+        ...base.round!,
+        stage: "active",
+        pausedAt: null,
+        pauseReason: null,
+        nextCallAt: new Date("2026-07-17T14:40:30.000Z"),
+        coWinnerTriggeringCallId: null,
+        coWinnerOpenedAt: null,
+        coWinnerClosesAt: null,
+        resultSettledAt: null,
+        endedAt: null,
+        coWinners: [],
+      },
+    };
+    await createPersistedLobby(connection, state);
+    const host = state.participants.find(({ role }) => role === "host")!;
+    const player = state.participants.find(({ role }) => role === "player")!;
+    const hostSession = state.sessions.find(({ participantId }) => participantId === host.id)!;
+    const playerSession = state.sessions.find(({ participantId }) => participantId === player.id)!;
+    const grace = await connection.lobbyStates.unregisterRealtimeConnection({
+      lobbyId: state.lobby.id,
+      participantId: player.id,
+      participantSessionId: playerSession.id,
+      presenceGeneration: 1,
+      reconnectWindowSeconds: 120,
+      disconnectPauseGraceSeconds: 10,
+    });
+    now = grace!.graceEndsAt;
+    await expect(connection.lobbyStates.expireRealtimePresenceGrace(grace!)).resolves.toBe(
+      "expired",
+    );
+    const before = await connection.lobbyStates.findById(state.lobby.id);
+    const rejoinUntil = before?.sessions.find(({ id }) => id === playerSession.id)?.rejoinUntil;
+    expect(rejoinUntil).not.toBeNull();
+    expect(rejoinUntil).not.toBeUndefined();
+    now = rejoinUntil!;
+
+    await expect(
+      connection.roundCommands.executeAuthenticated({
+        lobbyId: state.lobby.id,
+        participantId: host.id,
+        participantSessionId: hostSession.id,
+        command: OverrideAbsenceCommandSchema.parse({
+          schemaVersion: 1,
+          type: "override-absence",
+          commandId: `override-expired-${randomUUID()}`,
+          participantId: player.id,
+          presenceGeneration: 1,
+        }),
+      }),
+    ).resolves.toEqual({ ok: false, error: { code: "INVALID_COMMAND" } });
+    const restored = await connection.lobbyStates.findById(state.lobby.id);
+    expect(restored?.participants.find(({ id }) => id === player.id)?.departedAt).toEqual(
+      rejoinUntil,
+    );
+    expect(restored?.sessions.find(({ id }) => id === playerSession.id)).toMatchObject({
+      status: "departed",
+      departedAt: rejoinUntil,
+    });
+    expect(
+      restored?.presenceGenerations
+        .filter(({ participantId }) => participantId === player.id)
+        .at(-1),
+    ).toMatchObject({ status: "departed", overridden: false, endedAt: null });
+    expect(restored?.events).toEqual(before?.events);
+    expect(restored?.commandResults).toEqual(before?.commandResults);
+  });
+
+  test.each(["override-first", "reconnect-first"] as const)(
+    "serializes absence override and reconnect with %s lock ordering",
+    async (order) => {
+      let now = new Date("2026-07-17T14:45:00.000Z");
+      const setupConnection = await connectWithRoundCommands(() => now);
+      const overrideConnection = await connectWithRoundCommands(() => now);
+      const reconnectConnection = await connectWithRoundCommands(() => now);
+      const base = createLobbyState();
+      const state: DurableLobbyState = {
+        ...base,
+        round: {
+          ...base.round!,
+          stage: "active",
+          pausedAt: null,
+          pauseReason: null,
+          nextCallAt: new Date("2026-07-17T14:45:30.000Z"),
+          coWinnerTriggeringCallId: null,
+          coWinnerOpenedAt: null,
+          coWinnerClosesAt: null,
+          resultSettledAt: null,
+          endedAt: null,
+          coWinners: [],
+        },
+      };
+      await createPersistedLobby(setupConnection, state);
+      const host = state.participants.find(({ role }) => role === "host")!;
+      const player = state.participants.find(({ role }) => role === "player")!;
+      const hostSession = state.sessions.find(({ participantId }) => participantId === host.id)!;
+      const playerSession = state.sessions.find(
+        ({ participantId }) => participantId === player.id,
+      )!;
+      const playerIdentity = {
+        lobbyId: state.lobby.id,
+        participantId: player.id,
+        participantSessionId: playerSession.id,
+      };
+      const grace = await setupConnection.lobbyStates.unregisterRealtimeConnection({
+        ...playerIdentity,
+        presenceGeneration: 1,
+        reconnectWindowSeconds: 120,
+        disconnectPauseGraceSeconds: 10,
+      });
+      now = grace!.graceEndsAt;
+      await setupConnection.lobbyStates.expireRealtimePresenceGrace(grace!);
+      now = new Date("2026-07-17T14:45:11.000Z");
+      const command = OverrideAbsenceCommandSchema.parse({
+        schemaVersion: 1,
+        type: "override-absence",
+        commandId: `override-race-${order}-${randomUUID()}`,
+        participantId: player.id,
+        presenceGeneration: 1,
+      });
+      const override = () =>
+        overrideConnection.roundCommands.executeAuthenticated({
+          lobbyId: state.lobby.id,
+          participantId: host.id,
+          participantSessionId: hostSession.id,
+          command,
+        });
+      const reconnect = () =>
+        reconnectConnection.lobbyStates.registerRealtimeConnection(playerIdentity);
+      const blocker = await pool.connect();
+      let transactionOpen = false;
+      const operations: Promise<unknown>[] = [];
+      try {
+        await blocker.query("BEGIN");
+        transactionOpen = true;
+        await blocker.query(`SELECT id FROM lobbies WHERE id = $1 FOR UPDATE`, [state.lobby.id]);
+        operations.push(order === "override-first" ? override() : reconnect());
+        await waitForBlockedCommandFences(1);
+        operations.push(order === "override-first" ? reconnect() : override());
+        await waitForBlockedCommandFences(2);
+        await blocker.query("ROLLBACK");
+        transactionOpen = false;
+        const results = await Promise.all(operations);
+        expect(results).toEqual(
+          order === "override-first"
+            ? [expect.objectContaining({ ok: true }), 2]
+            : [2, expect.objectContaining({ ok: false, error: { code: "INVALID_COMMAND" } })],
+        );
+      } finally {
+        if (transactionOpen) await blocker.query("ROLLBACK").catch(() => undefined);
+        blocker.release();
+        await Promise.allSettled(operations);
+      }
+
+      const restored = await setupConnection.lobbyStates.findById(state.lobby.id);
+      const generations = restored?.presenceGenerations.filter(
+        ({ participantId }) => participantId === player.id,
+      );
+      expect(generations).toHaveLength(2);
+      expect(generations?.[0]).toMatchObject({
+        generation: 1n,
+        status: "absent",
+        overridden: order === "override-first",
+        endedAt: now,
+      });
+      expect(generations?.[1]).toMatchObject({
+        generation: 2n,
+        status: "connected",
+        overridden: false,
+        endedAt: null,
+      });
+      const newEvents = restored?.events.slice(4) ?? [];
+      expect(newEvents.map(({ eventType }) => eventType)).toEqual(
+        order === "override-first" ? ["presence", "presence"] : ["presence"],
+      );
+      expect(newEvents.map(({ sequence }) => sequence)).toEqual(
+        order === "override-first" ? [5n, 6n] : [5n],
+      );
+      expect(newEvents.at(-1)?.payload).toMatchObject({
+        presence: { participantId: player.id, generation: 2, status: "connected" },
+      });
+      expect(
+        restored?.commandResults.filter(({ commandId }) => commandId === command.commandId),
+      ).toHaveLength(order === "override-first" ? 1 : 0);
     },
   );
 
