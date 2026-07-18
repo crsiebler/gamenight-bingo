@@ -252,8 +252,16 @@ invalid counts, timestamps, or durations.
   sessions cannot remain subscribed. Authorize one persisted identity once per
   delivery rather than once per sibling socket. A replayed private result may
   return only to its requesting socket, never rebroadcast to sibling tabs.
-- Aggregate multiple connections for one session as one participant and persist
-  presence generations before broadcasting presence changes.
+- Aggregate multiple connections for one session as one participant. Persist
+  count-only tab opens/closes without broadcasting; only the first connection
+  and final disconnection commit sequenced presence events. The final connection
+  also disconnects the participant session, invalidates outstanding tickets, and
+  fixes its configured rejoin deadline in the same lobby-fenced transaction.
+  Bind disconnect cleanup to the registered presence generation, consolidate
+  sibling sessions, and disconnect the participant's canonical active session
+  when the final connection belongs to an older departed sibling. Treat cleanup
+  persistence failure as fatal: stop accepting work, settle runtime completion,
+  and drain the event subscription and database for supervisor restart.
 
 ## Test-Driven Development
 

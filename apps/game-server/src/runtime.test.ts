@@ -28,6 +28,7 @@ describe("game-server runtime configuration", () => {
         },
       },
       server: {
+        failure: new Promise<never>(() => {}),
         close: async () => {
           closed.push("server");
         },
@@ -59,6 +60,7 @@ describe("game-server runtime configuration", () => {
         close: async () => releaseSubscriptionClose.promise,
       },
       server: {
+        failure: new Promise<never>(() => {}),
         close: async () => {
           serverClosed.resolve();
         },
@@ -98,6 +100,7 @@ describe("game-server runtime configuration", () => {
         },
       },
       server: {
+        failure: new Promise<never>(() => {}),
         close: async () => {
           closed.push("server");
           throw new Error("private server close detail");
@@ -122,6 +125,48 @@ describe("game-server runtime configuration", () => {
     await expect(completion).resolves.toMatchObject({
       message: "The game server failed to shut down safely.",
     });
+    expect(closed).toEqual(["server", "subscription", "database"]);
+  });
+
+  test("drains every resource and rejects completion when the Socket.IO authority fails", async () => {
+    let rejectAuthority!: (reason?: unknown) => void;
+    const authorityFailure = new Promise<never>((_resolve, reject) => {
+      rejectAuthority = reject;
+    });
+    const closed: string[] = [];
+    const running = superviseGameServerResources({
+      address: { host: "127.0.0.1", port: 3001 },
+      eventSubscription: {
+        completion: new Promise<void>(() => {}),
+        close: async () => {
+          closed.push("subscription");
+        },
+      },
+      server: {
+        failure: authorityFailure,
+        close: async () => {
+          closed.push("server");
+        },
+      },
+      disconnectDatabase: async () => {
+        closed.push("database");
+      },
+    });
+    const completion = running.completion.then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    rejectAuthority(new Error("private presence cleanup detail"));
+
+    await expect(
+      Promise.race([
+        completion,
+        new Promise<"not-settled">((resolve) => setImmediate(() => resolve("not-settled"))),
+      ]),
+    ).resolves.toMatchObject({ message: "Game server authority failed." });
+    expect(closed).toEqual(["server", "subscription", "database"]);
+    await running.close();
     expect(closed).toEqual(["server", "subscription", "database"]);
   });
 

@@ -265,6 +265,17 @@ export interface ConsumedRealtimeTicket {
   readonly participantSessionId: string;
 }
 
+export interface RealtimePresenceIdentity {
+  readonly lobbyId: string;
+  readonly participantId: string;
+  readonly participantSessionId: string;
+}
+
+export interface RealtimePresenceDisconnectInput extends RealtimePresenceIdentity {
+  readonly presenceGeneration: number;
+  readonly reconnectWindowSeconds: number;
+}
+
 export interface ReserveParticipantOptions {
   readonly maxPlayersPerLobby: number;
 }
@@ -409,6 +420,9 @@ export interface LobbyStateRepository {
     readonly participantId: string;
     readonly participantSessionId: string;
   }): Promise<boolean>;
+  registerRealtimeConnection(input: RealtimePresenceIdentity): Promise<number | null>;
+  recordRealtimeHeartbeat(input: RealtimePresenceIdentity): Promise<boolean>;
+  unregisterRealtimeConnection(input: RealtimePresenceDisconnectInput): Promise<boolean>;
   resolveParticipantSessionByTokenHash(input: {
     readonly lobbyId: string;
     readonly tokenHash: Uint8Array;
@@ -760,6 +774,65 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
     const now = this.lifecycleClock();
     assertValidDate(now, "The participant session lifecycle timestamp");
     return now;
+  }
+
+  private async appendPresenceEvent(
+    transaction: Prisma.TransactionClient,
+    input: {
+      readonly lobbyId: string;
+      readonly participantId: string;
+      readonly generation: bigint;
+      readonly status: "connected" | "absent";
+      readonly changedAt: Date;
+    },
+  ): Promise<void> {
+    const generation = Number(input.generation);
+    if (!Number.isSafeInteger(generation) || generation < 1) {
+      throw new Error("Presence generations must fit in a positive safe integer.");
+    }
+    const sequenceRows = await transaction.$queryRaw<readonly { sequence: bigint }[]>`
+      UPDATE "lobbies"
+         SET "last_event_sequence" = "last_event_sequence" + 1
+       WHERE "id" = ${input.lobbyId}
+       RETURNING "last_event_sequence" AS "sequence"
+    `;
+    const sequence = sequenceRows[0]?.sequence;
+    if (sequence === undefined) {
+      throw new Error("Cannot allocate a presence event sequence for an unknown lobby.");
+    }
+    const presence =
+      input.status === "connected"
+        ? {
+            participantId: input.participantId,
+            generation,
+            status: "connected" as const,
+            changedAt: input.changedAt.toISOString(),
+          }
+        : {
+            participantId: input.participantId,
+            generation,
+            status: "absent" as const,
+            changedAt: input.changedAt.toISOString(),
+            absentSince: input.changedAt.toISOString(),
+            overridden: false,
+          };
+    await transaction.activeLobbyEvent.create({
+      data: {
+        lobbyId: input.lobbyId,
+        sequence,
+        roundId: null,
+        eventType: "presence",
+        schemaVersion: CONTRACT_SCHEMA_VERSION,
+        payload: toInputJson({ presence }),
+        createdAt: input.changedAt,
+      },
+    });
+    await transaction.$executeRaw`
+      SELECT pg_notify(
+        ${ACTIVE_LOBBY_EVENT_CHANNEL},
+        ${encodeActiveLobbyEventReference(input.lobbyId, sequence)}
+      )
+    `;
   }
 
   private async insert(
@@ -2199,6 +2272,288 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
       select: { id: true },
     });
     return session !== null;
+  }
+
+  async registerRealtimeConnection(input: RealtimePresenceIdentity): Promise<number | null> {
+    return runTransactionWithRetry(
+      async () =>
+        this.prisma.$transaction(
+          async (transaction) => {
+            const fenced = await transaction.$queryRaw<readonly { id: string }[]>`
+              UPDATE "lobbies"
+                 SET "last_event_sequence" = "last_event_sequence"
+               WHERE "id" = ${input.lobbyId}
+                 AND "status" IN ('WAITING', 'ACTIVE')
+               RETURNING "id"
+            `;
+            if (fenced.length !== 1) return null;
+            const changedAt = this.currentLifecycleTime();
+            await expireDueParticipantSessions(transaction, input.lobbyId, changedAt);
+            const session = await transaction.participantSession.findFirst({
+              where: {
+                id: input.participantSessionId,
+                lobbyId: input.lobbyId,
+                participantId: input.participantId,
+                status: { in: ["ACTIVE", "DISCONNECTED"] },
+                participant: { departedAt: null },
+              },
+              select: { id: true, status: true },
+            });
+            if (session === null) return null;
+            const siblingSessions = await transaction.participantSession.findMany({
+              where: {
+                lobbyId: input.lobbyId,
+                participantId: input.participantId,
+                id: { not: session.id },
+                status: { not: "DEPARTED" },
+              },
+              select: { id: true },
+            });
+            if (siblingSessions.length > 0) {
+              const siblingIds = siblingSessions.map(({ id }) => id);
+              await transaction.realtimeTicket.deleteMany({
+                where: { participantSessionId: { in: siblingIds } },
+              });
+              await transaction.participantSession.updateMany({
+                where: { id: { in: siblingIds } },
+                data: { status: "DEPARTED", departedAt: changedAt },
+              });
+            }
+            if (session.status === "DISCONNECTED") {
+              await transaction.participantSession.update({
+                where: { id: session.id },
+                data: {
+                  status: "ACTIVE",
+                  disconnectedAt: null,
+                  rejoinUntil: null,
+                  departedAt: null,
+                },
+              });
+            }
+            const current = await transaction.presenceGeneration.findFirst({
+              where: { participantId: input.participantId, endedAt: null },
+              orderBy: { generation: "desc" },
+            });
+            if (current === null || current.status === "DEPARTED") return null;
+
+            const toGenerationNumber = (generation: bigint): number => {
+              const value = Number(generation);
+              if (!Number.isSafeInteger(value) || value < 1) {
+                throw new Error("Presence generations must fit in a positive safe integer.");
+              }
+              return value;
+            };
+
+            if (current.status === "CONNECTED") {
+              await transaction.presenceGeneration.update({
+                where: {
+                  participantId_generation: {
+                    participantId: input.participantId,
+                    generation: current.generation,
+                  },
+                },
+                data: { connectionCount: { increment: 1 } },
+              });
+              return toGenerationNumber(current.generation);
+            }
+
+            await transaction.presenceGeneration.update({
+              where: {
+                participantId_generation: {
+                  participantId: input.participantId,
+                  generation: current.generation,
+                },
+              },
+              data: { endedAt: changedAt },
+            });
+            const generation = current.generation + 1n;
+            await transaction.presenceGeneration.create({
+              data: {
+                lobbyId: input.lobbyId,
+                participantId: input.participantId,
+                generation,
+                status: "CONNECTED",
+                connectionCount: 1,
+                changedAt,
+                graceEndsAt: null,
+                absentSince: null,
+                departedAt: null,
+                overridden: false,
+                endedAt: null,
+              },
+            });
+            await this.appendPresenceEvent(transaction, {
+              lobbyId: input.lobbyId,
+              participantId: input.participantId,
+              generation,
+              status: "connected",
+              changedAt,
+            });
+            return toGenerationNumber(generation);
+          },
+          {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+            maxWait: 5_000,
+            timeout: 10_000,
+          },
+        ),
+      this.retryOptions,
+    );
+  }
+
+  async recordRealtimeHeartbeat(input: RealtimePresenceIdentity): Promise<boolean> {
+    return runTransactionWithRetry(
+      async () =>
+        this.prisma.$transaction(
+          async (transaction) => {
+            const fenced = await transaction.$queryRaw<readonly { id: string }[]>`
+              UPDATE "lobbies"
+                 SET "last_event_sequence" = "last_event_sequence"
+               WHERE "id" = ${input.lobbyId}
+                 AND "status" IN ('WAITING', 'ACTIVE')
+               RETURNING "id"
+            `;
+            if (fenced.length !== 1) return false;
+            const session = await transaction.participantSession.findFirst({
+              where: {
+                id: input.participantSessionId,
+                lobbyId: input.lobbyId,
+                participantId: input.participantId,
+                status: "ACTIVE",
+                participant: { departedAt: null },
+              },
+              select: { id: true },
+            });
+            return session !== null;
+          },
+          {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+            maxWait: 5_000,
+            timeout: 10_000,
+          },
+        ),
+      this.retryOptions,
+    );
+  }
+
+  async unregisterRealtimeConnection(input: RealtimePresenceDisconnectInput): Promise<boolean> {
+    if (!Number.isSafeInteger(input.presenceGeneration) || input.presenceGeneration < 1) {
+      throw new RangeError("The presence generation must be a positive safe integer.");
+    }
+    if (
+      !Number.isSafeInteger(input.reconnectWindowSeconds) ||
+      input.reconnectWindowSeconds < 1 ||
+      input.reconnectWindowSeconds > 3_600
+    ) {
+      throw new RangeError(
+        "The reconnect window must be a safe integer between 1 and 3600 seconds.",
+      );
+    }
+    return runTransactionWithRetry(
+      async () =>
+        this.prisma.$transaction(
+          async (transaction) => {
+            const fenced = await transaction.$queryRaw<readonly { id: string }[]>`
+              UPDATE "lobbies"
+                 SET "last_event_sequence" = "last_event_sequence"
+               WHERE "id" = ${input.lobbyId}
+                 AND "status" IN ('WAITING', 'ACTIVE')
+               RETURNING "id"
+            `;
+            if (fenced.length !== 1) return false;
+            const session = await transaction.participantSession.findFirst({
+              where: {
+                id: input.participantSessionId,
+                lobbyId: input.lobbyId,
+                participantId: input.participantId,
+              },
+              select: { id: true },
+            });
+            if (session === null) return false;
+            const current = await transaction.presenceGeneration.findFirst({
+              where: { participantId: input.participantId, endedAt: null },
+              orderBy: { generation: "desc" },
+            });
+            if (
+              current === null ||
+              current.status !== "CONNECTED" ||
+              current.generation !== BigInt(input.presenceGeneration)
+            ) {
+              return false;
+            }
+
+            if (current.connectionCount > 1) {
+              await transaction.presenceGeneration.update({
+                where: {
+                  participantId_generation: {
+                    participantId: input.participantId,
+                    generation: current.generation,
+                  },
+                },
+                data: { connectionCount: { decrement: 1 } },
+              });
+              return true;
+            }
+
+            const changedAt = this.currentLifecycleTime();
+            await expireDueParticipantSessions(transaction, input.lobbyId, changedAt);
+            const activeSession = await transaction.participantSession.findFirst({
+              where: {
+                lobbyId: input.lobbyId,
+                participantId: input.participantId,
+                status: "ACTIVE",
+                participant: { departedAt: null },
+              },
+              select: { id: true },
+            });
+            if (activeSession !== null) {
+              await transaction.realtimeTicket.deleteMany({
+                where: { participantSessionId: activeSession.id },
+              });
+              await transaction.participantSession.update({
+                where: { id: activeSession.id },
+                data: {
+                  status: "DISCONNECTED",
+                  disconnectedAt: changedAt,
+                  rejoinUntil: new Date(changedAt.getTime() + input.reconnectWindowSeconds * 1_000),
+                  departedAt: null,
+                },
+              });
+            }
+            await transaction.presenceGeneration.update({
+              where: {
+                participantId_generation: {
+                  participantId: input.participantId,
+                  generation: current.generation,
+                },
+              },
+              data: {
+                status: "ABSENT",
+                connectionCount: 0,
+                changedAt,
+                graceEndsAt: null,
+                absentSince: changedAt,
+                departedAt: null,
+                overridden: false,
+              },
+            });
+            await this.appendPresenceEvent(transaction, {
+              lobbyId: input.lobbyId,
+              participantId: input.participantId,
+              generation: current.generation,
+              status: "absent",
+              changedAt,
+            });
+            return true;
+          },
+          {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+            maxWait: 5_000,
+            timeout: 10_000,
+          },
+        ),
+      this.retryOptions,
+    );
   }
 
   private findAuthorizedSnapshotForActor(

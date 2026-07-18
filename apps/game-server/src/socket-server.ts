@@ -60,6 +60,14 @@ export interface GameServerOptions {
   readonly identityAuthorizer: {
     isIdentityActive(identity: AuthenticatedRealtimeIdentity): Promise<boolean>;
   };
+  readonly presenceLifecycle: {
+    registerConnection(identity: AuthenticatedRealtimeIdentity): Promise<number | null>;
+    recordHeartbeat(identity: AuthenticatedRealtimeIdentity): Promise<boolean>;
+    unregisterConnection(
+      identity: AuthenticatedRealtimeIdentity,
+      presenceGeneration: number,
+    ): Promise<void>;
+  };
   readonly limits?: {
     readonly connectionsPerMinute?: number;
     readonly commandsPerMinute?: number;
@@ -69,6 +77,7 @@ export interface GameServerOptions {
 }
 
 export interface GameServer {
+  readonly failure: Promise<never>;
   listen(options: {
     readonly host: string;
     readonly port: number;
@@ -285,6 +294,25 @@ export function createGameServer(options: GameServerOptions): GameServer {
       callback(null, accepted);
     },
   });
+  const pendingPresenceTasks = new Set<Promise<void>>();
+  let fatalPresenceClose: Promise<void> | null = null;
+  let failureReported = false;
+  let rejectFailure!: (reason: unknown) => void;
+  const failure = new Promise<never>((_resolve, reject) => {
+    rejectFailure = reject;
+  });
+  void failure.catch(() => {});
+  const trackPresenceTask = (task: Promise<void>) => {
+    const observed = task.catch(() => {
+      if (!failureReported) {
+        failureReported = true;
+        rejectFailure(new Error("Game server authority failed."));
+      }
+      fatalPresenceClose ??= new Promise<void>((resolve) => io.close(() => resolve()));
+    });
+    pendingPresenceTasks.add(observed);
+    void observed.finally(() => pendingPresenceTasks.delete(observed));
+  };
 
   io.use(async (socket, next) => {
     let transportClosed = socket.conn.readyState !== "open";
@@ -662,7 +690,37 @@ export function createGameServer(options: GameServerOptions): GameServer {
         return false;
       }
     };
-    const initialization = establishSnapshotBaseline(true);
+    let releaseRequested = false;
+    let presenceReleased = false;
+    const registration = options.presenceLifecycle.registerConnection(identity);
+    const releasePresence = async () => {
+      releaseRequested = true;
+      const presenceGeneration = await registration;
+      if (presenceGeneration === null || presenceReleased) return;
+      presenceReleased = true;
+      await options.presenceLifecycle.unregisterConnection(identity, presenceGeneration);
+    };
+    socket.once("disconnect", () => trackPresenceTask(releasePresence()));
+    const initialization = (async () => {
+      try {
+        const presenceGeneration = await registration;
+        if (presenceGeneration === null) {
+          if (socket.connected) {
+            socket.emit("v1:error", createContractError("UNAUTHORIZED", options.clock));
+            socket.disconnect(true);
+          }
+          return false;
+        }
+        if (!socket.connected || releaseRequested) return false;
+        return establishSnapshotBaseline(true);
+      } catch {
+        if (socket.connected) {
+          socket.emit("v1:error", createContractError("INTERNAL_ERROR", options.clock));
+          socket.disconnect(true);
+        }
+        return false;
+      }
+    })();
 
     let commandInFlight = false;
     socket.on("v1:command", async (payload) => {
@@ -689,8 +747,13 @@ export function createGameServer(options: GameServerOptions): GameServer {
         }
 
         if (parsed.data.type === "heartbeat") {
-          if (!(await isIdentityActive(identity))) {
-            socket.emit("v1:error", createContractError("UNAUTHORIZED", options.clock));
+          try {
+            if (!(await options.presenceLifecycle.recordHeartbeat(identity))) {
+              socket.emit("v1:error", createContractError("UNAUTHORIZED", options.clock));
+              socket.disconnect(true);
+            }
+          } catch {
+            socket.emit("v1:error", createContractError("INTERNAL_ERROR", options.clock));
             socket.disconnect(true);
           }
           return;
@@ -767,14 +830,17 @@ export function createGameServer(options: GameServerOptions): GameServer {
 
   let closed = false;
   return {
+    failure,
     async listen({ host, port }) {
       const address = await listen(httpServer, host, port);
       return { host: address.address, port: address.port };
     },
-    close() {
+    async close() {
       if (closed) return Promise.resolve();
       closed = true;
-      return new Promise((resolve) => io.close(() => resolve()));
+      fatalPresenceClose ??= new Promise<void>((resolve) => io.close(() => resolve()));
+      await fatalPresenceClose;
+      await Promise.all([...pendingPresenceTasks]);
     },
     publishLobbyEvent(lobbyId, event) {
       return emitLobbyEvent(lobbyId, event);

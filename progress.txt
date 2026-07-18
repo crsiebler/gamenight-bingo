@@ -47,6 +47,7 @@ Next story: US-001
 - Socket.IO accepts only strict versioned handshake auth from the configured exact browser origin, burns any canonical ticket reaching auth even in an invalid envelope, discards handshake plaintext, stores only persistence-returned identity in `socket.data`, and revalidates that identity inside command/snapshot lobby fences and before later room delivery. Engine.IO admission and namespace authentication have separate bounded direct-peer limits; mark a rejected transport terminal before awaiting its bounded ticket burn, close it, cap authenticated sockets globally and per session, and recheck both transport closure and transport-wide rejection after ticket consumption before reserving capacity or calling `next()`. Every command attempt is charged before the one-in-flight guard, and per-lobby delivery queues preserve committed sequence order through asynchronous authorization while authorizing each unique persisted identity once per delivery. Active-lobby commits emit a transaction-scoped PostgreSQL notification; the separate game-server process serially reloads and validates each committed event before sequence-deduplicated publication, so HTTP fallback mutations reach connected clients without pre-commit effects. Validate every successful acknowledgement's command ID against the incoming mutation before any delivery; fresh committed lobby events broadcast before requester acknowledgements, replays do not rebroadcast, eventless replay tombstones can acknowledge either delivery scope, and replayed private results return only to the requesting socket. Disconnect sockets on terminal command-time identity outcomes (`UNAUTHORIZED`, inactive/deleted-lobby `NOT_FOUND`, or `LOBBY_EXPIRED`) so stale clients cannot retain rooms or capacity.
 - Active-event subscription, malformed dedicated-channel notification, durable reload, or relay failure is fatal to the game-server runtime because `LISTEN` recovery cannot prove continuity without a durable cursor. Stop Socket.IO before awaiting subscription/database drain so a stalled delivery cannot keep a continuity-lost authority serving, and settle runtime completion with a safe failure if cleanup fails. Exact direct/notification echoes are idempotent only when their canonical event identity matches bounded recent delivery history; same-sequence conflicts and unknown stale deliveries fail closed.
 - Authenticated sockets establish an actor-scoped snapshot baseline before live delivery: join authorized rooms first, buffer a bounded combined set of lobby/private events during the query, emit the snapshot, discard buffered lobby sequences at or below its baseline, then release newer events; every ready-state lobby delivery must also suppress sequences at or below that baseline even when it was queued before synchronization but began socket delivery afterward. Explicit resync uses the same boundary and restores the prior safe baseline plus buffered deliveries after transient query failure; failed initialization disconnects and executes no commands.
+- Realtime presence uses the lobby fence and durable participant connection count: the first socket ends the prior absence and creates a connected generation plus sequenced event, extra tabs update only the count, non-final closes decrement only the count, and the final close atomically marks absence, disconnects the participant's canonical active session with its fixed rejoin deadline even when an older departed sibling socket closes last, invalidates outstanding tickets, and commits the next presence event before notification. Registration returns the durable generation as a cleanup lease; stale cleanup is ignored, sibling sessions are invalidated, and an exhausted cleanup failure stops Socket.IO, rejects supervised runtime completion, and drains the subscription/database for restart.
 
 Append-only iteration log
 -------------------------
@@ -3071,3 +3072,120 @@ Targeted re-review outcome for US-031 at 2026-07-17 18:45:00 MST:
 - Next iteration start:
   - If review passes, implement US-032 participant presence aggregation; otherwise resume any recorded blocking finding.
 ---
+
+## 2026-07-17 19:54:10 MST - US-032
+- What was implemented
+  - Added lobby-fenced durable presence registration, heartbeat revalidation, and disconnection transitions for authenticated Socket.IO identities.
+  - Aggregated multiple tabs through one participant connection count: only the first connection commits a connected generation/event, intermediate opens and closes change only the count, and only the final close commits absence.
+  - Made the final close atomically disconnect the participant session, invalidate outstanding realtime tickets, retain the configured two-minute rejoin deadline, persist the presence event and sequence, and notify the realtime relay after commit.
+  - Established presence before the authoritative snapshot, released registered presence on every socket close, and drained asynchronous release work during server shutdown.
+  - Added PostgreSQL and multi-client Socket.IO tests for tabs, authenticated heartbeats, generation history, session lifecycle, strict event payloads, committed notifications, registration rejection, and final-disconnect behavior.
+- Files changed: `AGENTS.md`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/socket-server.ts`, `apps/game-server/src/socket-server.test.ts`, `packages/database/src/index.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/database.integration.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-032 - Aggregate participant presence`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts -t "tracks multiple tabs|fails closed before snapshot"` (expected fail before implementation; pass after implementation)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "aggregates realtime tabs|heartbeats revalidate identity"` (expected fail before implementation and again for deferred realtime session disconnect wiring; pass after implementation)
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts` (pass before review; 53 tests and 1 PostgreSQL-gated test skipped)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test:database` (pass before review; 82 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass after review remediation; typecheck, 25 files, and 488 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: none
+  - Used: `websocket-engineer` because this complex realtime/database lifecycle story benefited from focused guidance on first/last connection transitions, ordering, shutdown races, and multi-client coverage
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive `security-engineer`; targeted re-review by the same specialists planned after substantive fixes
+  - Findings: fixed fail-open cleanup persistence, uncaught heartbeat persistence, stale cleanup generation, sibling-session lifecycle, connection handoff ordering, and weak cross-layer multi-tab relay coverage before targeted re-review
+- Decisions (why):
+  - Stored every physical socket in the durable participant connection count but broadcast only human-visible connected/absent transitions because presence represents people, not tabs.
+  - Created a new connected generation after each prior absence and reused that generation for its final absent state so old overridden absence history cannot affect a later connection cycle.
+  - Wired the final realtime disconnect to the existing same-device session lifecycle because US-026 explicitly deferred this connection boundary to the presence story; doing it in the same transaction prevents presence and rejoin eligibility from diverging.
+  - Reused the existing active-lobby event table, monotonic sequence, PostgreSQL notification channel, and runtime relay rather than adding a second broadcast path.
+- **Learnings for future iterations:**
+  - Register durable presence before querying the actor snapshot; the committed sequence baseline then represents the participant's own connected transition without exposing an event before the snapshot.
+  - A participant session must stay active while any sibling tab remains connected, and its first disconnect timestamp must be written only when the durable count reaches zero.
+  - Count-only presence changes must retain `changedAt` and allocate no sequence so tab churn does not look like participant churn.
+  - Disconnect cleanup needs the generation returned by registration; identity alone cannot distinguish an old socket finalizer from a later reconnect lifecycle.
+- Known issues / follow-ups:
+  - Abrupt process termination cannot run socket cleanup; full crash-reconciliation behavior remains part of the later single-instance restart and recovery test stories.
+  - The unrelated untracked browser-report artifacts remain untouched and unstaged; root formatting still scans them while every tracked file passes.
+- Next iteration start:
+  - If review passes, implement US-033 participant-absence grace and persisted pause behavior; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-032 at 2026-07-17 20:07:23 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced five deduplicated blocking root causes; the expected pre-review `prd.json` status observation was discarded because Ralph requires that metadata only after review passes.
+- Changed presence registration to return a durable generation lease and required unregister to match it, so delayed cleanup from an old socket cannot disconnect a reactivated session or delete newly issued tickets.
+- Allowed a ticket consumed before a racing final close to reactivate its still-valid disconnected session under the same lobby fence, and added concurrent handoff coverage for either lock order.
+- Consolidated nondeparted sibling sessions during registration, invalidating sibling tickets and preventing a closed sibling session from remaining active while participant-level connections are aggregated.
+- Converted heartbeat persistence rejection into a safe `INTERNAL_ERROR` plus disconnect, and made an exhausted disconnect persistence failure close Socket.IO immediately instead of continuing with unprovable durable presence.
+- Added a PostgreSQL-backed three-client Socket.IO test that proves first-close connected state, final-close sequenced absence relay, session deadline persistence, and outstanding-ticket invalidation through the production repository and notification path.
+- Post-fix checks: focused race/failure tests pass, the PostgreSQL-enabled root suite passes typecheck with 25 files and 488 tests, lint passes, tracked formatting passes, and `git diff --check` passes.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` because fixes affected every original specialist area.
+
+Targeted re-review outcome for US-032 at 2026-07-17 20:11:23 MST:
+- `code-reviewer`, `qa-expert`, and `security-engineer` reviewed the revised complete staged diff after all remediation checks passed.
+- The reviewers identified one deduplicated high-severity lifecycle blocker: after sibling-session consolidation, the newer active session can close first while an older departed sibling socket remains counted; when that departed socket closes last, final cleanup marks presence absent but skips disconnecting the current active session and invalidating its tickets.
+- `code-reviewer` also identified a medium operational blocker: cleanup persistence failure closes Socket.IO but does not settle `RunningGameServer.completion` or drain the active-event subscription and database, so a continuity-lost process can remain alive instead of exiting for supervisor restart.
+- Both findings are in scope because they violate the final-connection session lifecycle and fail-closed authority invariants introduced by this story.
+- Per the one-targeted-re-review limit, no further substantive implementation changes or commit are permitted in this iteration. `US-032` remains `passes: false`, and `prd.json` remains unchanged.
+- Next iteration start: add a reverse sibling-close-order regression and disconnect the participant's canonical active session on the final participant-level close; propagate fatal presence cleanup into runtime supervision so completion rejects and all resources drain; rerun all US-032 checks and restart the complete staged review loop.
+
+## 2026-07-17 20:17:37 MST - US-032
+- What was implemented
+  - Resumed the blocked participant-presence story and fixed both lifecycle blockers from the prior targeted review.
+  - Changed final participant-level cleanup to resolve and disconnect the canonical active session, so an older departed sibling socket closing last cannot leave the current session or its tickets active.
+  - Added a fatal Socket.IO authority signal and wired it into runtime supervision so exhausted presence cleanup failure stops serving, rejects `RunningGameServer.completion` with a safe error, and drains the event subscription and database.
+  - Added reverse sibling-close-order and supervised fatal-cleanup regressions.
+- Files changed: `AGENTS.md`, `apps/game-server/src/runtime.test.ts`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/socket-server.test.ts`, `apps/game-server/src/socket-server.ts`, `packages/database/src/database.integration.test.ts`, `packages/database/src/index.ts`, `packages/database/src/lobby-state-repository.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-032 - Aggregate participant presence`
+- Auto approval: `enabled`
+- Checks:
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "disconnects the canonical session when a departed sibling connection closes last"` (expected fail before implementation because the current session remained active; pass after implementation)
+  - `bunx vitest run apps/game-server/src/runtime.test.ts -t "drains every resource and rejects completion when the Socket.IO authority fails"` (expected fail before implementation because completion remained pending; pass after implementation)
+  - `bunx vitest run apps/game-server/src/runtime.test.ts apps/game-server/src/socket-server.test.ts` (pass; 69 tests and 2 PostgreSQL-gated tests skipped)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test:database` (pass; 84 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass after review remediation; typecheck, 25 files, and 492 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `git diff --check && git diff --cached --check` (pass)
+- Implementation agents:
+  - Recommended: none
+  - Used: skipped because the resumed work addressed two concrete prior specialist findings and the existing realtime/database patterns were clear
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive `security-engineer`; targeted re-review by `qa-expert` planned after test remediation
+  - Findings: code and security returned none; fixed nondeterministic handoff ordering, one-sided sibling close-order coverage, and missing direct authority-failure signal coverage before targeted re-review
+- Decisions (why):
+  - Resolved the active session by participant only on the final durable connection close because the closing socket's session may already be departed after sibling consolidation, while non-final closes must remain count-only.
+  - Exposed a failure-only authority promise instead of making `close()` itself signal failure because graceful shutdown and fatal persistence loss have different supervised completion semantics.
+  - Kept immediate Socket.IO closure inside the authority and added outer runtime supervision because standalone authorities must fail closed while production must also drain persistence resources and exit for restart.
+- **Learnings for future iterations:**
+  - Participant-level connection aggregation means final cleanup cannot assume the last physical socket belongs to the participant's current active session.
+  - Internal Socket.IO fail-closed behavior is insufficient for process supervision; fatal asynchronous lifecycle work needs an explicit signal observed by the runtime resource owner.
+- Known issues / follow-ups:
+  - Abrupt process termination still cannot run socket cleanup; later restart/recovery stories must reconcile crash state without assuming disconnect callbacks ran.
+  - The unrelated `apps/web/next-env.d.ts` development side effect and untracked browser-report artifacts remain untouched and unstaged.
+- Next iteration start:
+  - If review passes, implement US-033 participant-absence grace and persisted pause behavior; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for resumed US-032 at 2026-07-17 20:26:38 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass returned no code/security findings and two QA test-completeness blockers.
+- Replaced the unsynchronized `Promise.all` connection-handoff test with PostgreSQL row-lock barriers that deterministically force disconnect-first and register-first transaction ordering, then assert generations, event sequences, session state, connection count, and ticket invalidation/retention for each outcome.
+- Parameterized sibling tab cleanup across departed-first and active-first close order, proving either final physical socket disconnects the canonical current session and invalidates its tickets.
+- Changed the real Socket.IO cleanup-failure regression to await `GameServer.failure` directly before proving later authentication is rejected; the separate runtime supervision regression verifies that same failure contract drains server, subscription, and database resources.
+- Post-fix checks: focused four-case PostgreSQL handoff/sibling coverage and the real authority-failure test pass; the approved-PostgreSQL root suite passes typecheck with 25 files and 492 tests; lint, tracked formatting, and whitespace checks pass.
+- Targeted re-review: pending `qa-expert` because only QA findings received substantive test changes; code and security are not repeated because both initial finding lists were empty.
+
+Targeted re-review outcome for resumed US-032 at 2026-07-17 20:28:05 MST:
+- `qa-expert` reviewed the revised complete staged diff and returned an empty actionable finding list.
+- The deterministic PostgreSQL transaction-order barriers, both sibling close orders, direct authority-failure assertion, and supervised resource-drain coverage resolve both initial QA findings.
+- Code and security review had already returned empty finding lists. No in-scope critical, high, or medium findings remain; US-032 can be marked passing and committed after the final consistency check.

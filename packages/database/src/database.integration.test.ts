@@ -440,29 +440,36 @@ describeDatabase("PostgreSQL durable game state", () => {
     }
   }
 
-  async function waitForBlockedCommandFence(timeoutMs = 5_000): Promise<void> {
+  async function waitForBlockedCommandFences(
+    expectedCount: number,
+    timeoutMs = 5_000,
+  ): Promise<void> {
     const deadline = Date.now() + timeoutMs;
 
     while (Date.now() < deadline) {
-      const result = await pool.query<{ blocked: boolean }>(
-        `SELECT EXISTS (
-           SELECT 1
-             FROM pg_stat_activity
-            WHERE datname = current_database()
-              AND pid <> pg_backend_pid()
-              AND wait_event_type = 'Lock'
-              AND query LIKE '%UPDATE "lobbies"%'
-              AND query LIKE '%last_event_sequence%'
-         ) AS blocked`,
+      const result = await pool.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count
+           FROM pg_stat_activity
+          WHERE datname = current_database()
+            AND pid <> pg_backend_pid()
+            AND wait_event_type = 'Lock'
+            AND query LIKE '%UPDATE "lobbies"%'
+            AND query LIKE '%last_event_sequence%'`,
       );
-      if (result.rows[0]?.blocked === true) {
+      if ((result.rows[0]?.count ?? 0) >= expectedCount) {
         return;
       }
 
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
 
-    throw new Error("Timed out waiting for a concurrent command to block on the lobby fence.");
+    throw new Error(
+      `Timed out waiting for ${expectedCount} concurrent operation(s) to block on the lobby fence.`,
+    );
+  }
+
+  async function waitForBlockedCommandFence(timeoutMs = 5_000): Promise<void> {
+    await waitForBlockedCommandFences(1, timeoutMs);
   }
 
   async function waitForBlockedLobbyAdmissions(
@@ -718,6 +725,444 @@ describeDatabase("PostgreSQL durable game state", () => {
         },
       ],
     });
+  });
+
+  test("aggregates realtime tabs and sequences only visible presence transitions", async () => {
+    let now = new Date("2026-07-17T12:30:00.000Z");
+    const connection = await connectWithLifecycleClock(() => now);
+    const suffix = randomUUID();
+    const lobbyId = `lobby-presence-${suffix}`;
+    const participantId = `participant-presence-${suffix}`;
+    const participantSessionId = `session-presence-${suffix}`;
+    const activeCount = await pool.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM lobbies WHERE status IN ('WAITING', 'ACTIVE')`,
+    );
+    const created = await connection.lobbyStates.createLobbyWithHost({
+      lobbyId,
+      participantId,
+      sessionId: participantSessionId,
+      commandId: `command-presence-${suffix}`,
+      username: `Presence Host ${suffix}`,
+      themeId: "classic",
+      tokenHash: new Uint8Array(randomBytes(32)),
+      issuedAt: new Date("2026-07-17T12:29:00.000Z"),
+      maxActiveLobbies: activeCount.rows[0]!.count + 1,
+      nextCode: randomLobbyCode,
+    });
+    expect(created.ok).toBe(true);
+    const identity = { lobbyId, participantId, participantSessionId };
+    const notifiedEvents: Awaited<ReturnType<ActiveLobbyEventNotification["loadEvent"]>>[] = [];
+    const twoNotifications = deferredSignal();
+    const subscription = await connection.activeLobbyEvents.subscribe(async (notification) => {
+      if (notification.lobbyId !== lobbyId) return;
+      notifiedEvents.push(await notification.loadEvent());
+      if (notifiedEvents.length === 2) twoNotifications.resolve();
+    });
+
+    await expect(connection.lobbyStates.registerRealtimeConnection(identity)).resolves.toBe(2);
+    now = new Date("2026-07-17T12:31:00.000Z");
+    await expect(connection.lobbyStates.registerRealtimeConnection(identity)).resolves.toBe(2);
+
+    let state = await connection.lobbyStates.findById(lobbyId);
+    expect(state?.presenceGenerations).toEqual([
+      expect.objectContaining({
+        participantId,
+        generation: 1n,
+        status: "absent",
+        connectionCount: 0,
+        endedAt: new Date("2026-07-17T12:30:00.000Z"),
+      }),
+      expect.objectContaining({
+        participantId,
+        generation: 2n,
+        status: "connected",
+        connectionCount: 2,
+        changedAt: new Date("2026-07-17T12:30:00.000Z"),
+        endedAt: null,
+      }),
+    ]);
+    expect(state?.lobby.lastEventSequence).toBe(1n);
+    expect(state?.events.at(-1)).toMatchObject({
+      sequence: 1n,
+      eventType: "presence",
+      payload: {
+        presence: {
+          participantId,
+          generation: 2,
+          status: "connected",
+          changedAt: "2026-07-17T12:30:00.000Z",
+        },
+      },
+    });
+    expect(() =>
+      ActiveLobbyEventSchema.parse({
+        ...state!.events.at(-1)!.payload,
+        schemaVersion: state!.events.at(-1)!.schemaVersion,
+        type: state!.events.at(-1)!.eventType,
+        eventSequence: Number(state!.events.at(-1)!.sequence),
+        occurredAt: state!.events.at(-1)!.createdAt.toISOString(),
+      }),
+    ).not.toThrow();
+
+    now = new Date("2026-07-17T12:32:00.000Z");
+    await expect(
+      connection.lobbyStates.unregisterRealtimeConnection({
+        ...identity,
+        presenceGeneration: 2,
+        reconnectWindowSeconds: 120,
+      }),
+    ).resolves.toBe(true);
+    state = await connection.lobbyStates.findById(lobbyId);
+    expect(state?.presenceGenerations.at(-1)).toMatchObject({
+      status: "connected",
+      connectionCount: 1,
+      changedAt: new Date("2026-07-17T12:30:00.000Z"),
+    });
+    expect(state?.sessions[0]).toMatchObject({
+      status: "active",
+      disconnectedAt: null,
+      rejoinUntil: null,
+    });
+    expect(state?.lobby.lastEventSequence).toBe(1n);
+
+    now = new Date("2026-07-17T12:33:00.000Z");
+    await expect(
+      connection.lobbyStates.unregisterRealtimeConnection({
+        ...identity,
+        presenceGeneration: 2,
+        reconnectWindowSeconds: 120,
+      }),
+    ).resolves.toBe(true);
+    state = await connection.lobbyStates.findById(lobbyId);
+    expect(state?.presenceGenerations.at(-1)).toMatchObject({
+      participantId,
+      generation: 2n,
+      status: "absent",
+      connectionCount: 0,
+      changedAt: now,
+      absentSince: now,
+      overridden: false,
+    });
+    expect(state?.sessions[0]).toMatchObject({
+      status: "disconnected",
+      disconnectedAt: now,
+      rejoinUntil: new Date("2026-07-17T12:35:00.000Z"),
+    });
+    expect(state?.lobby.lastEventSequence).toBe(2n);
+    expect(state?.events.at(-1)).toMatchObject({
+      sequence: 2n,
+      eventType: "presence",
+      payload: {
+        presence: {
+          participantId,
+          generation: 2,
+          status: "absent",
+          changedAt: "2026-07-17T12:33:00.000Z",
+          absentSince: "2026-07-17T12:33:00.000Z",
+          overridden: false,
+        },
+      },
+    });
+    await twoNotifications.wait("the committed connected and absent presence notifications");
+    expect(notifiedEvents.map((event) => event.sequence)).toEqual([1n, 2n]);
+    await subscription.close();
+  });
+
+  test("ignores stale disconnect cleanup after the session reconnects", async () => {
+    let now = new Date("2026-07-17T12:50:00.000Z");
+    const connection = await connectWithLifecycleClock(() => now);
+    const suffix = randomUUID();
+    const lobbyId = `lobby-stale-presence-${suffix}`;
+    const participantId = `participant-stale-presence-${suffix}`;
+    const participantSessionId = `session-stale-presence-${suffix}`;
+    const activeCount = await pool.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM lobbies WHERE status IN ('WAITING', 'ACTIVE')`,
+    );
+    const created = await connection.lobbyStates.createLobbyWithHost({
+      lobbyId,
+      participantId,
+      sessionId: participantSessionId,
+      commandId: `command-stale-presence-${suffix}`,
+      username: `Stale Presence ${suffix}`,
+      themeId: "classic",
+      tokenHash: new Uint8Array(randomBytes(32)),
+      issuedAt: new Date("2026-07-17T12:49:00.000Z"),
+      maxActiveLobbies: activeCount.rows[0]!.count + 1,
+      nextCode: randomLobbyCode,
+    });
+    expect(created.ok).toBe(true);
+    const identity = { lobbyId, participantId, participantSessionId };
+    const firstGeneration = await connection.lobbyStates.registerRealtimeConnection(identity);
+    expect(firstGeneration).toBe(2);
+    await connection.lobbyStates.unregisterRealtimeConnection({
+      ...identity,
+      presenceGeneration: firstGeneration!,
+      reconnectWindowSeconds: 120,
+    });
+
+    now = new Date("2026-07-17T12:51:00.000Z");
+    await expect(connection.lobbyStates.registerRealtimeConnection(identity)).resolves.toBe(3);
+    await expect(
+      connection.lobbyStates.unregisterRealtimeConnection({
+        ...identity,
+        presenceGeneration: firstGeneration!,
+        reconnectWindowSeconds: 120,
+      }),
+    ).resolves.toBe(false);
+
+    const restored = await connection.lobbyStates.findById(lobbyId);
+    expect(restored?.presenceGenerations.at(-1)).toMatchObject({
+      generation: 3n,
+      status: "connected",
+      connectionCount: 1,
+    });
+    expect(restored?.sessions[0]).toMatchObject({
+      status: "active",
+      disconnectedAt: null,
+      rejoinUntil: null,
+    });
+  });
+
+  test.each(["disconnect-first", "register-first"] as const)(
+    "serializes a realtime connection handoff with %s lock ordering",
+    async (order) => {
+      const now = new Date("2026-07-17T12:55:00.000Z");
+      const setupConnection = await connectWithLifecycleClock(() => now);
+      const disconnectConnection = await connectWithLifecycleClock(() => now);
+      const registerConnection = await connectWithLifecycleClock(() => now);
+      const suffix = randomUUID();
+      const lobbyId = `lobby-presence-handoff-${suffix}`;
+      const participantId = `participant-presence-handoff-${suffix}`;
+      const participantSessionId = `session-presence-handoff-${suffix}`;
+      const sessionTokenHash = new Uint8Array(randomBytes(32));
+      const outstandingTicketHash = new Uint8Array(randomBytes(32));
+      const activeCount = await pool.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM lobbies WHERE status IN ('WAITING', 'ACTIVE')`,
+      );
+      const created = await setupConnection.lobbyStates.createLobbyWithHost({
+        lobbyId,
+        participantId,
+        sessionId: participantSessionId,
+        commandId: `command-presence-handoff-${suffix}`,
+        username: `Presence Handoff ${suffix}`,
+        themeId: "classic",
+        tokenHash: sessionTokenHash,
+        issuedAt: new Date("2026-07-17T12:54:00.000Z"),
+        maxActiveLobbies: activeCount.rows[0]!.count + 1,
+        nextCode: randomLobbyCode,
+      });
+      expect(created.ok).toBe(true);
+      const identity = { lobbyId, participantId, participantSessionId };
+      await expect(setupConnection.lobbyStates.registerRealtimeConnection(identity)).resolves.toBe(
+        2,
+      );
+      await expect(
+        setupConnection.lobbyStates.issueRealtimeTicket({
+          lobbyId,
+          sessionTokenHash,
+          ticketHash: outstandingTicketHash,
+          ttlSeconds: 60,
+        }),
+      ).resolves.toMatchObject({ ok: true });
+
+      const disconnect = () =>
+        disconnectConnection.lobbyStates.unregisterRealtimeConnection({
+          ...identity,
+          presenceGeneration: 2,
+          reconnectWindowSeconds: 120,
+        });
+      const register = () => registerConnection.lobbyStates.registerRealtimeConnection(identity);
+      const blocker = await pool.connect();
+      let transactionOpen = false;
+      const operations: Promise<unknown>[] = [];
+      try {
+        await blocker.query("BEGIN");
+        transactionOpen = true;
+        await blocker.query(`SELECT id FROM lobbies WHERE id = $1 FOR UPDATE`, [lobbyId]);
+
+        operations.push(order === "disconnect-first" ? disconnect() : register());
+        await waitForBlockedCommandFences(1);
+        operations.push(order === "disconnect-first" ? register() : disconnect());
+        await waitForBlockedCommandFences(2);
+
+        await blocker.query("ROLLBACK");
+        transactionOpen = false;
+        await expect(Promise.all(operations)).resolves.toEqual(
+          order === "disconnect-first" ? [true, 3] : [2, true],
+        );
+      } finally {
+        if (transactionOpen) await blocker.query("ROLLBACK").catch(() => undefined);
+        blocker.release();
+        await Promise.allSettled(operations);
+      }
+
+      const state = await setupConnection.lobbyStates.findById(lobbyId);
+      expect(state?.sessions.find(({ id }) => id === participantSessionId)).toMatchObject({
+        status: "active",
+        disconnectedAt: null,
+        rejoinUntil: null,
+      });
+      expect(state?.presenceGenerations.at(-1)).toMatchObject({
+        generation: order === "disconnect-first" ? 3n : 2n,
+        status: "connected",
+        connectionCount: 1,
+      });
+      expect(
+        state?.events
+          .filter(({ eventType }) => eventType === "presence")
+          .map(({ payload }) => (payload["presence"] as { status: string }).status),
+      ).toEqual(
+        order === "disconnect-first" ? ["connected", "absent", "connected"] : ["connected"],
+      );
+      await expect(
+        setupConnection.lobbyStates.consumeRealtimeTicket({ ticketHash: outstandingTicketHash }),
+      ).resolves.toEqual(order === "disconnect-first" ? null : identity);
+    },
+  );
+
+  test.each(["departed-first", "active-first"] as const)(
+    "disconnects the canonical session when sibling tabs close %s",
+    async (closeOrder) => {
+      let now = new Date("2026-07-17T13:00:00.000Z");
+      const connection = await connectWithLifecycleClock(() => now);
+      const suffix = randomUUID();
+      const lobbyId = `lobby-sibling-presence-${suffix}`;
+      const participantId = `participant-sibling-presence-${suffix}`;
+      const firstSessionId = `session-sibling-first-${suffix}`;
+      const secondSessionId = `session-sibling-second-${suffix}`;
+      const secondTokenHash = new Uint8Array(randomBytes(32));
+      const outstandingTicketHash = new Uint8Array(randomBytes(32));
+      const activeCount = await pool.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM lobbies WHERE status IN ('WAITING', 'ACTIVE')`,
+      );
+      const created = await connection.lobbyStates.createLobbyWithHost({
+        lobbyId,
+        participantId,
+        sessionId: firstSessionId,
+        commandId: `command-sibling-presence-${suffix}`,
+        username: `Sibling Presence ${suffix}`,
+        themeId: "classic",
+        tokenHash: new Uint8Array(randomBytes(32)),
+        issuedAt: new Date("2026-07-17T12:59:00.000Z"),
+        maxActiveLobbies: activeCount.rows[0]!.count + 1,
+        nextCode: randomLobbyCode,
+      });
+      expect(created.ok).toBe(true);
+      await expect(
+        connection.lobbyStates.registerRealtimeConnection({
+          lobbyId,
+          participantId,
+          participantSessionId: firstSessionId,
+        }),
+      ).resolves.toBe(2);
+      await expect(
+        connection.lobbyStates.createParticipantSession({
+          id: secondSessionId,
+          lobbyId,
+          participantId,
+          tokenHash: secondTokenHash,
+          issuedAt: new Date("2026-07-17T12:59:30.000Z"),
+        }),
+      ).resolves.toBe("created");
+      await expect(
+        connection.lobbyStates.registerRealtimeConnection({
+          lobbyId,
+          participantId,
+          participantSessionId: secondSessionId,
+        }),
+      ).resolves.toBe(2);
+
+      let state = await connection.lobbyStates.findById(lobbyId);
+      expect(state?.sessions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: firstSessionId, status: "departed", departedAt: now }),
+          expect.objectContaining({ id: secondSessionId, status: "active" }),
+        ]),
+      );
+      expect(state?.presenceGenerations.at(-1)).toMatchObject({
+        generation: 2n,
+        status: "connected",
+        connectionCount: 2,
+      });
+      await expect(
+        connection.lobbyStates.issueRealtimeTicket({
+          lobbyId,
+          sessionTokenHash: secondTokenHash,
+          ticketHash: outstandingTicketHash,
+          ttlSeconds: 60,
+        }),
+      ).resolves.toMatchObject({ ok: true });
+
+      const firstClosingSessionId =
+        closeOrder === "departed-first" ? firstSessionId : secondSessionId;
+      const finalClosingSessionId =
+        closeOrder === "departed-first" ? secondSessionId : firstSessionId;
+      now = new Date("2026-07-17T13:01:00.000Z");
+      await connection.lobbyStates.unregisterRealtimeConnection({
+        lobbyId,
+        participantId,
+        participantSessionId: firstClosingSessionId,
+        presenceGeneration: 2,
+        reconnectWindowSeconds: 120,
+      });
+      state = await connection.lobbyStates.findById(lobbyId);
+      expect(state?.sessions.find(({ id }) => id === secondSessionId)?.status).toBe("active");
+      expect(state?.presenceGenerations.at(-1)).toMatchObject({
+        status: "connected",
+        connectionCount: 1,
+      });
+
+      now = new Date("2026-07-17T13:02:00.000Z");
+      await connection.lobbyStates.unregisterRealtimeConnection({
+        lobbyId,
+        participantId,
+        participantSessionId: finalClosingSessionId,
+        presenceGeneration: 2,
+        reconnectWindowSeconds: 120,
+      });
+      state = await connection.lobbyStates.findById(lobbyId);
+      expect(state?.sessions.find(({ id }) => id === secondSessionId)).toMatchObject({
+        status: "disconnected",
+        disconnectedAt: now,
+        rejoinUntil: new Date("2026-07-17T13:04:00.000Z"),
+      });
+      expect(state?.presenceGenerations.at(-1)).toMatchObject({
+        status: "absent",
+        connectionCount: 0,
+        absentSince: now,
+      });
+      await expect(
+        connection.lobbyStates.consumeRealtimeTicket({ ticketHash: outstandingTicketHash }),
+      ).resolves.toBeNull();
+    },
+  );
+
+  test("heartbeats revalidate identity without inflating durable presence", async () => {
+    let now = new Date("2026-07-17T12:40:00.000Z");
+    const connection = await connectWithLifecycleClock(() => now);
+    const state = createLobbyState();
+    await createPersistedLobby(connection, state);
+    const session = state.sessions[0]!;
+    const identity = {
+      lobbyId: state.lobby.id,
+      participantId: session.participantId,
+      participantSessionId: session.id,
+    };
+    const before = await connection.lobbyStates.findById(state.lobby.id);
+
+    now = new Date("2026-07-17T12:41:00.000Z");
+    await expect(connection.lobbyStates.recordRealtimeHeartbeat(identity)).resolves.toBe(true);
+    await expect(
+      connection.lobbyStates.recordRealtimeHeartbeat({
+        ...identity,
+        participantSessionId: `wrong-${session.id}`,
+      }),
+    ).resolves.toBe(false);
+
+    const after = await connection.lobbyStates.findById(state.lobby.id);
+    expect(after?.presenceGenerations).toEqual(before?.presenceGenerations);
+    expect(after?.lobby.lastEventSequence).toBe(before?.lobby.lastEventSequence);
+    expect(after?.events).toEqual(before?.events);
   });
 
   test("replays lobby creation without creating another lobby or participant", async () => {

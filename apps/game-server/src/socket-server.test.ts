@@ -24,6 +24,7 @@ import {
   type GameServer,
   type RealtimeCommandExecutionResult,
 } from "./socket-server.js";
+import { subscribeGameServerToActiveLobbyEvents } from "./runtime.js";
 
 const ORIGIN = "https://bingo.example.test";
 const NOW = "2026-07-17T20:00:00.000Z";
@@ -676,6 +677,12 @@ interface HarnessOptions {
   ) => Promise<RealtimeCommandExecutionResult>;
   readonly snapshot?: (identity: AuthenticatedRealtimeIdentity) => Promise<Snapshot | null>;
   readonly authorize?: (identity: AuthenticatedRealtimeIdentity) => Promise<boolean>;
+  readonly registerPresence?: (identity: AuthenticatedRealtimeIdentity) => Promise<number | null>;
+  readonly recordHeartbeat?: (identity: AuthenticatedRealtimeIdentity) => Promise<boolean>;
+  readonly unregisterPresence?: (
+    identity: AuthenticatedRealtimeIdentity,
+    presenceGeneration: number,
+  ) => Promise<void>;
   readonly limits?: {
     readonly connectionsPerMinute?: number;
     readonly commandsPerMinute?: number;
@@ -744,6 +751,12 @@ async function createHarness(options: HarnessOptions = {}) {
     identityAuthorizer: {
       isIdentityActive: async (identity) => options.authorize?.(identity) ?? true,
     },
+    presenceLifecycle: {
+      registerConnection: async (identity) => options.registerPresence?.(identity) ?? 1,
+      recordHeartbeat: async (identity) => options.recordHeartbeat?.(identity) ?? true,
+      unregisterConnection: async (identity, presenceGeneration) =>
+        options.unregisterPresence?.(identity, presenceGeneration),
+    },
   });
   servers.push(server);
   const address = await server.listen({ host: "127.0.0.1", port: 0 });
@@ -805,6 +818,272 @@ async function createHarness(options: HarnessOptions = {}) {
 }
 
 describe("authenticated Socket.IO authority", () => {
+  test("tracks multiple tabs for one participant session and releases each connection", async () => {
+    const firstCredential = ticket(60);
+    const secondCredential = ticket(61);
+    const registered: AuthenticatedRealtimeIdentity[] = [];
+    const heartbeats: AuthenticatedRealtimeIdentity[] = [];
+    const unregistered: AuthenticatedRealtimeIdentity[] = [];
+    const bothHeartbeats = deferred();
+    const firstRelease = deferred();
+    const secondRelease = deferred();
+    const harness = await createHarness({
+      tickets: new Map([
+        [ticketHash(firstCredential), identities.host],
+        [ticketHash(secondCredential), identities.host],
+      ]),
+      registerPresence: async (identity) => {
+        registered.push(identity);
+        return 7;
+      },
+      recordHeartbeat: async (identity) => {
+        heartbeats.push(identity);
+        if (heartbeats.length === 2) bothHeartbeats.resolve();
+        return true;
+      },
+      unregisterPresence: async (identity, presenceGeneration) => {
+        expect(presenceGeneration).toBe(7);
+        unregistered.push(identity);
+        (unregistered.length === 1 ? firstRelease : secondRelease).resolve();
+      },
+    });
+    const first = await harness.connect(firstCredential);
+    const second = await harness.connect(secondCredential);
+
+    first.emit("v1:command", { schemaVersion: CONTRACT_SCHEMA_VERSION, type: "heartbeat" });
+    second.emit("v1:command", { schemaVersion: CONTRACT_SCHEMA_VERSION, type: "heartbeat" });
+    await waitForSignal(bothHeartbeats.promise, "both authenticated heartbeats");
+
+    first.disconnect();
+    await waitForSignal(firstRelease.promise, "the first tab presence release");
+    expect(second.connected).toBe(true);
+    expect(unregistered).toEqual([identities.host]);
+
+    second.disconnect();
+    await waitForSignal(secondRelease.promise, "the final tab presence release");
+    expect(registered).toEqual([identities.host, identities.host]);
+    expect(heartbeats).toEqual([identities.host, identities.host]);
+    expect(unregistered).toEqual([identities.host, identities.host]);
+  });
+
+  test("fails closed before snapshot restoration when presence registration is rejected", async () => {
+    const credential = ticket(62);
+    let snapshotQueries = 0;
+    const harness = await createHarness({
+      tickets: new Map([[ticketHash(credential), identities.host]]),
+      registerPresence: async () => null,
+      snapshot: async () => {
+        snapshotQueries += 1;
+        return waitingSnapshot;
+      },
+    });
+    const client = harness.open(credential);
+    const error = once<unknown>(client, "v1:error");
+    const disconnected = once<void>(client, "disconnect");
+
+    client.connect();
+    await once<void>(client, "connect");
+
+    await expect(error).resolves.toMatchObject({ code: "UNAUTHORIZED" });
+    await disconnected;
+    expect(snapshotQueries).toBe(0);
+  });
+
+  test("disconnects with a safe error when heartbeat persistence fails", async () => {
+    const credential = ticket(63);
+    const harness = await createHarness({
+      tickets: new Map([[ticketHash(credential), identities.host]]),
+      recordHeartbeat: async () => {
+        throw new Error("private heartbeat persistence detail");
+      },
+    });
+    const client = await harness.connect(credential);
+    const error = once<unknown>(client, "v1:error");
+    const disconnected = once<void>(client, "disconnect");
+
+    client.emit("v1:command", { schemaVersion: CONTRACT_SCHEMA_VERSION, type: "heartbeat" });
+
+    await expect(error).resolves.toMatchObject({ code: "INTERNAL_ERROR" });
+    await disconnected;
+  });
+
+  test("stops accepting connections when disconnect presence persistence fails", async () => {
+    const firstCredential = ticket(64);
+    const secondCredential = ticket(65);
+    const releaseAttempted = deferred();
+    const harness = await createHarness({
+      tickets: new Map([
+        [ticketHash(firstCredential), identities.host],
+        [ticketHash(secondCredential), identities.host],
+      ]),
+      unregisterPresence: async () => {
+        releaseAttempted.resolve();
+        throw new Error("private disconnect persistence detail");
+      },
+    });
+    const first = await harness.connect(firstCredential);
+    const authorityFailure = harness.server.failure.then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    first.disconnect();
+    await waitForSignal(releaseAttempted.promise, "the failed presence release");
+    await expect(authorityFailure).resolves.toMatchObject({
+      message: "Game server authority failed.",
+    });
+
+    await expect(harness.reject(secondCredential)).resolves.toBeDefined();
+  });
+
+  testDatabase("aggregates PostgreSQL-backed tabs and relays only the final absence", async () => {
+    let now = new Date("2026-07-17T21:00:00.000Z");
+    const database = await connectDatabase(testDatabaseUrl!, { lifecycleClock: () => now });
+    let subscription: Awaited<ReturnType<typeof subscribeGameServerToActiveLobbyEvents>> | null =
+      null;
+    let harness: Awaited<ReturnType<typeof createHarness>> | null = null;
+    try {
+      const suffix = randomUUID();
+      const lobbyId = `lobby-tabs-${suffix}`;
+      const hostParticipantId = `participant-tabs-host-${suffix}`;
+      const hostSessionId = `session-tabs-host-${suffix}`;
+      const playerParticipantId = `participant-tabs-player-${suffix}`;
+      const playerSessionId = `session-tabs-player-${suffix}`;
+      const hostTokenHash = new Uint8Array(randomBytes(32));
+      const playerTokenHash = new Uint8Array(randomBytes(32));
+      const created = await database.lobbyStates.createLobbyWithHost({
+        lobbyId,
+        participantId: hostParticipantId,
+        sessionId: hostSessionId,
+        commandId: `command-tabs-host-${suffix}`,
+        username: `Tabs Host ${suffix}`,
+        themeId: "classic",
+        tokenHash: hostTokenHash,
+        issuedAt: new Date("2026-07-17T20:59:00.000Z"),
+        maxActiveLobbies: 100_000,
+        nextCode: randomLobbyCode,
+      });
+      if (!created.ok) throw new Error(created.error.message);
+      const joined = await database.lobbyStates.joinLobbyWithSession({
+        lobbyId,
+        lobbyCode: created.entry.lobbyCode,
+        participantId: playerParticipantId,
+        sessionId: playerSessionId,
+        commandId: `command-tabs-player-${suffix}`,
+        username: `Tabs Player ${suffix}`,
+        tokenHash: playerTokenHash,
+        issuedAt: new Date("2026-07-17T20:59:30.000Z"),
+        maxPlayersPerLobby: 25,
+      });
+      if (!joined.ok) throw new Error(joined.error.message);
+
+      const credentials = {
+        player: Buffer.from(randomBytes(32)).toString("base64url"),
+        hostFirst: Buffer.from(randomBytes(32)).toString("base64url"),
+        hostSecond: Buffer.from(randomBytes(32)).toString("base64url"),
+        hostUnused: Buffer.from(randomBytes(32)).toString("base64url"),
+      };
+      for (const [credential, tokenHash] of [
+        [credentials.player, playerTokenHash],
+        [credentials.hostFirst, hostTokenHash],
+        [credentials.hostSecond, hostTokenHash],
+        [credentials.hostUnused, hostTokenHash],
+      ] as const) {
+        const issued = await database.lobbyStates.issueRealtimeTicket({
+          lobbyId,
+          sessionTokenHash: tokenHash,
+          ticketHash: Buffer.from(ticketHash(credential), "hex"),
+          ttlSeconds: 60,
+        });
+        if (!issued.ok) throw new Error(issued.error.code);
+      }
+
+      const firstHostRelease = deferred();
+      const finalHostRelease = deferred();
+      let hostReleaseCount = 0;
+      harness = await createHarness({
+        consumeTicket: (hash) =>
+          database.lobbyStates.consumeRealtimeTicket({
+            ticketHash: Buffer.from(hash, "hex"),
+          }),
+        snapshot: (identity) => database.lobbyStates.findAuthorizedSnapshotByIdentity(identity),
+        authorize: (identity) => database.lobbyStates.isParticipantSessionIdentityActive(identity),
+        registerPresence: (identity) => database.lobbyStates.registerRealtimeConnection(identity),
+        recordHeartbeat: (identity) => database.lobbyStates.recordRealtimeHeartbeat(identity),
+        unregisterPresence: async (identity, presenceGeneration) => {
+          await database.lobbyStates.unregisterRealtimeConnection({
+            ...identity,
+            presenceGeneration,
+            reconnectWindowSeconds: 120,
+          });
+          if (identity.participantId === hostParticipantId) {
+            hostReleaseCount += 1;
+            (hostReleaseCount === 1 ? firstHostRelease : finalHostRelease).resolve();
+          }
+        },
+      });
+      subscription = await subscribeGameServerToActiveLobbyEvents(
+        database.activeLobbyEvents,
+        harness.server,
+      );
+
+      const player = await harness.connect(credentials.player);
+      const hostConnected = once<unknown>(player, "v1:lobby-event");
+      const firstHost = await harness.connect(credentials.hostFirst);
+      await expect(hostConnected).resolves.toMatchObject({
+        type: "presence",
+        presence: { participantId: hostParticipantId, status: "connected" },
+      });
+      const secondHost = await harness.connect(credentials.hostSecond);
+
+      firstHost.disconnect();
+      await waitForSignal(firstHostRelease.promise, "the first PostgreSQL host tab release");
+      const resynced = once<{ snapshot: Snapshot }>(player, "v1:snapshot");
+      player.emit("v1:command", {
+        schemaVersion: CONTRACT_SCHEMA_VERSION,
+        type: "resync",
+        lastEventSequence: null,
+      });
+      const afterFirstClose = await resynced;
+      expect(
+        afterFirstClose.snapshot.participants.find(({ id }) => id === hostParticipantId)?.presence,
+      ).toMatchObject({ status: "connected" });
+
+      now = new Date("2026-07-17T21:01:00.000Z");
+      const hostAbsent = once<unknown>(player, "v1:lobby-event");
+      secondHost.disconnect();
+      await waitForSignal(finalHostRelease.promise, "the final PostgreSQL host tab release");
+      await expect(hostAbsent).resolves.toMatchObject({
+        type: "presence",
+        presence: {
+          participantId: hostParticipantId,
+          status: "absent",
+          absentSince: now.toISOString(),
+        },
+      });
+      const persisted = await database.lobbyStates.findById(lobbyId);
+      expect(
+        persisted?.presenceGenerations
+          .filter(({ participantId }) => participantId === hostParticipantId)
+          .at(-1),
+      ).toMatchObject({ status: "absent", connectionCount: 0 });
+      expect(persisted?.sessions.find(({ id }) => id === hostSessionId)).toMatchObject({
+        status: "disconnected",
+        disconnectedAt: now,
+        rejoinUntil: new Date("2026-07-17T21:03:00.000Z"),
+      });
+      await expect(
+        database.lobbyStates.consumeRealtimeTicket({
+          ticketHash: Buffer.from(ticketHash(credentials.hostUnused), "hex"),
+        }),
+      ).resolves.toBeNull();
+    } finally {
+      await harness?.server.close();
+      await subscription?.close();
+      await database.disconnect();
+    }
+  });
+
   test("automatically restores the latest full snapshot with a fresh reconnect ticket", async () => {
     const firstCredential = ticket(50);
     const reconnectCredential = ticket(51);
@@ -2665,7 +2944,7 @@ describe("authenticated Socket.IO authority", () => {
     const heartbeatCredential = ticket(43);
     const heartbeatHarness = await createHarness({
       tickets: new Map([[ticketHash(heartbeatCredential), identities.host]]),
-      authorize: async () => false,
+      recordHeartbeat: async () => false,
     });
     const heartbeatClient = await heartbeatHarness.connect(heartbeatCredential);
     const heartbeatError = once<unknown>(heartbeatClient, "v1:error");

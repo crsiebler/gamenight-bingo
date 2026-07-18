@@ -85,7 +85,7 @@ export interface RunningGameServer {
 interface SupervisedGameServerResources {
   readonly address: { readonly host: string; readonly port: number };
   readonly eventSubscription: ActiveLobbyEventSubscription;
-  readonly server: Pick<GameServer, "close">;
+  readonly server: Pick<GameServer, "close" | "failure">;
   readonly disconnectDatabase: () => Promise<void>;
 }
 
@@ -93,7 +93,7 @@ export function superviseGameServerResources(
   resources: SupervisedGameServerResources,
 ): RunningGameServer {
   let shutdownPromise: Promise<void> | null = null;
-  let fatalSubscriptionFailure = false;
+  let fatalRuntimeFailure = false;
   let completionSettled = false;
   let resolveCompletion!: () => void;
   let rejectCompletion!: (reason: unknown) => void;
@@ -122,12 +122,26 @@ export function superviseGameServerResources(
     return shutdownPromise;
   };
   void resources.eventSubscription.completion.catch(() => {
-    fatalSubscriptionFailure = true;
+    fatalRuntimeFailure = true;
     void shutdown().then(
       () => {
         if (!completionSettled) {
           completionSettled = true;
           rejectCompletion(new Error("Active-lobby event subscription failed."));
+        }
+      },
+      () => {
+        rejectSafeShutdown();
+      },
+    );
+  });
+  void resources.server.failure.catch(() => {
+    fatalRuntimeFailure = true;
+    void shutdown().then(
+      () => {
+        if (!completionSettled) {
+          completionSettled = true;
+          rejectCompletion(new Error("Game server authority failed."));
         }
       },
       () => {
@@ -146,7 +160,7 @@ export function superviseGameServerResources(
         rejectSafeShutdown();
         throw new Error("The game server failed to shut down safely.");
       }
-      if (!fatalSubscriptionFailure && !completionSettled) {
+      if (!fatalRuntimeFailure && !completionSettled) {
         completionSettled = true;
         resolveCompletion();
       }
@@ -175,7 +189,7 @@ export function subscribeGameServerToActiveLobbyEvents(
 export async function startGameServerRuntime(
   environment: Readonly<Record<string, string | undefined>>,
 ): Promise<RunningGameServer> {
-  parseRuntimeConfig(environment);
+  const runtimeConfiguration = parseRuntimeConfig(environment);
   const configuration = parseGameServerConfiguration(environment);
   const database = await connectDatabase(configuration.databaseUrl, {
     roundCommands: {
@@ -215,6 +229,18 @@ export async function startGameServerRuntime(
       isIdentityActive: (identity) =>
         database.lobbyStates.isParticipantSessionIdentityActive({ ...identity }),
     },
+    presenceLifecycle: {
+      registerConnection: (identity) =>
+        database.lobbyStates.registerRealtimeConnection({ ...identity }),
+      recordHeartbeat: (identity) => database.lobbyStates.recordRealtimeHeartbeat({ ...identity }),
+      unregisterConnection: async (identity, presenceGeneration) => {
+        await database.lobbyStates.unregisterRealtimeConnection({
+          ...identity,
+          presenceGeneration,
+          reconnectWindowSeconds: runtimeConfiguration.playerReconnectWindowSeconds,
+        });
+      },
+    },
   });
 
   let eventSubscription: ActiveLobbyEventSubscription | null = null;
@@ -228,6 +254,10 @@ export async function startGameServerRuntime(
         host: configuration.host,
         port: configuration.port,
       }),
+      server.failure.then(
+        () => Promise.reject(new Error("Game server authority ended unexpectedly.")),
+        () => Promise.reject(new Error("Game server authority failed.")),
+      ),
       eventSubscription.completion.then(
         () => Promise.reject(new Error("Active-lobby event subscription ended unexpectedly.")),
         () => Promise.reject(new Error("Active-lobby event subscription failed.")),

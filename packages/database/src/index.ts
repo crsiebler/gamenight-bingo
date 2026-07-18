@@ -49,6 +49,8 @@ export {
   type PendingCommandCommit,
   type PresenceStatus,
   type RecognizedParticipantSession,
+  type RealtimePresenceDisconnectInput,
+  type RealtimePresenceIdentity,
   type RoundEligibility,
   type RoundStage,
   type ReserveParticipantOptions,
