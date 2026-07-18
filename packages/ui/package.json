@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "exports": "./src/index.ts",
+  "peerDependencies": {
+    "react": "19.2.7"
+  },
   "scripts": {
     "typecheck": "tsc --project tsconfig.json --pretty false"
   }

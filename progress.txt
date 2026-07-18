@@ -56,6 +56,8 @@ Next story: US-001
 - Co-winner settlement uses an exact persisted `(lobbyId, roundId, triggeringCallId, deadline)` lease with bounded fail-closed scheduling. Only an incomplete-to-complete mark of the latest called ball opens or joins the exclusive-deadline window; the first mark persists one integrity-bound mixed lobby/private result, and settlement orders the complete durable winner set by participant ID before one sequenced broadcast.
 - One Line stage continuation updates the same durable round in place through Two Lines and Blackout: preserve cards/marks, calls, and private draw order; replace prior stage winners with only latest-ball completions that also satisfy the next pattern; and leave `nextCallAt` null when all draw positions are already called.
 - Inactive-lobby cleanup uses bounded candidate scans only as hints, revalidates the configured threshold plus active-call/connection protection under the Serializable lobby fence with lock-time sampling, and deletes only the lobby parent so PostgreSQL cascades all owned private state. The game server sweeps before lease recovery, runs nonoverlapping periodic cleanup, and treats cleanup failure as fatal; successful join, rejoin, connection, heartbeat, and sequenced presence transitions advance activity with `GREATEST`.
+- Shared framework-neutral controls live in `packages/ui`; Next-specific adapters and the atoms/molecules/organisms/templates/lib alias barrels live under `apps/web/src`, with matching app/root TypeScript paths and `react-jsx` so both Next builds and Vitest-imported app TSX resolve consistently.
+- After removing a temporary App Router browser harness, run the final production Next build before typecheck so generated `.next/types` no longer reference deleted preview pages, then restore any unrelated `next-env.d.ts` working-tree side effect without staging it.
 
 Append-only iteration log
 -------------------------
@@ -4269,3 +4271,67 @@ Targeted re-review outcome for US-043 at 2026-07-18 05:11:14 MST:
 - `qa-expert` returned an empty actionable finding list and confirmed the blocked-worker and runtime cleanup-failure supervision remediations leave no residual risk in scope.
 - `postgres-pro` returned an empty actionable finding list and confirmed each retry resamples lifecycle time after the lobby fence, replay/failure paths do not refresh activity, `GREATEST` remains monotonic, and the contention test safely drains blocked work.
 - No in-scope critical, high, or medium findings remain; US-043 can be marked passing and committed after the final staged consistency check.
+
+## 2026-07-18 05:39:46 MST - US-044
+- What was implemented
+  - Authenticated GitHub CLI access and reviewed all eleven required private GroundsControl component/configuration references through the mandated per-file raw `gh api` command without persisting or adding a runtime dependency on the source project.
+  - Added framework-neutral React 19 Button, Text, Option, Input, TextArea, and Select foundations in `packages/ui`, plus Next-specific LinkButton and script-safe JsonLd adapters in the web app.
+  - Corrected reference accessibility issues with native semantics, caller-safe IDs, associated labels/descriptions/errors, native required/invalid/disabled behavior, resizable textareas, 44px targets, distinct non-color state text, single-element links, and escaped JSON-LD.
+  - Added atoms/molecules/organisms/templates/lib alias barrels with matching web/root TypeScript paths and a React JSX transform that works in both Vitest and production Next builds.
+- Files changed: `AGENTS.md`, `apps/web/package.json`, `apps/web/tsconfig.json`, `apps/web/src/ui.ts`, `apps/web/src/components/atoms/index.ts`, `apps/web/src/components/atoms/json-ld.tsx`, `apps/web/src/components/atoms/link-button.tsx`, `apps/web/src/components/molecules/index.ts`, `apps/web/src/components/organisms/index.ts`, `apps/web/src/components/templates/index.ts`, `apps/web/src/lib/index.ts`, `bun.lock`, `packages/ui/package.json`, `packages/ui/tsconfig.json`, `packages/ui/src/index.ts`, `packages/ui/src/atoms/button.tsx`, `packages/ui/src/atoms/option.tsx`, `packages/ui/src/atoms/text.tsx`, `packages/ui/src/molecules/field.tsx`, `packages/ui/src/molecules/input.tsx`, `packages/ui/src/molecules/select.tsx`, `packages/ui/src/molecules/text-area.tsx`, `tests/ui-foundations.test.tsx`, `tsconfig.json`, `vitest.config.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-044 - Adapt GroundsControl references into accessible UI foundations`
+- Auto approval: `enabled`
+- Checks:
+  - `gh auth status` (pass; authenticated before private-source access)
+  - Eleven required `gh api "repos/crsiebler/groundscontrol.com/contents/<path>?ref=main" -H "Accept: application/vnd.github.raw+json"` reads (pass)
+  - `bunx vitest run tests/ui-foundations.test.tsx` (expected fail before implementation: 7 missing-export failures; pass after implementation with 7 tests)
+  - LinkButton custom-rel regression (expected fail before hardening because `noopener`/`noreferrer` were lost; pass after implementation)
+  - `bun install && bun install --frozen-lockfile` (pass; lock refreshed and 393 installs verified)
+  - `bun run test` (pass after final no-page Next regeneration; 25 files passed, 1 database file skipped, 466 tests passed, and 135 database-backed tests skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `DATABASE_URL=<approved local Compose database> bun run --cwd apps/web build` (pass; production Next build and aliases)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun run format:check` (fails only on three pre-existing untracked Lighthouse/DOM artifacts)
+  - `git diff --check` (pass)
+  - Manual dev-browser desktop/mobile verification at 320 CSS pixels (pass; labels, descriptions, native selection/input, logical Tab order, disabled-control skip, 44px targets, and no horizontal overflow)
+  - Mobile Lighthouse snapshot (pass; accessibility 100, best practices 100, SEO 100, agentic browsing 100)
+- Implementation agents:
+  - Recommended: `react-specialist`, `accessibility-tester`
+  - Used: `react-specialist`, `accessibility-tester` for component boundaries, React 19 typing, native semantics, JSON-LD safety, alias risks, test coverage, and browser-verification guidance
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and UI-triggered `ui-designer`/`ux-researcher`; targeted re-review by `qa-expert`, `ui-designer`, and `ux-researcher` planned after substantive fixes
+  - Findings: initial exact-`@` alias, theme-adaptation, and dynamic-error announcement findings fixed; targeted re-review returned empty actionable finding lists
+- Decisions (why):
+  - Kept framework-neutral controls in `packages/ui` and only Next Link/JSON-LD adapters in `apps/web` because shared controls must not acquire a Next runtime dependency.
+  - Used native buttons, anchors, inputs, textareas, selects, and options instead of recreating behavior because browser semantics provide the most reliable keyboard and assistive-technology foundation.
+  - Added no GroundsControl, class-merging, icon, accessibility-test, or styling dependency because the existing React/RTL stack and small inline semantic styles satisfy this foundation without unnecessary package surface.
+  - Configured empty organism/template/lib barrels as real alias targets but deferred flow-specific components and committed pages to their dependency-ordered stories rather than adding placeholder UI behavior.
+  - Kept `react-jsx` in the web workspace after focused Vitest and production Next verification because `jsx: preserve` left imported app TSX untransformed in the current Vitest/Vite toolchain.
+  - Testing decision: this is new user-facing component behavior, so test-first was required; the seven-component suite and later LinkButton hardening regression each failed for the missing behavior before the minimal implementation made them pass.
+- **Learnings for future iterations:**
+  - App-local aliases must be mirrored in the root TypeScript config because repository-wide `tsc` checks app source outside the web workspace command.
+  - Keep composable field controls responsible for explicit/generated IDs and complete `aria-describedby` wiring so later forms do not duplicate or drift from label/error semantics.
+  - Browser-check shared controls through a removable local harness when the dependency-ordered product page does not exist yet; do not commit a component-gallery route solely for verification.
+- Known issues / follow-ups:
+  - Root `bun run format:check` remains blocked by unrelated untracked Lighthouse/DOM artifacts; every tracked file passes Prettier.
+  - The unrelated `apps/web/next-env.d.ts` side effect and pre-existing browser-report artifacts remain untouched and will not be staged.
+  - US-045 owns the real public landing/create page and will provide the first committed page/template/organism consumers of these foundations.
+- Next iteration start:
+  - If staged review passes, implement US-045 using the shared controls and app aliases for the public landing/create flow.
+---
+
+Review remediation for US-044 at 2026-07-18 05:48:30 MST:
+- The initial `code-reviewer`, `qa-expert`, `ui-designer`, and `ux-researcher` pass produced three deduplicated in-scope medium findings: the exact bare `@` alias was absent, fixed inline colors could not adapt safely to dark themes, and errors inserted after mount had no live-region announcement.
+- Added exact `@` mappings to a safe UI root barrel in both web/root TypeScript configs, configured matching Vitest project aliases, and exercised every required layer alias in the focused suite.
+- Replaced fixed presentation colors with semantic `--bingo-*` custom properties retaining accessible fallbacks, so later themes can override presentation without altering component semantics.
+- Added a failing rerender regression before giving inserted field errors `role="alert"`; the revised field remains described by the error while assistive technology receives a controlled assertive announcement.
+- Post-fix checks: focused component suite passes 9 tests, typecheck and lint pass, the exact `@` alias passes a production Next build, and a dark-theme 320px browser pass confirms semantic variable overrides, the alert node, 44px targets, no horizontal overflow, and Lighthouse 100 scores in all four reviewed categories.
+- The first aggregate rerun after deleting the temporary browser harness found only stale generated `.next/types` references; rebuilding the final no-page app cleared them, and the complete 466-test suite then passed.
+- Targeted re-review: pending `qa-expert` for exact alias coverage and `ui-designer`/`ux-researcher` for theme/error remediations; `code-reviewer` is not repeated because its initial findings list was empty.
+
+Targeted re-review outcome for US-044 at 2026-07-18 05:53:12 MST:
+- `qa-expert`, `ui-designer`, and `ux-researcher` returned empty actionable finding lists after reviewing the revised complete staged diff and browser evidence.
+- Exact root/layer alias resolution, semantic theme variables, and mounted-field error announcement are resolved with no remaining in-scope critical, high, or medium findings.
+- Residual risk is limited to later real-form screen-reader timing and committed page integration, both owned by the dependency-ordered frontend flow stories.

@@ -1,7 +1,22 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "jsx": "preserve",
+    "baseUrl": ".",
+    "jsx": "react-jsx",
+    "paths": {
+      "@": ["./src/ui.ts"],
+      "@/*": ["./src/*"],
+      "@/atoms": ["./src/components/atoms/index.ts"],
+      "@/atoms/*": ["./src/components/atoms/*"],
+      "@/lib": ["./src/lib/index.ts"],
+      "@/lib/*": ["./src/lib/*"],
+      "@/molecules": ["./src/components/molecules/index.ts"],
+      "@/molecules/*": ["./src/components/molecules/*"],
+      "@/organisms": ["./src/components/organisms/index.ts"],
+      "@/organisms/*": ["./src/components/organisms/*"],
+      "@/templates": ["./src/components/templates/index.ts"],
+      "@/templates/*": ["./src/components/templates/*"]
+    },
     "plugins": [{ "name": "next" }],
     "types": ["node"]
   },

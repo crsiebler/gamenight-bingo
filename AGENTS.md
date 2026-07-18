@@ -358,6 +358,12 @@ then refactor while green.
 - Build mobile-first while keeping host workflows clear on larger screens.
 - Use the planned atoms/molecules/organisms/templates/pages organization and
   shared semantic components instead of duplicating controls.
+- Keep framework-neutral controls in `packages/ui`; keep Next-specific adapters
+  under `apps/web/src/components` and consume both through the app-local `@`
+  aliases mirrored in the root TypeScript config for repository-wide checks.
+- Keep the web workspace on the `react-jsx` transform so Vitest can import app
+  TSX directly; verify any TypeScript/alias change with both focused component
+  tests and a production Next build.
 - Treat server snapshots and sequenced committed events as UI state inputs; do
   not infer authoritative game state from animation or local timers.
 - Show loading, offline, reconnecting, snapshot-syncing, grace, paused, waiting,
