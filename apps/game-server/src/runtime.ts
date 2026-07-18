@@ -206,6 +206,7 @@ export async function startGameServerRuntime(
     roundCommands: {
       patterns: patternCatalog,
       nearWinFeedbackEnabled: true,
+      coWinnerWindowMs: runtimeConfiguration.coWinnerWindowMs,
       clock: () => new Date(),
       randomBytes: (length) => new Uint8Array(randomBytes(length)),
       nextId: (prefix) => `${prefix}-${randomUUID()}`,
@@ -266,6 +267,12 @@ export async function startGameServerRuntime(
       findAutomaticCallLeases: () => database.roundCommands.findAutomaticCallLeases(),
       findAutomaticCallLease: (lobbyId) => database.roundCommands.findAutomaticCallLease(lobbyId),
       executeAutomaticCall: (lease) => database.roundCommands.executeAutomaticCall(lease),
+    },
+    coWinnerSettlementLifecycle: {
+      findCoWinnerSettlementLeases: () => database.roundCommands.findCoWinnerSettlementLeases(),
+      findCoWinnerSettlementLease: (lobbyId) =>
+        database.roundCommands.findCoWinnerSettlementLease(lobbyId),
+      executeCoWinnerSettlement: (lease) => database.roundCommands.executeCoWinnerSettlement(lease),
     },
   });
 

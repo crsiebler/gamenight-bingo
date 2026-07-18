@@ -38,6 +38,7 @@ const handler =
     roundCommands: {
       patterns: patternCatalog,
       nearWinFeedbackEnabled: true,
+      coWinnerWindowMs: runtimeConfig.coWinnerWindowMs,
       clock: () => new Date(),
       randomBytes: (length) => new Uint8Array(randomBytes(length)),
       nextId: (prefix) => `${prefix}-${randomUUID()}`,

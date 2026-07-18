@@ -150,6 +150,14 @@ invalid counts, timestamps, or durations.
   so stale reads cannot replace current work or monopolize bounded workers.
   Latch scheduler failures as terminal before draining or reconciling more work,
   and recheck terminal/closed state after asynchronous recovery before binding.
+- Treat co-winner settlement as a separate exact persisted lobby, round,
+  triggering-call, and deadline lease with the same bounded, generation-fenced,
+  fail-closed scheduler discipline. A winner must transition from incomplete to
+  complete by marking the latest called ball; admit additional completions only
+  for that triggering call before the exclusive close deadline. Persist the
+  winning mark's sequenced window event and participant-private batch atomically
+  in one integrity-bound mixed result, then settle and broadcast the complete
+  participant-ID-ordered winner set under the lobby fence.
 - Assign active-lobby events a monotonic sequence. Clients apply sequences
   idempotently and request resynchronization when continuity is uncertain.
 - Put active-lobby sequences only on messages delivered to every authorized

@@ -12,7 +12,11 @@ import {
   type ParticipantPrivateEvent,
   type Snapshot,
 } from "@gamenight-bingo/contracts";
-import { connectDatabase, type NewActiveLobbyState } from "@gamenight-bingo/database";
+import {
+  connectDatabase,
+  type CoWinnerSettlementLease,
+  type NewActiveLobbyState,
+} from "@gamenight-bingo/database";
 import { patternCatalog } from "@gamenight-bingo/patterns";
 import { io as createClient, Manager, type Socket } from "socket.io-client";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -726,6 +730,26 @@ interface HarnessOptions {
     roundId: string;
     deadline: Date;
   }) => Promise<"called" | "stale" | "too-early" | "blocked" | "exhausted">;
+  readonly findCoWinnerSettlementLeases?: () => Promise<
+    readonly {
+      lobbyId: string;
+      roundId: string;
+      triggeringCallId: string;
+      deadline: Date;
+    }[]
+  >;
+  readonly findCoWinnerSettlementLease?: (lobbyId: string) => Promise<{
+    lobbyId: string;
+    roundId: string;
+    triggeringCallId: string;
+    deadline: Date;
+  } | null>;
+  readonly executeCoWinnerSettlement?: (lease: {
+    lobbyId: string;
+    roundId: string;
+    triggeringCallId: string;
+    deadline: Date;
+  }) => Promise<"settled" | "stale" | "too-early">;
   readonly beforeListen?: (server: GameServer) => Promise<void>;
   readonly limits?: {
     readonly connectionsPerMinute?: number;
@@ -733,6 +757,7 @@ interface HarnessOptions {
     readonly maximumConnections?: number;
     readonly connectionsPerSession?: number;
     readonly maximumQueuedAutomaticCalls?: number;
+    readonly maximumQueuedCoWinnerSettlements?: number;
   };
 }
 
@@ -813,6 +838,17 @@ async function createHarness(options: HarnessOptions = {}) {
       executeAutomaticCall: (lease: { lobbyId: string; roundId: string; deadline: Date }) =>
         options.executeAutomaticCall?.(lease) ?? Promise.resolve("stale"),
     },
+    coWinnerSettlementLifecycle: {
+      findCoWinnerSettlementLeases: async () => options.findCoWinnerSettlementLeases?.() ?? [],
+      findCoWinnerSettlementLease: async (lobbyId: string) =>
+        options.findCoWinnerSettlementLease?.(lobbyId) ?? null,
+      executeCoWinnerSettlement: (lease: {
+        lobbyId: string;
+        roundId: string;
+        triggeringCallId: string;
+        deadline: Date;
+      }) => options.executeCoWinnerSettlement?.(lease) ?? Promise.resolve("stale"),
+    },
   } as GameServerOptions;
   const server = createGameServer(serverOptions);
   servers.push(server);
@@ -876,6 +912,376 @@ async function createHarness(options: HarnessOptions = {}) {
 }
 
 describe("authenticated Socket.IO authority", () => {
+  test("recovers and settles an exact co-winner deadline after two seconds", async () => {
+    const lease = {
+      lobbyId: identities.host.lobbyId,
+      roundId: "round-co-winner",
+      triggeringCallId: "call-co-winner",
+      deadline: new Date(Date.parse(NOW) + 2_000),
+    };
+    const attempts: unknown[] = [];
+    let currentLease: typeof lease | null = lease;
+    vi.useFakeTimers({ now: new Date(NOW) });
+
+    try {
+      await createHarness({
+        clock: () => new Date(),
+        findCoWinnerSettlementLeases: async () => [lease],
+        findCoWinnerSettlementLease: async () => currentLease,
+        executeCoWinnerSettlement: async (attempted) => {
+          attempts.push(attempted);
+          currentLease = null;
+          return "settled";
+        },
+      });
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(attempts).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(attempts).toEqual([lease]);
+    } finally {
+      currentLease = null;
+      vi.useRealTimers();
+    }
+  });
+
+  test("reschedules a co-winner settlement when persistence says its deadline is still early", async () => {
+    let now = new Date(NOW);
+    const lease = {
+      lobbyId: identities.host.lobbyId,
+      roundId: "round-co-winner-early",
+      triggeringCallId: "call-co-winner-early",
+      deadline: new Date(Date.parse(NOW) + 2_000),
+    };
+    const attempts: unknown[] = [];
+    let currentLease: typeof lease | null = lease;
+    vi.useFakeTimers({ now });
+
+    try {
+      await createHarness({
+        clock: () => now,
+        findCoWinnerSettlementLeases: async () => [lease],
+        findCoWinnerSettlementLease: async () => currentLease,
+        executeCoWinnerSettlement: async (attempted) => {
+          attempts.push(attempted);
+          if (attempts.length === 1) return "too-early";
+          currentLease = null;
+          return "settled";
+        },
+      });
+      now = new Date(Date.parse(NOW) + 1_000);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(attempts).toEqual([lease]);
+
+      now = lease.deadline;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(attempts).toEqual([lease, lease]);
+    } finally {
+      currentLease = null;
+      vi.useRealTimers();
+    }
+  });
+
+  test("replaces a live co-winner settlement when its exact persisted lease changes", async () => {
+    const oldLease = {
+      lobbyId: identities.host.lobbyId,
+      roundId: "round-co-winner-old",
+      triggeringCallId: "call-co-winner-old",
+      deadline: new Date(Date.parse(NOW) + 1_000),
+    };
+    const newLease = {
+      ...oldLease,
+      roundId: "round-co-winner-new",
+      triggeringCallId: "call-co-winner-new",
+      deadline: new Date(Date.parse(NOW) + 2_000),
+    };
+    const attempts: unknown[] = [];
+    let currentLease: typeof oldLease | null = oldLease;
+    vi.useFakeTimers({ now: new Date(NOW) });
+
+    let publication: Promise<void> | undefined;
+    try {
+      const harness = await createHarness({
+        clock: () => new Date(),
+        findCoWinnerSettlementLeases: async () => [oldLease],
+        findCoWinnerSettlementLease: async () => currentLease,
+        executeCoWinnerSettlement: async (attempted) => {
+          attempts.push(attempted);
+          currentLease = null;
+          return "settled";
+        },
+      });
+      currentLease = newLease;
+      publication = harness.server.publishLobbyEvent(identities.host.lobbyId, stageEvent);
+      await vi.advanceTimersByTimeAsync(0);
+      await waitForSignal(publication, "the replacement co-winner lease reconciliation");
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(attempts).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(attempts).toEqual([newLease]);
+    } finally {
+      currentLease = null;
+      try {
+        if (publication !== undefined) {
+          await waitForSignal(Promise.allSettled([publication]), "replacement lease cleanup");
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  });
+
+  test("does not bind after shutdown begins during co-winner settlement recovery", async () => {
+    const recoveryStarted = deferred();
+    const releaseRecovery = deferred();
+    const serverReady = deferred<GameServer>();
+    let harnessPromise: ReturnType<typeof createHarness> | undefined;
+
+    try {
+      harnessPromise = createHarness({
+        beforeListen: async (server) => serverReady.resolve(server),
+        findCoWinnerSettlementLeases: async () => {
+          recoveryStarted.resolve();
+          await releaseRecovery.promise;
+          return [];
+        },
+      });
+      const server = await waitForSignal(serverReady.promise, "the recovering co-winner authority");
+      await waitForSignal(recoveryStarted.promise, "the blocked co-winner settlement recovery");
+      const closed = server.close();
+      releaseRecovery.resolve();
+
+      await waitForSignal(closed, "authority shutdown during co-winner recovery");
+      await expect(
+        waitForSignal(harnessPromise, "the cancelled co-winner recovery"),
+      ).rejects.toThrow("closed");
+    } finally {
+      releaseRecovery.resolve();
+      if (harnessPromise !== undefined) {
+        await waitForSignal(
+          Promise.allSettled([harnessPromise]),
+          "co-winner shutdown recovery cleanup",
+        );
+      }
+    }
+  });
+
+  test("runs at most one co-winner settlement per lobby without starving another lobby", async () => {
+    const targetLobbyId = identities.host.lobbyId;
+    const otherLobbyId = identities.otherLobby.lobbyId;
+    const firstTargetLease = {
+      lobbyId: targetLobbyId,
+      roundId: "round-co-winner-target-first",
+      triggeringCallId: "call-co-winner-target-first",
+      deadline: new Date(NOW),
+    };
+    const replacementTargetLease = {
+      ...firstTargetLease,
+      roundId: "round-co-winner-target-replacement",
+      triggeringCallId: "call-co-winner-target-replacement",
+    };
+    const otherLease = {
+      lobbyId: otherLobbyId,
+      roundId: "round-co-winner-other",
+      triggeringCallId: "call-co-winner-other",
+      deadline: new Date(NOW),
+    };
+    const releaseFirstTarget = deferred();
+    const firstTargetStarted = deferred();
+    const otherStarted = deferred();
+    const replacementTargetStarted = deferred();
+    const attempts: CoWinnerSettlementLease[] = [];
+    const currentLeases = new Map<string, CoWinnerSettlementLease | null>([
+      [targetLobbyId, firstTargetLease],
+      [otherLobbyId, null],
+    ]);
+    let firstPublication: Promise<void> | undefined;
+    let secondPublication: Promise<void> | undefined;
+
+    try {
+      const harness = await createHarness({
+        clock: () => new Date(NOW),
+        findCoWinnerSettlementLeases: async () => [firstTargetLease],
+        findCoWinnerSettlementLease: async (lobbyId) => currentLeases.get(lobbyId) ?? null,
+        executeCoWinnerSettlement: async (lease) => {
+          attempts.push(lease);
+          if (lease === firstTargetLease) {
+            firstTargetStarted.resolve();
+            await releaseFirstTarget.promise;
+          }
+          if (lease === otherLease) otherStarted.resolve();
+          if (lease === replacementTargetLease) replacementTargetStarted.resolve();
+          return "stale";
+        },
+      });
+      await waitForSignal(firstTargetStarted.promise, "the first co-winner settlement");
+
+      currentLeases.set(targetLobbyId, replacementTargetLease);
+      firstPublication = harness.server.publishLobbyEvent(targetLobbyId, stageEvent);
+      await waitForSignal(firstPublication, "the replacement co-winner reconciliation");
+      currentLeases.set(otherLobbyId, otherLease);
+      secondPublication = harness.server.publishLobbyEvent(otherLobbyId, stageEvent);
+      await waitForSignal(secondPublication, "the unrelated co-winner reconciliation");
+      await waitForSignal(otherStarted.promise, "the unrelated co-winner settlement");
+      expect(attempts).toEqual([firstTargetLease, otherLease]);
+
+      releaseFirstTarget.resolve();
+      await waitForSignal(replacementTargetStarted.promise, "the replacement co-winner settlement");
+      expect(attempts).toEqual([firstTargetLease, otherLease, replacementTargetLease]);
+    } finally {
+      currentLeases.set(targetLobbyId, null);
+      currentLeases.set(otherLobbyId, null);
+      releaseFirstTarget.resolve();
+      const pending: Promise<unknown>[] = [];
+      if (firstPublication !== undefined) pending.push(firstPublication);
+      if (secondPublication !== undefined) pending.push(secondPublication);
+      await waitForSignal(Promise.allSettled(pending), "co-winner fairness cleanup");
+    }
+  });
+
+  test("fails the authority when a co-winner settlement cannot be persisted", async () => {
+    const lease = {
+      lobbyId: identities.host.lobbyId,
+      roundId: "round-co-winner-failure",
+      triggeringCallId: "call-co-winner-failure",
+      deadline: new Date(NOW),
+    };
+    vi.useFakeTimers({ now: new Date(NOW) });
+
+    try {
+      const harness = await createHarness({
+        clock: () => new Date(),
+        findCoWinnerSettlementLeases: async () => [lease],
+        executeCoWinnerSettlement: async () => {
+          throw new Error("private co-winner persistence detail");
+        },
+      });
+      const authorityFailure = harness.server.failure.catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(
+        waitForSignal(authorityFailure, "the terminal co-winner settlement failure"),
+      ).resolves.toMatchObject({ message: "Game server authority failed." });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("fails the authority when a co-winner lease cannot be reconciled", async () => {
+    const harness = await createHarness({
+      findCoWinnerSettlementLeases: async () => [],
+      findCoWinnerSettlementLease: async () => {
+        throw new Error("private co-winner lease read detail");
+      },
+    });
+    const authorityFailure = harness.server.failure.catch((error: unknown) => error);
+
+    await expect(
+      harness.server.publishLobbyEvent(identities.host.lobbyId, stageEvent),
+    ).rejects.toThrow();
+    await expect(
+      waitForSignal(authorityFailure, "the terminal co-winner reconciliation failure"),
+    ).resolves.toMatchObject({ message: "Game server authority failed." });
+  });
+
+  test("fails closed when the bounded co-winner settlement queue overflows", async () => {
+    const leases = Array.from({ length: 10 }, (_, index) => ({
+      lobbyId: `lobby-co-winner-overflow-${index}`,
+      roundId: `round-co-winner-overflow-${index}`,
+      triggeringCallId: `call-co-winner-overflow-${index}`,
+      deadline: new Date(NOW),
+    }));
+    const releaseSettlements = deferred();
+    const started: CoWinnerSettlementLease[] = [];
+    vi.useFakeTimers({ now: new Date(NOW) });
+
+    try {
+      const harness = await createHarness({
+        clock: () => new Date(),
+        limits: { maximumQueuedCoWinnerSettlements: 1 },
+        findCoWinnerSettlementLeases: async () => leases,
+        executeCoWinnerSettlement: async (lease) => {
+          started.push(lease);
+          await releaseSettlements.promise;
+          return "stale";
+        },
+      });
+      const authorityFailure = harness.server.failure.catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(0);
+
+      await expect(
+        waitForSignal(authorityFailure, "the co-winner queue overflow failure"),
+      ).resolves.toMatchObject({ message: "Game server authority failed." });
+      expect(started).toHaveLength(8);
+    } finally {
+      releaseSettlements.resolve();
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  });
+
+  test("publishes a scheduled co-winner settlement to every connected lobby client", async () => {
+    const hostCredential = ticket(76);
+    const playerCredential = ticket(77);
+    const deadline = new Date();
+    const lease = {
+      lobbyId: identities.host.lobbyId,
+      roundId: "round-scheduled-co-winner",
+      triggeringCallId: "call-scheduled-co-winner",
+      deadline,
+    };
+    const resultEvent = ActiveLobbyEventSchema.parse({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "co-winner-result",
+      eventSequence: 1,
+      occurredAt: deadline.toISOString(),
+      result: {
+        triggeringCallId: lease.triggeringCallId,
+        openedAt: new Date(deadline.getTime() - 2_000).toISOString(),
+        closesAt: deadline.toISOString(),
+        settledAt: deadline.toISOString(),
+        winnerParticipantIds: [identities.player.participantId],
+      },
+    });
+    let server: GameServer | undefined;
+    let currentLease: typeof lease | null = lease;
+    const settlementStarted = deferred();
+    const releaseSettlement = deferred();
+    const harness = await createHarness({
+      clock: () => new Date(),
+      tickets: new Map<string, AuthenticatedRealtimeIdentity>([
+        [ticketHash(hostCredential), identities.host],
+        [ticketHash(playerCredential), identities.player],
+      ]),
+      beforeListen: async (createdServer) => {
+        server = createdServer;
+      },
+      findCoWinnerSettlementLeases: async () => [lease],
+      findCoWinnerSettlementLease: async () => currentLease,
+      executeCoWinnerSettlement: async () => {
+        settlementStarted.resolve();
+        await releaseSettlement.promise;
+        currentLease = null;
+        if (server === undefined) throw new Error("The test authority was not captured.");
+        await server.publishLobbyEvent(lease.lobbyId, resultEvent);
+        return "settled";
+      },
+    });
+    const [host, player] = await Promise.all([
+      harness.connect(hostCredential),
+      harness.connect(playerCredential),
+    ]);
+    const hostResult = once<unknown>(host, "v1:lobby-event");
+    const playerResult = once<unknown>(player, "v1:lobby-event");
+    await waitForSignal(settlementStarted.promise, "the scheduled co-winner settlement");
+    releaseSettlement.resolve();
+
+    await expect(hostResult).resolves.toEqual(resultEvent);
+    await expect(playerResult).resolves.toEqual(resultEvent);
+  });
+
   test("recovers automatic calling and schedules each persisted deadline once", async () => {
     const first = {
       lobbyId: identities.host.lobbyId,
@@ -2018,7 +2424,7 @@ describe("authenticated Socket.IO authority", () => {
     const firstRelease = deferred();
     const secondRelease = deferred();
     const harness = await createHarness({
-      tickets: new Map([
+      tickets: new Map<string, AuthenticatedRealtimeIdentity>([
         [ticketHash(firstCredential), identities.host],
         [ticketHash(secondCredential), identities.host],
       ]),
@@ -2103,7 +2509,7 @@ describe("authenticated Socket.IO authority", () => {
     const secondCredential = ticket(65);
     const releaseAttempted = deferred();
     const harness = await createHarness({
-      tickets: new Map([
+      tickets: new Map<string, AuthenticatedRealtimeIdentity>([
         [ticketHash(firstCredential), identities.host],
         [ticketHash(secondCredential), identities.host],
       ]),
@@ -2134,6 +2540,7 @@ describe("authenticated Socket.IO authority", () => {
       roundCommands: {
         patterns: patternCatalog,
         nearWinFeedbackEnabled: true,
+        coWinnerWindowMs: 2_000,
         clock: () => now,
         randomBytes: (length) => new Uint8Array(randomBytes(length)),
         nextId: (prefix) => `${prefix}-${randomUUID()}`,
@@ -2613,6 +3020,7 @@ describe("authenticated Socket.IO authority", () => {
         roundCommands: {
           patterns: patternCatalog,
           nearWinFeedbackEnabled: true,
+          coWinnerWindowMs: 2_000,
           clock: () => now,
           randomBytes: (length: number) => new Uint8Array(randomBytes(length)),
           nextId: (prefix: "round" | "card" | "call" | "mark") => `${prefix}-${randomUUID()}`,
@@ -4501,6 +4909,173 @@ describe("authenticated Socket.IO authority", () => {
     expect(JSON.stringify(receivedError)).not.toContain("private snapshot persistence detail");
     expect(snapshots).toEqual([]);
     expect(client.connected).toBe(true);
+  });
+
+  test("broadcasts a winner window while keeping its committed mark private", async () => {
+    const hostCredential = ticket(72);
+    const playerCredential = ticket(73);
+    const playerTabCredential = ticket(74);
+    const playerTabIdentity: AuthenticatedRealtimeIdentity = {
+      ...identities.player,
+      participantSessionId: "session_player_tab",
+    };
+    const command = MutationCommandSchema.parse({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "mark-card",
+      commandId: "command_open_co_winner",
+      ball: 1,
+    });
+    const windowEvent = ActiveLobbyEventSchema.parse({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "co-winner-window",
+      eventSequence: 1,
+      occurredAt: NOW,
+      window: { triggeringCallId: "call_one", openedAt: NOW, closesAt: LATER },
+    });
+    const privateMark = ParticipantPrivateEventSchema.parse({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "mark-result",
+      commandId: command.commandId,
+      occurredAt: NOW,
+      mark: {
+        id: "mark_co_winner",
+        cardId: "card_player",
+        ball: 1,
+        markedAt: NOW,
+      },
+    });
+    let commandExecutions = 0;
+    const harness = await createHarness({
+      tickets: new Map<string, AuthenticatedRealtimeIdentity>([
+        [ticketHash(hostCredential), identities.host],
+        [ticketHash(playerCredential), identities.player],
+        [ticketHash(playerTabCredential), playerTabIdentity],
+      ]),
+      execute: async () => {
+        commandExecutions += 1;
+        const idempotentReplay = commandExecutions > 1;
+        return {
+          ok: true,
+          acknowledgement: CommandAckSchema.parse({
+            schemaVersion: CONTRACT_SCHEMA_VERSION,
+            type: "ack",
+            commandId: command.commandId,
+            occurredAt: NOW,
+            idempotentReplay,
+            scope: "active-lobby",
+            eventSequence: 1,
+          }),
+          activeLobbyEvent: idempotentReplay ? null : windowEvent,
+          participantPrivateEvents: [privateMark],
+        };
+      },
+    });
+    const [host, player, playerTab] = await Promise.all([
+      harness.connect(hostCredential),
+      harness.connect(playerCredential),
+      harness.connect(playerTabCredential),
+    ]);
+    const hostWindow = once<unknown>(host, "v1:lobby-event");
+    const playerWindow = once<unknown>(player, "v1:lobby-event");
+    const playerTabWindow = once<unknown>(playerTab, "v1:lobby-event");
+    const playerPrivate = once<unknown>(player, "v1:private-event");
+    const playerTabPrivate = once<unknown>(playerTab, "v1:private-event");
+    const acknowledgement = once<unknown>(player, "v1:ack");
+    const hostPrivate = expectNoEvent(host, "v1:private-event");
+
+    player.emit("v1:command", command);
+
+    await expect(hostWindow).resolves.toEqual(windowEvent);
+    await expect(playerWindow).resolves.toEqual(windowEvent);
+    await expect(playerTabWindow).resolves.toEqual(windowEvent);
+    await expect(playerPrivate).resolves.toEqual(privateMark);
+    await expect(playerTabPrivate).resolves.toEqual(privateMark);
+    await expect(acknowledgement).resolves.toMatchObject({
+      commandId: command.commandId,
+      scope: "active-lobby",
+      eventSequence: 1,
+    });
+    await hostPrivate;
+
+    const replayedPrivate = once<unknown>(player, "v1:private-event");
+    const replayedAck = once<unknown>(player, "v1:ack");
+    const hostReplayWindow = expectNoEvent(host, "v1:lobby-event");
+    const playerTabReplayWindow = expectNoEvent(playerTab, "v1:lobby-event");
+    const playerTabReplayPrivate = expectNoEvent(playerTab, "v1:private-event");
+    player.emit("v1:command", command);
+    await expect(replayedPrivate).resolves.toEqual(privateMark);
+    await expect(replayedAck).resolves.toMatchObject({ idempotentReplay: true });
+    await Promise.all([hostReplayWindow, playerTabReplayWindow, playerTabReplayPrivate]);
+
+    const resultEvent = ActiveLobbyEventSchema.parse({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "co-winner-result",
+      eventSequence: 2,
+      occurredAt: LATER,
+      result: {
+        triggeringCallId: "call_one",
+        openedAt: NOW,
+        closesAt: LATER,
+        settledAt: LATER,
+        winnerParticipantIds: [identities.player.participantId],
+      },
+    });
+    const hostResult = once<unknown>(host, "v1:lobby-event");
+    const playerResult = once<unknown>(player, "v1:lobby-event");
+    const playerTabResult = once<unknown>(playerTab, "v1:lobby-event");
+    await harness.server.publishLobbyEvent(identities.host.lobbyId, resultEvent);
+    await expect(hostResult).resolves.toEqual(resultEvent);
+    await expect(playerResult).resolves.toEqual(resultEvent);
+    await expect(playerTabResult).resolves.toEqual(resultEvent);
+  });
+
+  test("rejects an invalid mixed private batch before broadcasting its lobby event", async () => {
+    const credential = ticket(75);
+    const command = MutationCommandSchema.parse({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "mark-card",
+      commandId: "command_invalid_mixed_result",
+      ball: 1,
+    });
+    const windowEvent = ActiveLobbyEventSchema.parse({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "co-winner-window",
+      eventSequence: 1,
+      occurredAt: NOW,
+      window: { triggeringCallId: "call_one", openedAt: NOW, closesAt: LATER },
+    });
+    const invalidPrivateEvent = ParticipantPrivateEventSchema.parse({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "near-win",
+      occurredAt: NOW,
+      requiredBall: 1,
+    });
+    const harness = await createHarness({
+      tickets: new Map([[ticketHash(credential), identities.player]]),
+      execute: async () => ({
+        ok: true,
+        acknowledgement: CommandAckSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "ack",
+          commandId: command.commandId,
+          occurredAt: NOW,
+          idempotentReplay: false,
+          scope: "active-lobby",
+          eventSequence: 1,
+        }),
+        activeLobbyEvent: windowEvent,
+        participantPrivateEvents: [invalidPrivateEvent],
+      }),
+    });
+    const client = await harness.connect(credential);
+    const error = once<unknown>(client, "v1:error");
+    const noLobbyEvent = expectNoEvent(client, "v1:lobby-event");
+    const noPrivateEvent = expectNoEvent(client, "v1:private-event");
+
+    client.emit("v1:command", command);
+
+    await expect(error).resolves.toMatchObject({ code: "INTERNAL_ERROR" });
+    await Promise.all([noLobbyEvent, noPrivateEvent]);
   });
 
   test("publishes every active-lobby and participant-private event variant", async () => {

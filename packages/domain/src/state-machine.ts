@@ -220,11 +220,11 @@ export function transitionRound(state: RoundState, command: RoundCommand): Round
       if (command.closesAt <= command.at) {
         throw new RangeError("The co-winner window must close after it opens.");
       }
-      if (state.stage !== "active") {
+      if (state.stage !== "active" && state.stage !== "paused") {
         return transitionNotAllowed(state, command);
       }
-      if (command.at < state.activeAt) {
-        throw new RangeError("The co-winner window cannot open before round activation.");
+      if (command.at < (state.stage === "active" ? state.activeAt : state.pausedAt)) {
+        throw new RangeError("The co-winner window cannot open before the current round state.");
       }
       return success({
         ...startedStateBase(state),

@@ -53,6 +53,7 @@ Next story: US-001
 - Fake-timer race tests must bound deferred coordination with real timer functions captured before fake timers are installed, release every blocker in `finally`, and await in-flight harness/publication cleanup so a failed synchronization assertion cannot hang or poison later tests.
 - Pattern progress evaluates every canonical mask from authoritative called/marked cell projections, excludes the free center from required counts, uses canonical mask order for deterministic flexible-rule ties, and treats near-win as exactly one required called-but-unmarked cell while keeping feedback gating separate from completion.
 - Participant-private mutations persist a bounded ordered event batch plus its immutable canonical pattern definition, called/marked projection, and feedback decision; a row-level result-format discriminator and integrity digest bind current result JSON to its private row metadata so catalog revisions and coordinated payload rewrites cannot reinterpret replay. Adapters validate the full batch before emitting, fresh commits deliver to the participant room, replays deliver only to the requesting socket, and replacement rounds strip private payload/context plus integrity while retaining intent-only tombstones.
+- Co-winner settlement uses an exact persisted `(lobbyId, roundId, triggeringCallId, deadline)` lease with bounded fail-closed scheduling. Only an incomplete-to-complete mark of the latest called ball opens or joins the exclusive-deadline window; the first mark persists one integrity-bound mixed lobby/private result, and settlement orders the complete durable winner set by participant ID before one sequenced broadcast.
 
 Append-only iteration log
 -------------------------
@@ -3971,3 +3972,65 @@ Targeted re-review outcome for US-039 at 2026-07-18 02:23:47 MST:
 - `qa-expert` and `security-engineer` reviewed the revised complete staged diff and returned empty actionable finding lists with no residual risks.
 - The canonical tie regression, explicit format-1/format-2 replay coverage, and live non-null digest migration constraint resolve every in-scope initial review finding.
 - No in-scope critical, high, or medium findings remain; US-039 can be marked passing and committed after the required metadata update and final consistency check.
+
+## 2026-07-18 02:52:19 MST - US-040
+- What was implemented
+  - Opened the configured two-second co-winner window atomically when an authenticated participant transitions from incomplete to complete by marking the latest called ball, including while the round was already paused.
+  - Persisted the winning mark's participant-private batch and sequenced lobby window event as one integrity-bound mixed command result, admitted same-trigger completions only before the exclusive deadline, and preserved requester-only private replay without rebroadcasting the window.
+  - Added exact persisted settlement leases, bounded fail-closed Socket.IO recovery/scheduling, and Serializable settlement that persists one participant-ID-ordered complete winner result before PostgreSQL notification and broadcast.
+- Files changed: `AGENTS.md`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/socket-server.ts`, `apps/game-server/src/socket-server.test.ts`, `apps/web/src/lobby-entry-runtime.ts`, `packages/database/prisma/migrations/20260718024500_add_verified_mixed_command_results/migration.sql`, `packages/database/src/database.integration.test.ts`, `packages/database/src/index.ts`, `packages/database/src/round-command-executor.ts`, `packages/domain/src/state-machine.ts`, `tests/domain-state-machine.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-040 - Settle the two-second co-winner window`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run tests/domain-state-machine.test.ts -t "opens the co-winner window when a valid completion arrives while paused"` (expected fail before implementation; pass after implementation)
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts -t "co-winner deadline|winner window while keeping"` (expected 2 failures before implementation; pass after implementation)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "persists and settles every completion"` (expected fail before implementation; pass after implementation)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "does not attribute an already-complete"` (expected fail before incomplete-to-complete correction; pass after implementation)
+  - `DATABASE_URL=<approved local Compose database> bun run db:migrate:deploy` (pass; applied the append-only verified mixed-result migration)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test:database` (pass; 123 tests)
+  - `bunx vitest run tests/domain-state-machine.test.ts packages/database/src/round-command-executor.test.ts apps/game-server/src/socket-server.test.ts apps/game-server/src/runtime.test.ts` (pass; 133 tests, 3 database-backed tests skipped)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run apps/game-server/src/socket-server.test.ts` (pass; 93 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (first run hit one known Socket.IO restart timeout and cascaded through fake timers; isolated rerun passed, then root rerun passed typecheck, 25 files, and 569 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass after removing two useless initial assignments)
+  - `bun run format:check` (fails only on three pre-existing untracked Lighthouse/DOM artifacts)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: none
+  - Used: `backend-developer` for focused guidance on latest-call attribution, mixed-result persistence, exact settlement leases, scheduler risks, deterministic ordering, and test coverage because this was a complex persistence/realtime story
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and migration/realtime-integrity-triggered `security-engineer` planned for the complete staged high-risk diff
+  - Findings: fixed pre-broadcast mixed-batch validation, scheduler fail-closed race coverage, concurrent deadline-boundary settlement coverage, and format-4 integrity/constraint coverage before commit
+- Decisions (why):
+  - Required the winning command to mark the latest called ball and change canonical progress from incomplete to complete because an already-complete flexible pattern must not win again from an unrelated extra daub.
+  - Used a new verified mixed result format rather than weakening the private-only format because the first winning command must durably bind its lobby sequence and private batch while preserving strict delivery semantics.
+  - Ordered winners by participant ID because it is stable across transaction timing and includes every durable co-winner without truncation or arrival-order bias.
+  - Mirrored the established automatic-call scheduler discipline for settlement instead of using an unpersisted timeout because restart recovery and stale callback rejection require an exact durable lease.
+  - Testing decision: this is a behavior change, so test-first was required; domain, database, and Socket.IO tests failed for the intended missing behavior before production changes and passed afterward.
+- **Learnings for future iterations:**
+  - A winning daub can legitimately produce both a sequenced lobby event and participant-private events; persistence and adapters must validate and deliver both scopes atomically while replaying only the private batch to the requester.
+  - Completion attribution requires comparing pre-mark and post-mark canonical progress, not only checking that the final projection is complete and contains the latest ball.
+  - Co-winner deadlines are exclusive for additional marks but inclusive for settlement: `now < closesAt` admits a co-winner, while `now >= closesAt` permits settlement.
+- Known issues / follow-ups:
+  - Root `bun run format:check` remains blocked by unrelated untracked Lighthouse/DOM artifacts; every tracked file passes Prettier.
+  - The unrelated `apps/web/next-env.d.ts` side effect and untracked browser-report artifacts remain untouched and will not be staged.
+- Next iteration start:
+  - If review passes, implement US-041 One Line to Two Lines to Blackout continuation; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-040 at 2026-07-18 03:05:46 MST:
+- The initial `code-reviewer` and `security-engineer` passes returned no findings; `qa-expert` produced three blocking findings and one low finding covering pre-broadcast mixed-batch validation, scheduler race coverage, concurrent deadline/stale-lease coverage, and format-4 integrity validation.
+- Added a failing multi-client regression proving an invalid mixed private batch broadcast the lobby window before validation, then validated the complete batch before any lobby or private emission.
+- Expanded scheduler coverage for `too-early` rescheduling, exact live-lease replacement, shutdown during recovery, per-lobby execution serialization and fairness, persistence/read failure latching, bounded queue overflow, and lifecycle-driven multi-client result publication.
+- Changed the PostgreSQL acceptance test to race two initial completions through the Serializable lobby fence, reject a third completion racing settlement at the exclusive deadline, reject mismatched round/trigger/deadline leases, inspect format 4 plus its digest/scope/sequence, exercise database constraints, and reject payload tampering on replay.
+- The low detached-tombstone suggestion was not added because replacement-round behavior belongs to US-042 and existing round replacement already strips private payload/progress/integrity generically for every result format; the new format-4 row's live integrity and replay behavior are directly covered here.
+- Post-fix checks: focused scheduler/mixed-delivery tests pass 9 tests, the focused PostgreSQL settlement test passes, the PostgreSQL-backed root suite passes typecheck with 25 files and 578 tests, lint and tracked formatting pass, and diff checks are clean.
+- Targeted re-review: pending `qa-expert` review because all substantive findings came from its test/correctness pass.
+
+Targeted re-review outcome for US-040 at 2026-07-18 03:09:39 MST:
+- `qa-expert` reviewed the revised complete staged diff and returned an empty actionable finding list with no residual risks.
+- Pre-broadcast mixed validation, scheduler recovery/race/failure/bound coverage, concurrent exact-deadline settlement, stale lease rejection, lifecycle-driven multi-client delivery, and format-4 integrity checks resolve every initial finding.
+- No in-scope critical, high, or medium findings remain; US-040 can be marked passing and committed after the final consistency check.

@@ -47,6 +47,7 @@ type RoundCommandPatternReference = Pick<RoundCommandPattern, "id" | "mode">;
 export interface RoundCommandRuntimeOptions {
   readonly patterns: readonly RoundCommandPattern[];
   readonly nearWinFeedbackEnabled: boolean;
+  readonly coWinnerWindowMs: number;
   readonly randomBytes: CryptographicRandomBytes;
   readonly nextId: (prefix: "round" | "card" | "call" | "mark") => string;
   readonly clock: () => Date;
@@ -68,6 +69,15 @@ export interface AutomaticCallLease {
 
 export type AutomaticCallExecutionResult =
   "called" | "stale" | "too-early" | "blocked" | "exhausted";
+
+export interface CoWinnerSettlementLease {
+  readonly lobbyId: string;
+  readonly roundId: string;
+  readonly triggeringCallId: string;
+  readonly deadline: Date;
+}
+
+export type CoWinnerSettlementExecutionResult = "settled" | "stale" | "too-early";
 
 export type RoundCommandExecutionResult =
   | {
@@ -98,6 +108,11 @@ export interface RoundCommandExecutor {
   findAutomaticCallLeases(maximum?: number): Promise<readonly AutomaticCallLease[]>;
   findAutomaticCallLease(lobbyId: string): Promise<AutomaticCallLease | null>;
   executeAutomaticCall(lease: AutomaticCallLease): Promise<AutomaticCallExecutionResult>;
+  findCoWinnerSettlementLeases(maximum?: number): Promise<readonly CoWinnerSettlementLease[]>;
+  findCoWinnerSettlementLease(lobbyId: string): Promise<CoWinnerSettlementLease | null>;
+  executeCoWinnerSettlement(
+    lease: CoWinnerSettlementLease,
+  ): Promise<CoWinnerSettlementExecutionResult>;
 }
 
 type PendingCommand =
@@ -105,9 +120,11 @@ type PendingCommand =
       readonly roundId: string | null;
       readonly scope: "active-lobby";
       readonly event: {
-        readonly type: "presence" | "stage" | "call" | "round-end";
+        readonly type: "presence" | "stage" | "call" | "co-winner-window" | "round-end";
         readonly payload: Prisma.InputJsonObject;
       };
+      readonly progress?: ParticipantPrivateProgress;
+      readonly events?: readonly ParticipantPrivateEvent[];
     }
   | {
       readonly roundId: string;
@@ -245,7 +262,7 @@ function parseParticipantPrivateEvents(
   if (persistedEvents !== undefined && legacyEvent !== undefined) {
     throw new Error("Persisted participant-private event shapes conflict.");
   }
-  if (resultFormat === 3) {
+  if (resultFormat === 3 || resultFormat === 4) {
     if (legacyEvent !== undefined) {
       throw new Error("Current participant-private results cannot use the legacy event shape.");
     }
@@ -304,7 +321,7 @@ function canonicalJson(value: unknown): string {
   throw new Error("Integrity data is not JSON-compatible.");
 }
 
-function participantPrivateResultIntegrity(input: {
+function verifiedCommandResultIntegrity(input: {
   readonly lobbyId: string;
   readonly participantId: string;
   readonly commandId: string;
@@ -312,6 +329,9 @@ function participantPrivateResultIntegrity(input: {
   readonly commandType: string;
   readonly result: Readonly<Record<string, unknown>>;
   readonly createdAt: Date;
+  readonly deliveryScope: "ACTIVE_LOBBY" | "PARTICIPANT_PRIVATE";
+  readonly eventSequence: bigint | null;
+  readonly resultFormat: 3 | 4;
 }): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(
     createHash("sha256")
@@ -319,9 +339,7 @@ function participantPrivateResultIntegrity(input: {
         canonicalJson({
           ...input,
           createdAt: input.createdAt.toISOString(),
-          deliveryScope: "PARTICIPANT_PRIVATE",
-          eventSequence: null,
-          resultFormat: 3,
+          eventSequence: input.eventSequence?.toString() ?? null,
         }),
         "utf8",
       )
@@ -331,12 +349,12 @@ function participantPrivateResultIntegrity(input: {
 
 function verifyParticipantPrivateResultIntegrity(
   expected: Uint8Array | null,
-  input: Parameters<typeof participantPrivateResultIntegrity>[0],
+  input: Parameters<typeof verifiedCommandResultIntegrity>[0],
 ): void {
   if (expected === null || expected.length !== 32) {
     throw new Error("Persisted participant-private result integrity is missing.");
   }
-  const actual = participantPrivateResultIntegrity(input);
+  const actual = verifiedCommandResultIntegrity(input);
   if (!timingSafeEqual(expected, actual)) {
     throw new Error("Persisted participant-private result integrity is invalid.");
   }
@@ -445,6 +463,11 @@ async function validateReplayedParticipantPrivateEvents(
 }
 
 function requireDate(value: Date | null, name: string): Date {
+  if (value === null) throw new Error(`${name} is required by the persisted round stage.`);
+  return value;
+}
+
+function requireString(value: string | null, name: string): string {
   if (value === null) throw new Error(`${name} is required by the persisted round stage.`);
   return value;
 }
@@ -1035,6 +1058,12 @@ async function executeMutation(
 
   if (command.type === "mark-card") {
     if (!["ACTIVE", "PAUSED", "CO_WINNER_WINDOW"].includes(current.stage)) return null;
+    if (
+      current.stage === "CO_WINNER_WINDOW" &&
+      (current.coWinnerClosesAt === null || now.getTime() >= current.coWinnerClosesAt.getTime())
+    ) {
+      return null;
+    }
     const card = await transaction.card.findUnique({
       where: { roundId_participantId: { roundId: current.id, participantId } },
       select: { id: true, cells: true, marks: { select: { ball: true } } },
@@ -1042,7 +1071,8 @@ async function executeMutation(
     if (card === null || !card.cells.includes(command.ball)) return null;
     const calls = await transaction.call.findMany({
       where: { roundId: current.id },
-      select: { ball: true },
+      select: { id: true, ball: true, position: true },
+      orderBy: { position: "asc" },
     });
     const calledBalls = new Set(calls.map(({ ball }) => ball));
     if (!calledBalls.has(command.ball)) return null;
@@ -1074,13 +1104,18 @@ async function executeMutation(
         markedAt: mark.markedAt.toISOString(),
       },
     });
-    const markedBalls = new Set([...card.marks.map(({ ball }) => ball), command.ball]);
+    const priorMarkedBalls = new Set(card.marks.map(({ ball }) => ball));
+    const markedBalls = new Set([...priorMarkedBalls, command.ball]);
     const progressInput = {
       calledCells: card.cells.map((ball) => ball === 0 || calledBalls.has(ball)),
       markedCells: card.cells.map((ball) => ball === 0 || markedBalls.has(ball)),
     };
     const pattern = patternOrThrow(options.patterns, current.currentPatternId);
     const progress = calculatePatternProgress(pattern, progressInput);
+    const priorProgress = calculatePatternProgress(pattern, {
+      calledCells: progressInput.calledCells,
+      markedCells: card.cells.map((ball) => ball === 0 || priorMarkedBalls.has(ball)),
+    });
     const requiredBall =
       progress.nearWinCellIndex === null ? null : card.cells[progress.nearWinCellIndex];
     if (requiredBall === undefined || requiredBall === 0) {
@@ -1099,6 +1134,80 @@ async function executeMutation(
           ]
         : []),
     ];
+    const latestCall = calls.at(-1);
+    const attributableCompletion =
+      priorMark === null &&
+      !priorProgress.complete &&
+      progress.complete &&
+      latestCall !== undefined &&
+      command.ball === latestCall.ball;
+    if (attributableCompletion && (current.stage === "ACTIVE" || current.stage === "PAUSED")) {
+      const closesAt = new Date(now.getTime() + options.coWinnerWindowMs);
+      const transition = transitionRound(toDomainRound(current, options.patterns), {
+        type: "open-co-winner-window",
+        at: now.getTime(),
+        closesAt: closesAt.getTime(),
+      });
+      if (!transition.ok) return null;
+      await transaction.coWinner.create({
+        data: {
+          lobbyId,
+          roundId: current.id,
+          participantId,
+          cardId: card.id,
+          triggeringCallId: latestCall.id,
+          confirmedAt: now,
+        },
+      });
+      await transaction.round.update({
+        where: { id: current.id },
+        data: {
+          stage: "CO_WINNER_WINDOW",
+          pausedAt: null,
+          pauseReason: null,
+          nextCallAt: null,
+          coWinnerTriggeringCallId: latestCall.id,
+          coWinnerOpenedAt: now,
+          coWinnerClosesAt: closesAt,
+        },
+      });
+      return {
+        roundId: current.id,
+        scope: "active-lobby",
+        event: {
+          type: "co-winner-window",
+          payload: {
+            window: {
+              triggeringCallId: latestCall.id,
+              openedAt: now.toISOString(),
+              closesAt: closesAt.toISOString(),
+            },
+          },
+        },
+        progress: {
+          pattern,
+          ...progressInput,
+          nearWinFeedbackEnabled: options.nearWinFeedbackEnabled,
+        },
+        events,
+      };
+    }
+    if (
+      attributableCompletion &&
+      current.stage === "CO_WINNER_WINDOW" &&
+      current.coWinnerTriggeringCallId === latestCall.id
+    ) {
+      await transaction.coWinner.create({
+        data: {
+          lobbyId,
+          roundId: current.id,
+          participantId,
+          cardId: card.id,
+          triggeringCallId: latestCall.id,
+          confirmedAt: now,
+        },
+      });
+    }
     return {
       roundId: current.id,
       scope: "participant-private",
@@ -1264,6 +1373,177 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
     );
   }
 
+  async findCoWinnerSettlementLeases(maximum = 2_500): Promise<readonly CoWinnerSettlementLease[]> {
+    if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 2_500) {
+      throw new RangeError("The co-winner settlement recovery limit must be between 1 and 2500.");
+    }
+    const rows = await this.prisma.round.findMany({
+      where: {
+        stage: "CO_WINNER_WINDOW",
+        coWinnerTriggeringCallId: { not: null },
+        coWinnerClosesAt: { not: null },
+        lobby: { status: "ACTIVE" },
+      },
+      select: {
+        lobbyId: true,
+        id: true,
+        coWinnerTriggeringCallId: true,
+        coWinnerClosesAt: true,
+      },
+      orderBy: [{ coWinnerClosesAt: "asc" }, { lobbyId: "asc" }],
+      take: maximum + 1,
+    });
+    if (rows.length > maximum)
+      throw new Error("The co-winner settlement recovery limit was exceeded.");
+    return rows.map((row) => {
+      if (row.coWinnerTriggeringCallId === null || row.coWinnerClosesAt === null) {
+        throw new Error("A co-winner settlement lease is incomplete.");
+      }
+      return {
+        lobbyId: row.lobbyId,
+        roundId: row.id,
+        triggeringCallId: row.coWinnerTriggeringCallId,
+        deadline: row.coWinnerClosesAt,
+      };
+    });
+  }
+
+  async findCoWinnerSettlementLease(lobbyId: string): Promise<CoWinnerSettlementLease | null> {
+    const row = await this.prisma.round.findFirst({
+      where: {
+        lobbyId,
+        stage: "CO_WINNER_WINDOW",
+        coWinnerTriggeringCallId: { not: null },
+        coWinnerClosesAt: { not: null },
+        lobby: { status: "ACTIVE" },
+      },
+      select: { id: true, coWinnerTriggeringCallId: true, coWinnerClosesAt: true },
+    });
+    if (row?.coWinnerTriggeringCallId === null || row?.coWinnerTriggeringCallId === undefined) {
+      return null;
+    }
+    if (row.coWinnerClosesAt === null)
+      throw new Error("A co-winner settlement lease is incomplete.");
+    return {
+      lobbyId,
+      roundId: row.id,
+      triggeringCallId: row.coWinnerTriggeringCallId,
+      deadline: row.coWinnerClosesAt,
+    };
+  }
+
+  executeCoWinnerSettlement(
+    lease: CoWinnerSettlementLease,
+  ): Promise<CoWinnerSettlementExecutionResult> {
+    if (this.options === undefined) {
+      throw new Error("Round command runtime dependencies were not configured.");
+    }
+    if (
+      lease.lobbyId.length === 0 ||
+      lease.roundId.length === 0 ||
+      lease.triggeringCallId.length === 0
+    ) {
+      throw new RangeError("Co-winner settlement lease identifiers must be nonempty.");
+    }
+    assertValidDate(lease.deadline, "Co-winner settlement deadline");
+    const options = this.options;
+    return runTransactionWithRetry(
+      async () =>
+        this.prisma.$transaction(
+          async (transaction) => {
+            const fenced = await transaction.$queryRaw<readonly { id: string }[]>`
+              UPDATE "lobbies"
+                 SET "last_event_sequence" = "last_event_sequence"
+               WHERE "id" = ${lease.lobbyId}
+                 AND "status" = 'ACTIVE'
+               RETURNING "id"
+            `;
+            if (fenced.length !== 1) return "stale";
+            const now = options.clock();
+            assertValidDate(now, "Co-winner settlement timestamp");
+            const current = await loadCurrentRound(transaction, lease.lobbyId);
+            if (
+              current === null ||
+              current.id !== lease.roundId ||
+              current.stage !== "CO_WINNER_WINDOW" ||
+              current.coWinnerTriggeringCallId !== lease.triggeringCallId ||
+              current.coWinnerClosesAt?.getTime() !== lease.deadline.getTime()
+            ) {
+              return "stale";
+            }
+            if (now.getTime() < lease.deadline.getTime()) return "too-early";
+            const transition = transitionRound(toDomainRound(current, options.patterns), {
+              type: "settle-result",
+              at: now.getTime(),
+            });
+            if (!transition.ok) throw new Error("A due co-winner window could not settle.");
+            const winners = await transaction.coWinner.findMany({
+              where: { lobbyId: lease.lobbyId, roundId: lease.roundId },
+              select: { participantId: true },
+              orderBy: { participantId: "asc" },
+            });
+            if (winners.length === 0) throw new Error("A co-winner window requires a winner.");
+            await transaction.round.update({
+              where: { id: lease.roundId },
+              data: { stage: "RESULT", resultSettledAt: now, nextCallAt: null },
+            });
+            const payload = {
+              result: {
+                triggeringCallId: lease.triggeringCallId,
+                openedAt: requireDate(
+                  current.coWinnerOpenedAt,
+                  "Co-winner opening time",
+                ).toISOString(),
+                closesAt: lease.deadline.toISOString(),
+                settledAt: now.toISOString(),
+                winnerParticipantIds: winners.map(({ participantId }) => participantId),
+              },
+            } satisfies Prisma.InputJsonObject;
+            const rows = await transaction.$queryRaw<readonly { sequence: bigint }[]>`
+              UPDATE "lobbies"
+                 SET "last_event_sequence" = "last_event_sequence" + 1,
+                     "last_activity_at" = GREATEST("last_activity_at", ${now})
+               WHERE "id" = ${lease.lobbyId}
+               RETURNING "last_event_sequence" AS "sequence"
+            `;
+            const sequence = rows[0]?.sequence;
+            if (sequence === undefined) throw new Error("Unable to allocate an event sequence.");
+            ActiveLobbyEventSchema.parse({
+              schemaVersion: CONTRACT_SCHEMA_VERSION,
+              type: "co-winner-result",
+              eventSequence: toSafeSequence(sequence),
+              occurredAt: now.toISOString(),
+              ...payload,
+            });
+            await transaction.activeLobbyEvent.create({
+              data: {
+                lobbyId: lease.lobbyId,
+                sequence,
+                roundId: lease.roundId,
+                eventType: "co-winner-result",
+                schemaVersion: CONTRACT_SCHEMA_VERSION,
+                payload,
+                createdAt: now,
+              },
+            });
+            await transaction.$executeRaw`
+              SELECT pg_notify(
+                ${ACTIVE_LOBBY_EVENT_CHANNEL},
+                ${encodeActiveLobbyEventReference(lease.lobbyId, sequence)}
+              )
+            `;
+            return "settled";
+          },
+          {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+            maxWait: 5_000,
+            timeout: 10_000,
+          },
+        ),
+      this.retryOptions,
+    );
+  }
+
   private executeForActor(
     input:
       | {
@@ -1338,13 +1618,22 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
                 existing.deliveryScope === "ACTIVE_LOBBY"
                   ? ("active-lobby" as const)
                   : ("participant-private" as const);
+              if (
+                (existing.resultFormat === 3 && scope !== "participant-private") ||
+                (existing.resultFormat === 4 && scope !== "active-lobby")
+              ) {
+                throw new Error("Persisted verified command-result scope is invalid.");
+              }
               const parsedParticipantPrivateEvents =
-                scope === "participant-private"
+                scope === "participant-private" || existing.resultFormat === 4
                   ? parseParticipantPrivateEvents(result, existing.resultFormat)
                   : { events: [], progress: null, legacy: false };
               const participantPrivateEvents = parsedParticipantPrivateEvents.events;
-              if (scope === "participant-private") {
-                if (existing.resultFormat === 3 && existing.roundId !== null) {
+              if (scope === "participant-private" || existing.resultFormat === 4) {
+                if (
+                  (existing.resultFormat === 3 || existing.resultFormat === 4) &&
+                  existing.roundId !== null
+                ) {
                   verifyParticipantPrivateResultIntegrity(existing.resultIntegrity, {
                     lobbyId: existing.lobbyId,
                     participantId: existing.participantId,
@@ -1353,6 +1642,9 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
                     commandType: existing.commandType,
                     result,
                     createdAt: existing.createdAt,
+                    deliveryScope: existing.deliveryScope,
+                    eventSequence: existing.eventSequence,
+                    resultFormat: existing.resultFormat,
                   });
                 } else if (existing.resultIntegrity !== null) {
                   throw new Error("Persisted participant-private result integrity is unexpected.");
@@ -1395,8 +1687,10 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
 
             let eventSequence: bigint | null = null;
             let activeLobbyEvent: ActiveLobbyEvent | null = null;
-            let participantPrivateEvents: readonly ParticipantPrivateEvent[] = [];
-            let participantPrivateProgress: ParticipantPrivateProgress | null = null;
+            const participantPrivateEvents =
+              pending.scope === "active-lobby" ? (pending.events ?? []) : pending.events;
+            const participantPrivateProgress =
+              pending.scope === "active-lobby" ? (pending.progress ?? null) : pending.progress;
             if (pending.scope === "active-lobby") {
               const rows = await transaction.$queryRaw<readonly { sequence: bigint }[]>`
                 UPDATE "lobbies"
@@ -1432,8 +1726,6 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
                 )
               `;
             } else {
-              participantPrivateEvents = pending.events;
-              participantPrivateProgress = pending.progress;
               await transaction.$executeRaw`
                 UPDATE "lobbies"
                    SET "last_activity_at" = GREATEST("last_activity_at", ${now})
@@ -1457,17 +1749,29 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
                     ) as Prisma.InputJsonArray,
                   }),
             };
-            const resultFormat = pending.scope === "participant-private" ? 3 : 1;
-            const resultIntegrity =
+            const deliveryScope =
+              pending.scope === "active-lobby"
+                ? ("ACTIVE_LOBBY" as const)
+                : ("PARTICIPANT_PRIVATE" as const);
+            const resultFormat: 1 | 3 | 4 =
               pending.scope === "participant-private"
-                ? participantPrivateResultIntegrity({
+                ? 3
+                : participantPrivateEvents.length > 0
+                  ? 4
+                  : 1;
+            const resultIntegrity =
+              resultFormat === 3 || resultFormat === 4
+                ? verifiedCommandResultIntegrity({
                     lobbyId: input.lobbyId,
                     participantId,
                     commandId: input.command.commandId,
-                    roundId: pending.roundId,
+                    roundId: requireString(pending.roundId, "Verified command result round"),
                     commandType: input.command.type,
                     result: persistedResult,
                     createdAt: now,
+                    deliveryScope,
+                    eventSequence,
+                    resultFormat,
                   })
                 : null;
             await transaction.commandResult.create({
@@ -1477,8 +1781,7 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
                 commandId: input.command.commandId,
                 roundId: pending.roundId,
                 commandType: input.command.type,
-                deliveryScope:
-                  pending.scope === "active-lobby" ? "ACTIVE_LOBBY" : "PARTICIPANT_PRIVATE",
+                deliveryScope,
                 eventSequence,
                 resultFormat,
                 resultIntegrity,
@@ -1515,5 +1818,11 @@ export function createPrismaRoundCommandExecutor(
   retryOptions: TransactionRetryOptions,
   options: RoundCommandRuntimeOptions | undefined,
 ): RoundCommandExecutor {
+  if (
+    options !== undefined &&
+    (!Number.isSafeInteger(options.coWinnerWindowMs) || options.coWinnerWindowMs < 1)
+  ) {
+    throw new RangeError("The co-winner window duration must be a positive safe integer.");
+  }
   return new PrismaRoundCommandExecutor(prisma, retryOptions, options);
 }

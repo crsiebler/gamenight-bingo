@@ -213,6 +213,37 @@ describe("round state machine", () => {
     });
   });
 
+  it("opens the co-winner window when a valid completion arrives while paused", () => {
+    let state = expectRoundTransition(
+      transitionRound(createWaitingRound("one-line", CREATED_AT), {
+        type: "start",
+        at: STARTED_AT,
+      }),
+    );
+    state = expectRoundTransition(
+      transitionRound(state, { type: "pause", reason: "participant-absent", at: 2_500 }),
+    );
+
+    expect(
+      transitionRound(state, {
+        type: "open-co-winner-window",
+        at: 3_000,
+        closesAt: 5_000,
+      }),
+    ).toEqual({
+      ok: true,
+      state: {
+        initialPatternMode: "one-line",
+        patternMode: "one-line",
+        createdAt: CREATED_AT,
+        startedAt: STARTED_AT,
+        stage: "co-winner-window",
+        windowOpenedAt: 3_000,
+        windowClosesAt: 5_000,
+      },
+    });
+  });
+
   it("rejects ending an unstarted round and keeps ended rounds terminal", () => {
     const waiting = createWaitingRound("exact", CREATED_AT);
 
@@ -308,7 +339,7 @@ describe("round state machine", () => {
     const allowed = {
       waiting: new Set<RoundCommand["type"]>(["start"]),
       active: new Set<RoundCommand["type"]>(["pause", "open-co-winner-window", "end"]),
-      paused: new Set<RoundCommand["type"]>(["resume", "end"]),
+      paused: new Set<RoundCommand["type"]>(["resume", "open-co-winner-window", "end"]),
       coWinnerWindow: new Set<RoundCommand["type"]>(["settle-result"]),
       result: new Set<RoundCommand["type"]>(["continue", "end"]),
       ended: new Set<RoundCommand["type"]>(),

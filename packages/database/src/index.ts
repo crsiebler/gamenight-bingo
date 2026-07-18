@@ -66,6 +66,8 @@ export {
   resolveRoundPatternMode,
   type AutomaticCallExecutionResult,
   type AutomaticCallLease,
+  type CoWinnerSettlementExecutionResult,
+  type CoWinnerSettlementLease,
   type RoundCommandAcknowledgement,
   type RoundCommandExecutionResult,
   type RoundCommandExecutor,

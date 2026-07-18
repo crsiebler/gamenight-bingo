@@ -24,7 +24,12 @@ import {
 } from "@gamenight-bingo/contracts";
 import { Server } from "socket.io";
 
-import type { AutomaticCallExecutionResult, AutomaticCallLease } from "@gamenight-bingo/database";
+import type {
+  AutomaticCallExecutionResult,
+  AutomaticCallLease,
+  CoWinnerSettlementExecutionResult,
+  CoWinnerSettlementLease,
+} from "@gamenight-bingo/database";
 
 import { consumeRealtimeTicketCredential, type RealtimeTicketConsumer } from "./realtime-ticket.js";
 
@@ -88,12 +93,20 @@ export interface GameServerOptions {
     findAutomaticCallLease(lobbyId: string): Promise<AutomaticCallLease | null>;
     executeAutomaticCall(lease: AutomaticCallLease): Promise<AutomaticCallExecutionResult>;
   };
+  readonly coWinnerSettlementLifecycle: {
+    findCoWinnerSettlementLeases(): Promise<readonly CoWinnerSettlementLease[]>;
+    findCoWinnerSettlementLease(lobbyId: string): Promise<CoWinnerSettlementLease | null>;
+    executeCoWinnerSettlement(
+      lease: CoWinnerSettlementLease,
+    ): Promise<CoWinnerSettlementExecutionResult>;
+  };
   readonly limits?: {
     readonly connectionsPerMinute?: number;
     readonly commandsPerMinute?: number;
     readonly maximumConnections?: number;
     readonly connectionsPerSession?: number;
     readonly maximumQueuedAutomaticCalls?: number;
+    readonly maximumQueuedCoWinnerSettlements?: number;
   };
 }
 
@@ -141,6 +154,8 @@ const MAXIMUM_PENDING_SYNCHRONIZATION_EVENTS = 256;
 const MAXIMUM_CONCURRENT_PRESENCE_GRACE_EXPIRATIONS = 8;
 const MAXIMUM_CONCURRENT_AUTOMATIC_CALLS = 8;
 const DEFAULT_MAXIMUM_QUEUED_AUTOMATIC_CALLS = 2_500;
+const MAXIMUM_CONCURRENT_CO_WINNER_SETTLEMENTS = 8;
+const DEFAULT_MAXIMUM_QUEUED_CO_WINNER_SETTLEMENTS = 2_500;
 
 const errorMessages = {
   INVALID_PAYLOAD: "The request payload is invalid.",
@@ -181,6 +196,26 @@ function commandIdFromPayload(payload: unknown): string | null {
   if (typeof payload !== "object" || payload === null || !("commandId" in payload)) return null;
   const parsed = CommandIdSchema.safeParse(payload.commandId);
   return parsed.success ? parsed.data : null;
+}
+
+function parseCommittedPrivateBatch(
+  events: readonly ParticipantPrivateEvent[],
+  commandId: string,
+): readonly ParticipantPrivateEvent[] {
+  if (events.length < 1 || events.length > 2) {
+    throw new Error("Committed private event batch exceeds its bound.");
+  }
+  const parsed = events.map((event) => ParticipantPrivateEventSchema.parse(event));
+  const markResult = parsed[0];
+  const nearWin = parsed[1];
+  if (
+    markResult?.type !== "mark-result" ||
+    markResult.commandId !== commandId ||
+    (nearWin !== undefined && nearWin.type !== "near-win")
+  ) {
+    throw new Error("Committed private event delivery metadata is inconsistent.");
+  }
+  return parsed;
 }
 
 export class BoundedFixedWindowRateLimiter {
@@ -276,6 +311,9 @@ export function createGameServer(options: GameServerOptions): GameServer {
   const connectionsPerSession = options.limits?.connectionsPerSession ?? 8;
   const maximumQueuedAutomaticCalls =
     options.limits?.maximumQueuedAutomaticCalls ?? DEFAULT_MAXIMUM_QUEUED_AUTOMATIC_CALLS;
+  const maximumQueuedCoWinnerSettlements =
+    options.limits?.maximumQueuedCoWinnerSettlements ??
+    DEFAULT_MAXIMUM_QUEUED_CO_WINNER_SETTLEMENTS;
   if (!Number.isSafeInteger(connectionLimit) || connectionLimit < 1) {
     throw new RangeError("The connection rate limit must be a positive integer.");
   }
@@ -290,6 +328,12 @@ export function createGameServer(options: GameServerOptions): GameServer {
   }
   if (!Number.isSafeInteger(maximumQueuedAutomaticCalls) || maximumQueuedAutomaticCalls < 1) {
     throw new RangeError("The automatic call queue limit must be a positive integer.");
+  }
+  if (
+    !Number.isSafeInteger(maximumQueuedCoWinnerSettlements) ||
+    maximumQueuedCoWinnerSettlements < 1
+  ) {
+    throw new RangeError("The co-winner settlement queue limit must be a positive integer.");
   }
   const connectionRateLimiter = new BoundedFixedWindowRateLimiter(10_000);
   const authenticationRateLimiter = new BoundedFixedWindowRateLimiter(10_000);
@@ -333,13 +377,24 @@ export function createGameServer(options: GameServerOptions): GameServer {
   const queuedAutomaticCalls = new Map<string, AutomaticCallLease>();
   const activeAutomaticCallLeases = new Map<string, AutomaticCallLease>();
   const automaticCallReconciliations = new Map<string, object>();
+  const coWinnerSettlementTimers = new Map<
+    string,
+    { readonly lease: CoWinnerSettlementLease; readonly timer: ReturnType<typeof setTimeout> }
+  >();
+  const queuedCoWinnerSettlements = new Map<string, CoWinnerSettlementLease>();
+  const activeCoWinnerSettlementLeases = new Map<string, CoWinnerSettlementLease>();
+  const coWinnerSettlementReconciliations = new Map<string, object>();
   let activePresenceGraceExpirations = 0;
   let activeAutomaticCalls = 0;
+  let activeCoWinnerSettlements = 0;
   let presenceGraceExpiryFailed = false;
   let automaticCallFailed = false;
+  let coWinnerSettlementFailed = false;
   let authorityFailed = false;
   let automaticCallRecoveryInProgress = false;
   const automaticCallRecoveryDirtyLobbies = new Set<string>();
+  let coWinnerSettlementRecoveryInProgress = false;
+  const coWinnerSettlementRecoveryDirtyLobbies = new Set<string>();
   let fatalPresenceClose: Promise<void> | null = null;
   let closed = false;
   let failureReported = false;
@@ -356,6 +411,10 @@ export function createGameServer(options: GameServerOptions): GameServer {
     automaticCallTimers.clear();
     queuedAutomaticCalls.clear();
     automaticCallReconciliations.clear();
+    for (const { timer } of coWinnerSettlementTimers.values()) clearTimeout(timer);
+    coWinnerSettlementTimers.clear();
+    queuedCoWinnerSettlements.clear();
+    coWinnerSettlementReconciliations.clear();
   };
   const reportAuthorityFailure = () => {
     authorityFailed = true;
@@ -566,6 +625,149 @@ export function createGameServer(options: GameServerOptions): GameServer {
     const dirtyLobbies = [...automaticCallRecoveryDirtyLobbies];
     automaticCallRecoveryDirtyLobbies.clear();
     await Promise.all(dirtyLobbies.map(reconcileAutomaticCall));
+  };
+
+  const coWinnerSettlementKey = (lease: CoWinnerSettlementLease) =>
+    JSON.stringify([lease.roundId, lease.triggeringCallId, lease.deadline.toISOString()]);
+  const clearCoWinnerSettlement = (lobbyId: string) => {
+    const existing = coWinnerSettlementTimers.get(lobbyId);
+    if (existing !== undefined) clearTimeout(existing.timer);
+    coWinnerSettlementTimers.delete(lobbyId);
+    queuedCoWinnerSettlements.delete(lobbyId);
+  };
+  const drainCoWinnerSettlements = () => {
+    while (
+      !closed &&
+      !authorityFailed &&
+      !coWinnerSettlementFailed &&
+      activeCoWinnerSettlements < MAXIMUM_CONCURRENT_CO_WINNER_SETTLEMENTS
+    ) {
+      const queued = [...queuedCoWinnerSettlements.entries()].find(
+        ([lobbyId]) => !activeCoWinnerSettlementLeases.has(lobbyId),
+      );
+      if (queued === undefined) return;
+      const [lobbyId, lease] = queued;
+      queuedCoWinnerSettlements.delete(lobbyId);
+      activeCoWinnerSettlementLeases.set(lobbyId, lease);
+      activeCoWinnerSettlements += 1;
+      trackAuthorityTask(
+        options.coWinnerSettlementLifecycle
+          .executeCoWinnerSettlement(lease)
+          .catch((error: unknown) => {
+            coWinnerSettlementFailed = true;
+            reportAuthorityFailure();
+            throw error;
+          })
+          .then(async (result) => {
+            if (closed || authorityFailed) return;
+            if (activeCoWinnerSettlementLeases.get(lobbyId) === lease) {
+              activeCoWinnerSettlementLeases.delete(lobbyId);
+            }
+            if (result === "settled" || result === "stale" || result === "too-early") {
+              await reconcileCoWinnerSettlement(lobbyId);
+            }
+          })
+          .catch((error: unknown) => {
+            coWinnerSettlementFailed = true;
+            reportAuthorityFailure();
+            throw error;
+          })
+          .finally(() => {
+            if (activeCoWinnerSettlementLeases.get(lobbyId) === lease) {
+              activeCoWinnerSettlementLeases.delete(lobbyId);
+            }
+            activeCoWinnerSettlements -= 1;
+            drainCoWinnerSettlements();
+          }),
+      );
+    }
+  };
+  const scheduleCoWinnerSettlement = (lease: CoWinnerSettlementLease) => {
+    if (closed || authorityFailed) return;
+    if (
+      lease.lobbyId.length === 0 ||
+      lease.roundId.length === 0 ||
+      lease.triggeringCallId.length === 0 ||
+      !Number.isFinite(lease.deadline.getTime())
+    ) {
+      trackAuthorityTask(
+        Promise.reject(new Error("Invalid persisted co-winner settlement lease.")),
+      );
+      return;
+    }
+    const existing = coWinnerSettlementTimers.get(lease.lobbyId);
+    if (existing !== undefined) {
+      if (coWinnerSettlementKey(existing.lease) === coWinnerSettlementKey(lease)) return;
+      clearTimeout(existing.timer);
+    }
+    const queued = queuedCoWinnerSettlements.get(lease.lobbyId);
+    if (queued !== undefined) {
+      if (coWinnerSettlementKey(queued) === coWinnerSettlementKey(lease)) return;
+      queuedCoWinnerSettlements.delete(lease.lobbyId);
+    }
+    const timer = setTimeout(
+      () => {
+        const current = coWinnerSettlementTimers.get(lease.lobbyId);
+        if (
+          current === undefined ||
+          coWinnerSettlementKey(current.lease) !== coWinnerSettlementKey(lease)
+        ) {
+          return;
+        }
+        coWinnerSettlementTimers.delete(lease.lobbyId);
+        if (
+          !queuedCoWinnerSettlements.has(lease.lobbyId) &&
+          queuedCoWinnerSettlements.size >= maximumQueuedCoWinnerSettlements
+        ) {
+          trackAuthorityTask(
+            Promise.reject(new Error("The co-winner settlement queue limit was exceeded.")),
+          );
+          return;
+        }
+        queuedCoWinnerSettlements.set(lease.lobbyId, lease);
+        drainCoWinnerSettlements();
+      },
+      Math.max(0, lease.deadline.getTime() - options.clock().getTime()),
+    );
+    coWinnerSettlementTimers.set(lease.lobbyId, { lease, timer });
+  };
+  const reconcileCoWinnerSettlement = async (lobbyId: string): Promise<void> => {
+    if (closed || authorityFailed) return;
+    if (coWinnerSettlementRecoveryInProgress) {
+      coWinnerSettlementRecoveryDirtyLobbies.add(lobbyId);
+      return;
+    }
+    const reconciliation = {};
+    coWinnerSettlementReconciliations.set(lobbyId, reconciliation);
+    try {
+      const lease = await options.coWinnerSettlementLifecycle.findCoWinnerSettlementLease(lobbyId);
+      if (closed || coWinnerSettlementReconciliations.get(lobbyId) !== reconciliation) return;
+      if (lease === null) clearCoWinnerSettlement(lobbyId);
+      else scheduleCoWinnerSettlement(lease);
+    } catch (error) {
+      reportAuthorityFailure();
+      throw error;
+    } finally {
+      if (coWinnerSettlementReconciliations.get(lobbyId) === reconciliation) {
+        coWinnerSettlementReconciliations.delete(lobbyId);
+      }
+    }
+  };
+  const recoverCoWinnerSettlements = async (): Promise<void> => {
+    coWinnerSettlementRecoveryInProgress = true;
+    try {
+      const leases = await options.coWinnerSettlementLifecycle.findCoWinnerSettlementLeases();
+      for (const lease of leases) {
+        if (!coWinnerSettlementRecoveryDirtyLobbies.has(lease.lobbyId)) {
+          scheduleCoWinnerSettlement(lease);
+        }
+      }
+    } finally {
+      coWinnerSettlementRecoveryInProgress = false;
+    }
+    const dirtyLobbies = [...coWinnerSettlementRecoveryDirtyLobbies];
+    coWinnerSettlementRecoveryDirtyLobbies.clear();
+    await Promise.all(dirtyLobbies.map(reconcileCoWinnerSettlement));
   };
 
   io.use(async (socket, next) => {
@@ -839,7 +1041,7 @@ export function createGameServer(options: GameServerOptions): GameServer {
   const emitLobbyEvent = async (lobbyId: string, event: ActiveLobbyEvent): Promise<void> => {
     const parsed = ActiveLobbyEventSchema.parse(event);
     await enqueueLobbyDelivery(lobbyId, parsed.eventSequence, async () => parsed);
-    await reconcileAutomaticCall(lobbyId);
+    await Promise.all([reconcileAutomaticCall(lobbyId), reconcileCoWinnerSettlement(lobbyId)]);
   };
 
   const emitParticipantEvents = async (
@@ -1064,38 +1266,37 @@ export function createGameServer(options: GameServerOptions): GameServer {
           if (acknowledgement.commandId !== parsed.data.commandId) {
             throw new Error("Committed acknowledgement does not match the incoming command.");
           }
+          const committedPrivateEvents =
+            result.participantPrivateEvents.length === 0
+              ? []
+              : parseCommittedPrivateBatch(
+                  result.participantPrivateEvents,
+                  acknowledgement.commandId,
+                );
           if (result.activeLobbyEvent !== null) {
             const event = ActiveLobbyEventSchema.parse(result.activeLobbyEvent);
             if (
               acknowledgement.scope !== "active-lobby" ||
               acknowledgement.eventSequence !== event.eventSequence ||
-              result.participantPrivateEvents.length > 0 ||
               acknowledgement.idempotentReplay
             ) {
               throw new Error("Committed lobby event delivery metadata is inconsistent.");
             }
             await emitLobbyEvent(identity.lobbyId, event);
-          } else if (result.participantPrivateEvents.length > 0) {
-            if (result.participantPrivateEvents.length > 2) {
-              throw new Error("Committed private event batch exceeds its bound.");
+            if (committedPrivateEvents.length > 0) {
+              await emitParticipantEvents(identity.participantId, committedPrivateEvents);
             }
-            const events = result.participantPrivateEvents.map((event) =>
-              ParticipantPrivateEventSchema.parse(event),
-            );
-            const markResult = events[0];
-            const nearWin = events[1];
+          } else if (committedPrivateEvents.length > 0) {
             if (
-              acknowledgement.scope !== "participant-private" ||
-              markResult?.type !== "mark-result" ||
-              markResult.commandId !== acknowledgement.commandId ||
-              (nearWin !== undefined && nearWin.type !== "near-win")
+              acknowledgement.scope !== "participant-private" &&
+              !(acknowledgement.scope === "active-lobby" && acknowledgement.idempotentReplay)
             ) {
               throw new Error("Committed private event delivery metadata is inconsistent.");
             }
             if (acknowledgement.idempotentReplay) {
-              events.forEach((event) => socket.emit("v1:private-event", event));
+              committedPrivateEvents.forEach((event) => socket.emit("v1:private-event", event));
             } else {
-              await emitParticipantEvents(identity.participantId, events);
+              await emitParticipantEvents(identity.participantId, committedPrivateEvents);
             }
           } else if (!acknowledgement.idempotentReplay) {
             throw new Error("Committed replay delivery metadata is inconsistent.");
@@ -1116,7 +1317,7 @@ export function createGameServer(options: GameServerOptions): GameServer {
   return {
     failure,
     async listen({ host, port }) {
-      await recoverAutomaticCalls();
+      await Promise.all([recoverAutomaticCalls(), recoverCoWinnerSettlements()]);
       if (closed || authorityFailed) throw new Error("Game server authority is closed.");
       const address = await listen(httpServer, host, port);
       return { host: address.address, port: address.port };
@@ -1134,7 +1335,7 @@ export function createGameServer(options: GameServerOptions): GameServer {
     },
     async publishLobbyEventFromSource(lobbyId, sequence, loadEvent) {
       await enqueueLobbyDelivery(lobbyId, sequence, loadEvent);
-      await reconcileAutomaticCall(lobbyId);
+      await Promise.all([reconcileAutomaticCall(lobbyId), reconcileCoWinnerSettlement(lobbyId)]);
     },
     publishParticipantEvent(participantId, event) {
       return emitParticipantEvent(participantId, event);
