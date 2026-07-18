@@ -48,6 +48,7 @@ Next story: US-001
 - Active-event subscription, malformed dedicated-channel notification, durable reload, or relay failure is fatal to the game-server runtime because `LISTEN` recovery cannot prove continuity without a durable cursor. Stop Socket.IO before awaiting subscription/database drain so a stalled delivery cannot keep a continuity-lost authority serving, and settle runtime completion with a safe failure if cleanup fails. Exact direct/notification echoes are idempotent only when their canonical event identity matches bounded recent delivery history; same-sequence conflicts and unknown stale deliveries fail closed.
 - Authenticated sockets establish an actor-scoped snapshot baseline before live delivery: join authorized rooms first, buffer a bounded combined set of lobby/private events during the query, emit the snapshot, discard buffered lobby sequences at or below its baseline, then release newer events; every ready-state lobby delivery must also suppress sequences at or below that baseline even when it was queued before synchronization but began socket delivery afterward. Explicit resync uses the same boundary and restores the prior safe baseline plus buffered deliveries after transient query failure; failed initialization disconnects and executes no commands.
 - Realtime presence uses the lobby fence and durable participant connection count: the first socket ends the prior absence and creates a connected generation plus sequenced event, extra tabs update only the count, and non-final closes decrement only the count. The final close disconnects the canonical active session, fixes its rejoin deadline, invalidates tickets, and commits a configured durable grace lease; the authority restores a fail-closed bounded lease set after restart and limits concurrent expiry transactions. Generation-fenced expiry returns `expired`, `too-early`, or `stale`, retries only the persistence-authoritative early result, and commits absence before any required pause event. Reconnect or participant departure retires old leases without resuming, host absence takes pause-reason precedence, and resume stays blocked while a current non-overridden absence remains. Cleanup or timer persistence failure is fatal to the supervised authority.
+- Active-round joins persist as waiting participants with no current card or marks and retain authorized presence/snapshot visibility; their absence does not pause or block current play until replacement-round creation atomically promotes eligible participants to playing and assigns new cards.
 
 Append-only iteration log
 -------------------------
@@ -3414,3 +3415,51 @@ Targeted re-review outcome for US-035 at 2026-07-17 22:04:00 MST:
 - `qa-expert` reviewed the revised complete staged diff and returned an empty actionable finding list with no residual risk in the remediation scope.
 - The automatic-to-manual transition directly proves the persisted interval is cleared; code review had already returned an empty finding list.
 - No in-scope critical, high, or medium findings remain; US-035 can be marked passing and committed after the final consistency check.
+
+## 2026-07-17 22:09:10 MST - US-036
+- What was implemented
+  - Completed the active-round late-join journey through the real PostgreSQL repository: new participants remain waiting, receive no current card or marks, cannot daub the current card, retain an authorized snapshot, and are promoted with a new card when the host creates the next round.
+  - Excluded waiting-player absences from current-round pause and calling-activation gates while retaining their durable presence transitions and sequenced presence events.
+  - Added an integration regression covering join, snapshot, mark rejection, connection/grace expiry, continued calling, round end, and next-round inclusion.
+- Files changed: `AGENTS.md`, `packages/database/src/database.integration.test.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/round-command-executor.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-036 - Queue players joining active rounds`
+- Auto approval: `enabled`
+- Checks:
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "queues an active-round join"` (expected fail before implementation because waiting-player grace expiry paused the active round; pass after implementation)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test:database` (pass; 108 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass; typecheck, 25 files, and 521 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: none
+  - Used: skipped because the established lobby-entry, snapshot, round-command, presence, and integration-test patterns made this a focused one-domain change
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`; targeted re-review by `qa-expert`
+  - Findings: code review returned none; fixed the QA medium gap by covering a fresh join after exact prior-session expiry; targeted re-review returned none
+- Decisions (why):
+  - Preserved waiting participants' presence events and authorized lobby snapshot instead of hiding them because queue status is lobby-visible while card and mark state remains participant-private and absent.
+  - Scoped absence gating to hosts and participants already marked `PLAYING` because a queued participant has no current-round card or win eligibility and must not disrupt that round before promotion.
+  - Reused replacement-round creation as the promotion boundary because it already expires due sessions, selects the eligible non-departed roster, marks it playing, and assigns fresh cards transactionally.
+- **Learnings for future iterations:**
+  - Round eligibility is the persistence boundary between lobby presence and current gameplay participation; waiting-player lifecycle changes stay visible but cannot drive current-round pause or activation rules.
+  - A complete late-join regression should cross entry, actor-scoped snapshot, private command rejection, presence expiry, continued host play, and next-round roster selection rather than testing only the stored eligibility flag.
+- Known issues / follow-ups:
+  - The unrelated `apps/web/next-env.d.ts` side effect and untracked browser-report artifacts remain untouched and unstaged.
+- Next iteration start:
+  - If review passes, implement US-037 manual and automatic calling behavior; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-036 at 2026-07-17 22:14:35 MST:
+- The initial `code-reviewer` pass returned no actionable findings; `qa-expert` identified one medium acceptance-coverage gap because the late participant was promoted before their two-minute rejoin deadline.
+- Extended the PostgreSQL journey through the exact prior-session deadline, a fresh participant/session join, rejected prior credentials, authorized no-card/no-mark snapshot, private mark rejection, and next-round card assignment while excluding the departed slot.
+- Post-fix checks: the focused late-join journey passes, the PostgreSQL-enabled root suite passes typecheck with 25 files and 521 tests, lint and tracked formatting pass, and whitespace checks pass.
+- Targeted re-review: pending `qa-expert` because only its acceptance-coverage finding received substantive test changes; code review is not repeated because its initial finding list was empty.
+
+Targeted re-review outcome for US-036 at 2026-07-17 22:15:41 MST:
+- `qa-expert` reviewed the revised complete staged diff and returned an empty actionable finding list.
+- The exact-deadline fresh join now proves prior credential rejection, waiting/no-card/no-mark state, mark rejection, departed-slot exclusion, and next-round promotion through production repository paths.
+- Code review had already returned an empty finding list. No in-scope critical, high, or medium findings remain; US-036 can be marked passing and committed after the final consistency check.

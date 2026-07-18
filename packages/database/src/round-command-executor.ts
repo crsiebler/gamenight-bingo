@@ -514,7 +514,10 @@ async function executeMutation(
       where: {
         lobbyId,
         endedAt: null,
-        participant: { departedAt: null },
+        participant: {
+          departedAt: null,
+          OR: [{ role: "HOST" }, { roundEligibility: "PLAYING" }],
+        },
         OR: [
           { status: "ABSENT", overridden: false },
           { status: "GRACE", graceEndsAt: { lte: now } },

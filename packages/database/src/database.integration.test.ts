@@ -4880,6 +4880,195 @@ describeDatabase("PostgreSQL durable game state", () => {
     });
   });
 
+  test("queues an active-round join without letting their absence block current play", async () => {
+    let now = new Date("2026-07-17T09:16:00.000Z");
+    const connection = await connectWithRoundCommands(() => now);
+    const initial = createLobbyState();
+    const state: DurableLobbyState = {
+      ...initial,
+      lobby: { ...initial.lobby, lastEventSequence: 0n },
+      round: {
+        ...initial.round!,
+        stage: "active",
+        pausedAt: null,
+        pauseReason: null,
+        nextCallAt: new Date("2026-07-17T09:16:30.000Z"),
+        coWinnerTriggeringCallId: null,
+        coWinnerOpenedAt: null,
+        coWinnerClosesAt: null,
+        resultSettledAt: null,
+        endedAt: null,
+        coWinners: [],
+      },
+      events: [],
+      commandResults: [],
+    };
+    await createPersistedLobby(connection, state);
+    const suffix = randomUUID();
+    const tokenHash = new Uint8Array(randomBytes(32));
+    const admitted = await connection.lobbyStates.joinLobbyWithSession({
+      lobbyId: state.lobby.id,
+      lobbyCode: state.lobby.code,
+      participantId: `participant-late-${suffix}`,
+      sessionId: `session-late-${suffix}`,
+      commandId: `join-late-${suffix}`,
+      username: "Late Round Player",
+      tokenHash,
+      issuedAt: now,
+      maxPlayersPerLobby: 3,
+    });
+    if (!admitted.ok) throw new Error(admitted.error.message);
+
+    await expect(
+      connection.lobbyStates.findAuthorizedSnapshot({ lobbyId: state.lobby.id, tokenHash }),
+    ).resolves.toMatchObject({
+      self: { id: admitted.entry.participantId, roundEligibility: "waiting" },
+      ownCard: null,
+      ownMarks: [],
+      calls: state.round!.calls.map(({ id, position, ball, calledAt }) => ({
+        id,
+        roundId: state.round!.id,
+        position,
+        ball,
+        calledAt: calledAt.toISOString(),
+      })),
+    });
+    await expect(
+      connection.roundCommands.executeAuthenticated({
+        lobbyId: state.lobby.id,
+        participantId: admitted.entry.participantId,
+        participantSessionId: admitted.entry.sessionId,
+        command: MarkCardCommandSchema.parse({
+          schemaVersion: 1,
+          type: "mark-card",
+          commandId: `mark-late-${suffix}`,
+          ball: state.round!.calls[0]!.ball,
+        }),
+      }),
+    ).resolves.toEqual({ ok: false, error: { code: "INVALID_COMMAND" } });
+
+    const identity = {
+      lobbyId: state.lobby.id,
+      participantId: admitted.entry.participantId,
+      participantSessionId: admitted.entry.sessionId,
+    };
+    const generation = await connection.lobbyStates.registerRealtimeConnection(identity);
+    if (generation === null) throw new Error("Expected the waiting participant to connect.");
+    expect(generation).toBe(2);
+    const grace = await connection.lobbyStates.unregisterRealtimeConnection({
+      ...identity,
+      presenceGeneration: generation,
+      reconnectWindowSeconds: 120,
+      disconnectPauseGraceSeconds: 10,
+    });
+    if (grace === null)
+      throw new Error("Expected the final waiting-player connection to enter grace.");
+    now = grace.graceEndsAt;
+
+    await expect(connection.lobbyStates.expireRealtimePresenceGrace(grace)).resolves.toBe(
+      "expired",
+    );
+    await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toMatchObject({
+      round: { id: state.round!.id, stage: "active", pauseReason: null },
+    });
+    await expect(
+      connection.roundCommands.execute({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: state.sessions[0]!.tokenHash,
+        command: CallNextCommandSchema.parse({
+          schemaVersion: 1,
+          type: "call-next",
+          commandId: `call-after-late-absence-${suffix}`,
+        }),
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    now = new Date("2026-07-17T09:18:00.000Z");
+    const replacementTokenHash = new Uint8Array(randomBytes(32));
+    const replacement = await connection.lobbyStates.joinLobbyWithSession({
+      lobbyId: state.lobby.id,
+      lobbyCode: state.lobby.code,
+      participantId: `participant-replacement-${suffix}`,
+      sessionId: `session-replacement-${suffix}`,
+      commandId: `join-replacement-${suffix}`,
+      username: "Replacement Round Player",
+      tokenHash: replacementTokenHash,
+      issuedAt: now,
+      maxPlayersPerLobby: 3,
+    });
+    if (!replacement.ok) throw new Error(replacement.error.message);
+    await expect(
+      connection.lobbyStates.resolveParticipantSessionByTokenHash({
+        lobbyId: state.lobby.id,
+        tokenHash,
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      connection.lobbyStates.findAuthorizedSnapshot({
+        lobbyId: state.lobby.id,
+        tokenHash: replacementTokenHash,
+      }),
+    ).resolves.toMatchObject({
+      self: { id: replacement.entry.participantId, roundEligibility: "waiting" },
+      ownCard: null,
+      ownMarks: [],
+    });
+    await expect(
+      connection.roundCommands.executeAuthenticated({
+        lobbyId: state.lobby.id,
+        participantId: replacement.entry.participantId,
+        participantSessionId: replacement.entry.sessionId,
+        command: MarkCardCommandSchema.parse({
+          schemaVersion: 1,
+          type: "mark-card",
+          commandId: `mark-replacement-${suffix}`,
+          ball: state.round!.calls[0]!.ball,
+        }),
+      }),
+    ).resolves.toEqual({ ok: false, error: { code: "INVALID_COMMAND" } });
+
+    now = new Date("2026-07-17T09:18:01.000Z");
+    await expect(
+      connection.roundCommands.execute({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: state.sessions[0]!.tokenHash,
+        command: EndRoundCommandSchema.parse({
+          schemaVersion: 1,
+          type: "end-round",
+          commandId: `end-for-late-player-${suffix}`,
+        }),
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      connection.roundCommands.execute({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: state.sessions[0]!.tokenHash,
+        command: CreateRoundCommandSchema.parse({
+          schemaVersion: 1,
+          type: "create-round",
+          commandId: `next-round-for-late-player-${suffix}`,
+        }),
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    const restored = await connection.lobbyStates.findById(state.lobby.id);
+    expect(
+      restored?.participants.find(({ id }) => id === admitted.entry.participantId),
+    ).toMatchObject({
+      roundEligibility: "waiting",
+      departedAt: new Date("2026-07-17T09:18:00.000Z"),
+    });
+    expect(
+      restored?.participants.find(({ id }) => id === replacement.entry.participantId),
+    ).toMatchObject({ roundEligibility: "playing", departedAt: null });
+    expect(restored?.round?.cards.map(({ participantId }) => participantId)).toContain(
+      replacement.entry.participantId,
+    );
+    expect(restored?.round?.cards.map(({ participantId }) => participantId)).not.toContain(
+      admitted.entry.participantId,
+    );
+  });
+
   test("continues a settled One Line result without replacing round play state", async () => {
     const occurredAt = new Date("2026-07-17T09:16:00.000Z");
     const connection = await connectWithRoundCommands(() => occurredAt);

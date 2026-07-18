@@ -264,7 +264,9 @@ invalid counts, timestamps, or durations.
   Retry only a persistence-authoritative `too-early` result; reconnect or
   participant departure makes the old timer stale and never resumes a paused
   round. Host absence takes pause-reason precedence, and resume remains blocked
-  while a current non-overridden absence exists.
+  while a current non-overridden host or playing-participant absence exists.
+  Keep waiting-participant presence visible and durable, but do not let it pause
+  or block the current round until the participant is promoted into a new round.
   Bind disconnect cleanup to the registered presence generation, consolidate
   sibling sessions, and disconnect the participant's canonical active session
   when the final connection belongs to an older departed sibling. Treat cleanup

@@ -2705,7 +2705,7 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
                 lobbyId: input.lobbyId,
                 departedAt: null,
               },
-              select: { role: true },
+              select: { role: true, roundEligibility: true },
             });
             if (participant === null) return "stale";
 
@@ -2747,7 +2747,9 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
               },
             });
             const pauseReason = participant.role === "HOST" ? "HOST_ABSENT" : "PARTICIPANT_ABSENT";
-            const shouldPause = currentRound?.stage === "ACTIVE";
+            const shouldPause =
+              currentRound?.stage === "ACTIVE" &&
+              (participant.role === "HOST" || participant.roundEligibility === "PLAYING");
             const shouldPromoteHostPause =
               participant.role === "HOST" &&
               currentRound?.stage === "PAUSED" &&
