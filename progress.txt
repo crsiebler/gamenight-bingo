@@ -51,6 +51,8 @@ Next story: US-001
 - Active-round joins persist as waiting participants with no current card or marks and retain authorized presence/snapshot visibility; their absence does not pause or block current play until replacement-round creation atomically promotes eligible participants to playing and assigns new cards.
 - Automatic-call timers are bounded process-local wakeups for exact persisted `(lobbyId, roundId, deadline)` leases; timer and host calls share the Serializable lobby fence and call-commit primitive, every committed lobby event reconciles the next lease, and restart recovery subscribes to durable events before loading leases so stale callbacks cannot repeat a draw position. Generation-fence overlapping per-lobby lease reads, run at most one persistence execution per lobby, retain only its latest queued replacement so stale completions cannot replace current work or starve other lobbies, latch scheduler failures as terminal before draining or reconciling more work, and recheck terminal/closed state after asynchronous recovery before binding.
 - Fake-timer race tests must bound deferred coordination with real timer functions captured before fake timers are installed, release every blocker in `finally`, and await in-flight harness/publication cleanup so a failed synchronization assertion cannot hang or poison later tests.
+- Pattern progress evaluates every canonical mask from authoritative called/marked cell projections, excludes the free center from required counts, uses canonical mask order for deterministic flexible-rule ties, and treats near-win as exactly one required called-but-unmarked cell while keeping feedback gating separate from completion.
+- Participant-private mutations persist a bounded ordered event batch plus its immutable canonical pattern definition, called/marked projection, and feedback decision; a row-level result-format discriminator and integrity digest bind current result JSON to its private row metadata so catalog revisions and coordinated payload rewrites cannot reinterpret replay. Adapters validate the full batch before emitting, fresh commits deliver to the participant room, replays deliver only to the requesting socket, and replacement rounds strip private payload/context plus integrity while retaining intent-only tombstones.
 
 Append-only iteration log
 -------------------------
@@ -3736,3 +3738,236 @@ Targeted re-review outcome for US-038 at 2026-07-18 00:23:34 MST:
 - The actor-authorized reconnect snapshot now directly proves the persisted mark survives through the production projection with its original identity and timestamp.
 - QA's initial bookkeeping-only observation is resolved by staging the required post-review `passes: true` update now.
 - No in-scope critical, high, or medium findings remain; US-038 can be marked passing and committed after the final consistency check.
+
+## 2026-07-18 00:45:41 MST - US-039
+- What was implemented
+  - Added canonical pattern progress calculation for exact, One Line, Two Lines, and Blackout masks using authoritative called and marked cell projections, center satisfaction, and deterministic canonical-mask tie-breaking.
+  - Defined near-win as one remaining required uncalled card number, persisted the mark-result and optional near-win as one ordered participant-private command-result batch, and retained legacy singular/eventless replay tombstone support.
+  - Delivered fresh private batches to the participant room and replayed batches only to the requesting socket after validating the complete batch; disabling feedback suppresses only the near-win event and leaves progress/mark persistence unchanged.
+- Files changed: `AGENTS.md`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/socket-server.ts`, `apps/game-server/src/socket-server.test.ts`, `apps/web/src/lobby-entry-runtime.ts`, `bun.lock`, `packages/database/package.json`, `packages/database/src/database.integration.test.ts`, `packages/database/src/round-command-executor.ts`, `packages/patterns/src/index.ts`, `packages/patterns/src/matcher.ts`, `tests/patterns.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-039 - Calculate progress and near-win`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run tests/patterns.test.ts` (expected fail before implementation because `calculatePatternProgress` was missing; pass after implementation with 21 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "emits authoritative near-win|suppresses optional near-win"` (expected fail before implementation because private event batches/near-win were missing; pass after implementation with 2 focused tests)
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts -t "keeps participant-private results"` (expected fail before implementation because the adapter did not deliver private batches; pass after implementation)
+  - `bunx vitest run tests/patterns.test.ts packages/database/src/round-command-executor.test.ts` (pass; 25 tests)
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts apps/game-server/src/runtime.test.ts` (pass; 101 tests, 3 database-backed tests skipped in this focused run)
+  - `bunx vitest run apps/web/src/lobby-entry-http.test.ts` (pass; 54 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test:database` (pass; 120 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass before review with 560 tests; pass after remediation with typecheck, 25 files, and 563 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `bun run format:check` (fails only on three pre-existing untracked Lighthouse/DOM artifacts)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: none
+  - Used: `backend-developer` for focused guidance on progress semantics, private batch persistence/replay, feedback gating, and test risks because this was a complex cross-package story within standard mode's budget
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and persistence/private-delivery-triggered `security-engineer`; targeted re-review planned for the same specialists after substantive fixes
+  - Findings: fixed canonical batch ordering, authenticated-card replay binding, current batch tombstone coverage, and feedback-off progress coverage before commit
+- Decisions (why):
+  - Defined near-win as one uncalled required number because a called-but-unmarked cell requires a daub rather than another call; the event exposes only a number on the authenticated participant's own card.
+  - Kept progress calculation independent of feedback policy so disabling feedback cannot weaken completion or future winner validation.
+  - Replaced the singular private command result with a bounded ordered batch because a valid mark must retain its mark-result while also emitting a distinct near-win event; legacy singular parsing remains because command results are durable replay tombstones.
+  - Added the patterns workspace dependency to the database package so the authoritative transaction uses the same canonical matcher rather than duplicating mask semantics.
+- **Learnings for future iterations:**
+  - Flexible progress must evaluate every accepted canonical mask; minimum remaining cells determines displayed progress, canonical order breaks ties, and any completed mask suppresses near-win.
+  - Private event batches must reserve snapshot-synchronization capacity for the entire batch and validate every event before any socket emission to avoid partial or reordered delivery.
+  - Round replacement must remove both legacy singular and current batch private payloads while preserving canonical command intent and acknowledgement metadata.
+- Known issues / follow-ups:
+  - Root `bun run format:check` remains blocked by unrelated untracked Lighthouse/DOM artifacts; every tracked file passes Prettier.
+  - The unrelated `apps/web/next-env.d.ts` side effect and untracked browser-report artifacts remain untouched and will not be staged.
+- Next iteration start:
+  - If review passes, implement US-040 two-second co-winner settlement using the new authoritative progress result; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-039 at 2026-07-18 00:58:25 MST:
+- The initial `code-reviewer` returned no findings; `qa-expert` and `security-engineer` produced four medium findings merged into three in-scope remediation areas.
+- Added failing regressions proving reversed private batches emitted out of order and tampered foreign-card replay metadata was accepted; duplicate-mark and lone-near-win cases already failed closed.
+- Enforced canonical `[mark-result, near-win?]` ordering and a two-event bound before Socket.IO delivery, rejected conflicting legacy/current persisted shapes, and bound replayed command/mark/card/near-win metadata to the authenticated participant's current durable card and mark.
+- Updated replacement-round coverage to seed the current private batch shape with near-win data and assert exact intent-only tombstone content plus eventless replay after replacement.
+- Extended muted-feedback coverage to recompute authoritative progress from restored calls/marks and prove it remains one-away while only the private near-win event is suppressed.
+- Post-fix checks: targeted remediation tests pass 7 tests; affected matcher/executor/runtime/Socket.IO suites pass 129 tests with 3 database skips; typecheck, lint, and tracked formatting pass; the PostgreSQL-backed root suite passes 25 files and 563 tests.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` because fixes changed correctness, test coverage, and private replay validation.
+
+Targeted re-review outcome for US-039 at 2026-07-18 01:03:39 MST:
+- `qa-expert` and `security-engineer` returned empty actionable finding lists; `code-reviewer` identified one remaining medium acceptance-criteria blocker.
+- The staged matcher defines near-win as one uncalled required number, while the reviewer interpreted "exactly one required called number away" as one called-but-unmarked required number. The current predicate and tests therefore implement the inverse of that interpretation.
+- Per the one-targeted-re-review limit, no further substantive fix is permitted in this iteration. `US-039` remains `passes: false`, `prd.json` remains unchanged, and no commit was created.
+- Next iteration start: resolve the near-win wording in favor of the PRD's literal called-but-unmarked interpretation, add failing exact/flexible regressions first, update authoritative event generation and muted-feedback expectations, rerun all US-039 checks, and restart the complete staged review loop.
+
+## 2026-07-18 01:08:23 MST - US-039
+- What was implemented
+  - Resumed the blocked story and changed near-win qualification from one uncalled required number to exactly one required called-but-unmarked number.
+  - Added exact and flexible matcher regressions plus PostgreSQL-backed private-delivery and feedback-disabled coverage for the corrected semantics.
+  - Updated reusable repository guidance while preserving the existing canonical progress, bounded private batch, persistence, replay, and Socket.IO delivery implementation.
+- Files changed: `AGENTS.md`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/socket-server.ts`, `apps/game-server/src/socket-server.test.ts`, `apps/web/src/lobby-entry-runtime.ts`, `bun.lock`, `packages/database/package.json`, `packages/database/src/database.integration.test.ts`, `packages/database/src/round-command-executor.ts`, `packages/patterns/src/index.ts`, `packages/patterns/src/matcher.ts`, `tests/patterns.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-039 - Calculate progress and near-win`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run tests/patterns.test.ts` (expected fail before predicate correction with 2 failures; pass after implementation with 21 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "emits authoritative near-win|suppresses optional near-win"` (expected fail before predicate correction with 2 failures; pass after implementation with 2 focused tests)
+  - `bunx vitest run tests/patterns.test.ts packages/database/src/round-command-executor.test.ts apps/game-server/src/socket-server.test.ts apps/game-server/src/runtime.test.ts apps/web/src/lobby-entry-http.test.ts` (pass; 183 tests, 3 database-backed tests skipped in this focused run)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass; typecheck, 25 files, and 563 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `bun run format:check` (fails only on three pre-existing untracked Lighthouse/DOM artifacts)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+- Implementation agents:
+  - Recommended: none
+  - Used: skipped because this resumed iteration addressed one concrete matcher predicate finding and its authoritative integration fixtures
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and persistence/private-delivery-triggered `security-engineer` planned for a fresh review of the complete staged diff
+  - Findings: pending staged-diff review
+- Decisions (why):
+  - Followed the recorded PRD interpretation that near-win means one required called-but-unmarked number, rather than one future call, because the prior targeted review identified the inverse predicate as the remaining acceptance-criteria blocker.
+  - Kept progress independent of feedback policy because optional feedback must not alter authoritative mark persistence or completion evaluation.
+- **Learnings for future iterations:**
+  - Near-win qualification requires both authoritative projections: exactly one required cell remains unsatisfied, its number has been called, and it has not been marked.
+  - Flexible patterns still use canonical mask order for progress ties and search every canonical candidate for a qualifying near-win path.
+- Known issues / follow-ups:
+  - Root `bun run format:check` remains blocked by unrelated untracked Lighthouse/DOM artifacts; every tracked file passes Prettier.
+  - The unrelated `apps/web/next-env.d.ts` side effect and untracked browser-report artifacts remain untouched and will not be staged.
+- Next iteration start:
+  - If review passes, implement US-040 two-second co-winner settlement; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-039 at 2026-07-18 01:23:23 MST:
+- The fresh initial review used `code-reviewer`, `qa-expert`, and `security-engineer`; six medium findings merged into five root causes after deduplicating the live eventless-replay finding.
+- Fixed three in-scope roots: current-round eventless private replay now fails closed while detached replacement-round tombstones remain eventless; replayed near-win data is recomputed from the authenticated card, canonical pattern, calls, and marks as of the original commit timestamp; and exact/flexible coverage now includes later masks, observable canonical ties, Blackout counts, and center handling.
+- Added failing PostgreSQL regressions before replay validation changes. They proved a deleted live batch and a tampered required ball were accepted; both pass after the fix, and a valid original near-win still replays after later progress changes.
+- The call-triggered feedback suggestion was not applied because this story's private near-win result is defined on the participant's mark mutation; adding call-time fan-out would require a new durable multi-participant private-event protocol not present in the selected story.
+- The HTTP fallback suggestion was discarded under the unchanged-legacy noise rule: the pre-existing HTTP command contract intentionally returns only the committed acknowledgement and already did not relay singular mark-result events; this staged batch change does not create that behavior.
+- The production-toggle suggestion was not applied because no user-facing, lobby, or runtime near-win setting is defined by the PRD; the injected policy seam and integration coverage prove feedback gating without inventing configuration outside this story.
+- Post-fix checks: focused PostgreSQL replay tests pass; `TEST_DATABASE_URL=<approved local Compose database> bun run test` passes typecheck, 25 files, and 563 tests; lint and tracked-file formatting pass; `git diff --check` passes.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` because fixes changed replay correctness, test coverage, and private persisted-data validation.
+
+Targeted re-review outcome for US-039 at 2026-07-18 01:27:06 MST:
+- `code-reviewer`, `qa-expert`, and `security-engineer` independently identified the same remaining medium replay-integrity root cause.
+- Replay reconstruction filters calls and marks to the original command timestamp but uses mutable `round.currentPatternId`; `continue-round` can change that pattern without replacing the round or detaching its command results, so a valid earlier replay can fail or tampered data can be checked against the wrong masks.
+- Per the one-targeted-re-review limit, no further substantive fix is permitted in this iteration. `US-039` remains `passes: false`, `prd.json` remains unchanged, and no commit was created.
+- Next iteration start: add a failing replay-after-`continue-round` regression, persist the canonical pattern ID in new participant-private command results while retaining explicit legacy handling, validate replay against that immutable pattern, rerun all US-039 checks, and restart the complete staged review loop.
+
+## 2026-07-18 01:32:39 MST - US-039
+- What was implemented
+  - Resumed the blocked story by adding a PostgreSQL regression that commits One Line near-win feedback, continues the same round to Two Lines through the production command, and replays the original mark result.
+  - Persisted the immutable canonical pattern, called/marked projection, and feedback decision with every new current-round participant-private event batch so replay does not depend on mutable round state, same-millisecond later facts, or current runtime policy.
+  - Added a row-level durable result-format discriminator for explicit legacy singular compatibility and removed private progress context with event payloads when replacement rounds detach intent-only tombstones.
+- Files changed: `AGENTS.md`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/socket-server.ts`, `apps/game-server/src/socket-server.test.ts`, `apps/web/src/lobby-entry-runtime.ts`, `bun.lock`, `packages/database/package.json`, `packages/database/prisma/schema.prisma`, `packages/database/prisma/migrations/20260718014000_add_command_result_format/migration.sql`, `packages/database/src/database.integration.test.ts`, `packages/database/src/round-command-executor.ts`, `packages/patterns/src/index.ts`, `packages/patterns/src/matcher.ts`, `tests/patterns.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-039 - Calculate progress and near-win`
+- Auto approval: `enabled`
+- Checks:
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "emits authoritative near-win"` (expected fail before implementation because replay used the continued Two Lines pattern; pass after implementation)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "authorizes a private mark|emits authoritative near-win|suppresses optional near-win"` (expected fail after initial review with 3 regressions; pass after remediation)
+  - `DATABASE_URL=<approved local Compose database> bun run db:migrate:deploy` (pass; applied append-only command-result format migration)
+  - `bunx vitest run tests/patterns.test.ts packages/database/src/round-command-executor.test.ts apps/game-server/src/socket-server.test.ts apps/game-server/src/runtime.test.ts apps/web/src/lobby-entry-http.test.ts` (pass; 183 tests and 3 database-backed tests skipped in this focused run)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "emits authoritative near-win|suppresses optional near-win|preserves command replay intent"` (pass; 3 focused tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test:database` (pass; 120 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass; typecheck, 25 files, and 563 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `bun run format:check` (fails only on three pre-existing untracked Lighthouse/DOM artifacts)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `git diff --check && git diff --cached --check` (pass before restaging)
+- Implementation agents:
+  - Recommended: none
+  - Used: skipped because this resumed iteration addressed one concrete replay-integrity finding with an established persistence and test pattern
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and persistence/private-replay-triggered `security-engineer`; targeted re-review planned for the same specialists after substantive fixes
+  - Findings: fixed current-policy replay drift, same-millisecond historical ambiguity, feedback-off completion coverage, and current-batch legacy downgrade; discarded unchanged pre-story HTTP delivery behavior under the noise rule
+- Decisions (why):
+  - Stored the complete progress input and feedback decision in the durable command result because neither timestamps nor current runtime options identify the exact original transaction semantics.
+  - Added `result_format` outside mutable JSON because durable pre-batch singular tombstones are a concrete compatibility requirement but new batches must not be downgraded by payload rewriting.
+  - Removed private progress context with event payloads during round replacement because detached eventless tombstones retain only replay intent and acknowledgement metadata.
+- **Learnings for future iterations:**
+  - Historical replay validation must persist every mutable semantic input needed for reconstruction; filtering facts by commit time is insufficient when configuration can change in place or later facts share the same timestamp.
+  - A same-round progression regression is necessary for replay integrity because round replacement tests cannot expose mutable-pattern drift.
+- Known issues / follow-ups:
+  - Root `bun run format:check` remains blocked by unrelated untracked Lighthouse/DOM artifacts; every tracked file passes Prettier.
+  - The unrelated `apps/web/next-env.d.ts` side effect and untracked browser-report artifacts remain untouched and will not be staged.
+- Next iteration start:
+  - If review passes, implement US-040 two-second co-winner settlement; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for resumed US-039 at 2026-07-18 01:48:34 MST:
+- The fresh initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced six medium findings merged into five roots; the HTTP private-delivery observation was discarded because the unchanged fallback endpoint already omitted the pre-existing singular mark result and the staged story did not introduce that behavior.
+- Added failing regressions for feedback-policy changes in both directions, a later same-millisecond completion, feedback-disabled canonical completion, and rewriting a current batch into the singular legacy shape.
+- Replaced timestamp/current-policy reconstruction with a strict immutable progress projection containing canonical pattern ID, called cells, marked cells, and the committed feedback decision; replay still verifies the referenced card/mark and rejects projected facts absent from current authoritative state.
+- Added append-only `result_format` persistence with a database check constraint: existing rows default to legacy format 1, new private batches explicitly use format 2, and JSON rewriting cannot change format eligibility. Replacement rounds strip all private context while preserving eventless intent tombstones.
+- Post-fix checks: the 3 focused PostgreSQL regressions pass, affected suites pass 183 tests with 3 database skips, the database suite passes 120 tests, the PostgreSQL-backed root suite passes typecheck with 25 files and 563 tests, lint/tracked formatting/Playwright/frozen install pass, and the approved local migration applied successfully.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` because fixes changed replay correctness, migration/data format, test coverage, and private persisted-data validation.
+
+Targeted re-review outcome for resumed US-039 at 2026-07-18 01:53:51 MST:
+- `qa-expert` returned an empty actionable finding list; `code-reviewer` and `security-engineer` each identified one remaining in-scope medium replay-integrity blocker.
+- Replayed progress resolves the persisted pattern ID through the currently deployed catalog, so a later mask/version/order change can invalidate or reinterpret a durable historical batch. The next iteration must persist the immutable canonical pattern definition/version used at commit or retain version-addressable historical definitions.
+- The format-2 feedback decision remains in the same mutable JSON as its event batch; removing the near-win event and changing the decision to false creates an internally consistent downgraded replay. The next iteration must bind the committed decision/batch integrity outside mutable result JSON, such as trusted columns or a validated immutable digest.
+- Per the one-targeted-re-review limit, no further substantive fixes or specialist review are permitted in this iteration. `US-039` remains `passes: false`, `prd.json` remains unchanged, and no commit was created.
+- Next iteration start: add failing catalog-revision and format-2 event/decision downgrade regressions, persist immutable canonical pattern semantics plus independently trusted feedback/batch integrity, rerun all US-039 checks, and restart the complete staged review loop.
+
+## 2026-07-18 02:09:13 MST - US-039
+- What was implemented
+  - Resumed the blocked story with failing PostgreSQL regressions for replay after the deployed pattern disappears and for a coordinated near-win event/feedback-decision downgrade.
+  - Persisted the complete canonical pattern definition with each current private progress projection and introduced verified format 3 rows whose SHA-256 integrity digest binds row identity, command metadata, immutable derivation context, feedback decision, and ordered private event batch.
+  - Added append-only integrity and private-scope migrations, rejected unverified format 2 replay, constrained verified rows to participant-private delivery, and cleared private context plus integrity when replacement rounds detach intent-only tombstones.
+- Files changed: `AGENTS.md`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/socket-server.ts`, `apps/game-server/src/socket-server.test.ts`, `apps/web/src/lobby-entry-runtime.ts`, `bun.lock`, `packages/database/package.json`, `packages/database/prisma/schema.prisma`, `packages/database/prisma/migrations/20260718014000_add_command_result_format/migration.sql`, `packages/database/prisma/migrations/20260718020500_add_command_result_integrity/migration.sql`, `packages/database/prisma/migrations/20260718021000_constrain_verified_private_results/migration.sql`, `packages/database/prisma/migrations/20260718022000_require_live_result_integrity/migration.sql`, `packages/database/src/database.integration.test.ts`, `packages/database/src/round-command-executor.ts`, `packages/patterns/src/index.ts`, `packages/patterns/src/matcher.ts`, `tests/patterns.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-039 - Calculate progress and near-win`
+- Auto approval: `enabled`
+- Checks:
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "emits authoritative near-win"` (expected fail for catalog-dependent replay, then expected fail for coordinated feedback downgrade; pass after implementation)
+  - `DATABASE_URL=<approved local Compose database> bun run db:migrate:deploy` (pass; applied the append-only integrity migrations; the live-integrity migration was safely marked rolled back and redeployed after its red-test row exposed the required format-2 fail-closed conversion)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "authorizes a private mark|emits authoritative near-win|suppresses optional near-win|preserves command replay intent"` (pass; 4 focused tests)
+  - `bunx vitest run tests/patterns.test.ts packages/database/src/round-command-executor.test.ts apps/game-server/src/socket-server.test.ts apps/game-server/src/runtime.test.ts apps/web/src/lobby-entry-http.test.ts` (pass; 183 tests, 3 database-backed tests skipped in the focused run)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test:database` (pass; 120 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass; typecheck, 25 files, and 563 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `bun run format:check` (fails only on three pre-existing untracked Lighthouse/DOM artifacts)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `git diff --check && git diff --cached --check` (pass)
+  - `bunx vitest run tests/patterns.test.ts -t "selects deterministic progress"` (expected fail before canonical tie fix; pass after implementation)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "emits authoritative near-win"` (expected fail before the live-digest constraint fix; pass after implementation)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "authorizes a private mark|replays legacy private marks|emits authoritative near-win|suppresses optional near-win"` (pass after review remediation; 4 focused tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass after review remediation; typecheck, 25 files, and 564 tests)
+- Implementation agents:
+  - Recommended: none
+  - Used: `backend-developer` for focused guidance on immutable replay semantics, integrity persistence, migration shape, and regression coverage because this resumed story remained complex and data-integrity-sensitive
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and migration/private-integrity-triggered `security-engineer`; targeted re-review by `qa-expert` and `security-engineer`
+  - Findings: fixed canonical flexible-tie near-win selection, live format-3 null-integrity enforcement, and explicit legacy/rejected-format coverage; targeted re-review returned no findings; deferred call-triggered multi-participant feedback as outside this mark-mutation story
+- Decisions (why):
+  - Stored the complete validated pattern definition instead of only ID/version because flexible mask order participates in deterministic progress and a later catalog can change or remove historical semantics.
+  - Used a canonical SHA-256 digest outside mutable result JSON because trusted format alone cannot detect coordinated rewrites of both the feedback decision and event batch; hostile arbitrary database access is outside this application-integrity boundary and would require externally keyed verification.
+  - Introduced format 3 rather than rewriting applied format 2 history so the follow-up migrations remain append-only and old unverified rows fail closed without destructive test-data cleanup.
+  - Kept near-win emission attached to the authenticated mark mutation because adding private fan-out after each call would require a new durable multi-participant event protocol not required by this story; call commits remain authoritative inputs to the next mark evaluation.
+- **Learnings for future iterations:**
+  - Durable replay must persist the complete semantic definition, not only a catalog identifier, when definition content or canonical ordering can change between commit and replay.
+  - Integrity verification must bind delivery scope and row identity as well as JSON; database constraints keep a verified private row from bypassing validation by changing its delivery scope.
+- Known issues / follow-ups:
+  - Root `bun run format:check` remains blocked by unrelated untracked Lighthouse/DOM artifacts; every tracked file passes Prettier.
+  - The unrelated `apps/web/next-env.d.ts` side effect and untracked browser-report artifacts remain untouched and will not be staged.
+- Next iteration start:
+  - If review passes, implement US-040 two-second co-winner settlement; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-039 at 2026-07-18 02:21:34 MST:
+- The fresh initial review used `code-reviewer`, `qa-expert`, and `security-engineer`; duplicate call-time findings were merged, leaving four distinct medium observations.
+- Fixed three in-scope roots with failing regressions first: flexible ties now derive near-win only from the canonical selected mask, live format-3 rows require a non-null 32-byte digest despite PostgreSQL three-valued `CHECK` logic, and integration coverage positively replays format-1 singular results while rejecting unverified format 2.
+- The call-triggered feedback suggestion was not applied because this story emits private feedback from authenticated mark mutations; adding call-time fan-out would require a new durable multi-participant private-event protocol beyond US-039, and the same finding was already evaluated in an earlier review pass.
+- The first local application of the live-integrity migration correctly failed on a red-test row whose digest had been nulled under the old constraint. The migration now preserves such rows as fail-closed format 2, the failed local/test migration was marked rolled back, and redeployment succeeded without deleting data.
+- Post-fix checks: focused matcher and PostgreSQL regressions pass, the PostgreSQL-backed root suite passes typecheck with 25 files and 564 tests, lint and complete tracked-file formatting pass, and diff checks remain clean.
+- Targeted re-review: pending `qa-expert` for matcher/coverage fixes and `security-engineer` for the migration constraint fix.
+
+Targeted re-review outcome for US-039 at 2026-07-18 02:23:47 MST:
+- `qa-expert` and `security-engineer` reviewed the revised complete staged diff and returned empty actionable finding lists with no residual risks.
+- The canonical tie regression, explicit format-1/format-2 replay coverage, and live non-null digest migration constraint resolve every in-scope initial review finding.
+- No in-scope critical, high, or medium findings remain; US-039 can be marked passing and committed after the required metadata update and final consistency check.

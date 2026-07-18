@@ -13,6 +13,7 @@ import {
   type Snapshot,
 } from "@gamenight-bingo/contracts";
 import { connectDatabase, type NewActiveLobbyState } from "@gamenight-bingo/database";
+import { patternCatalog } from "@gamenight-bingo/patterns";
 import { io as createClient, Manager, type Socket } from "socket.io-client";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
@@ -595,6 +596,12 @@ const markEvent = ParticipantPrivateEventSchema.parse({
     markedAt: NOW,
   },
 }) as Extract<ParticipantPrivateEvent, { readonly type: "mark-result" }>;
+const nearWinEvent = ParticipantPrivateEventSchema.parse({
+  schemaVersion: CONTRACT_SCHEMA_VERSION,
+  type: "near-win",
+  occurredAt: NOW,
+  requiredBall: 66,
+});
 
 function ticket(fill: number): string {
   return Buffer.alloc(32, fill).toString("base64url");
@@ -780,7 +787,7 @@ async function createHarness(options: HarnessOptions = {}) {
               eventSequence: 1,
             }),
             activeLobbyEvent: null,
-            participantPrivateEvent: null,
+            participantPrivateEvents: [],
           })
         );
       },
@@ -2125,11 +2132,8 @@ describe("authenticated Socket.IO authority", () => {
     const database = await connectDatabase(testDatabaseUrl!, {
       lifecycleClock: () => now,
       roundCommands: {
-        patterns: [
-          { id: "standard-one-line", mode: "one-line" },
-          { id: "standard-two-lines", mode: "two-lines" },
-          { id: "standard-blackout", mode: "blackout" },
-        ],
+        patterns: patternCatalog,
+        nearWinFeedbackEnabled: true,
         clock: () => now,
         randomBytes: (length) => new Uint8Array(randomBytes(length)),
         nextId: (prefix) => `${prefix}-${randomUUID()}`,
@@ -2607,11 +2611,8 @@ describe("authenticated Socket.IO authority", () => {
       const databaseOptions = {
         lifecycleClock: () => now,
         roundCommands: {
-          patterns: [
-            { id: "standard-one-line", mode: "one-line" as const },
-            { id: "standard-two-lines", mode: "two-lines" as const },
-            { id: "standard-blackout", mode: "blackout" as const },
-          ],
+          patterns: patternCatalog,
+          nearWinFeedbackEnabled: true,
           clock: () => now,
           randomBytes: (length: number) => new Uint8Array(randomBytes(length)),
           nextId: (prefix: "round" | "card" | "call" | "mark") => `${prefix}-${randomUUID()}`,
@@ -3606,7 +3607,7 @@ describe("authenticated Socket.IO authority", () => {
             eventSequence: 1,
           }),
           activeLobbyEvent: attempts === 1 ? stageEvent : null,
-          participantPrivateEvent: null,
+          participantPrivateEvents: [],
         };
       },
     });
@@ -3664,7 +3665,7 @@ describe("authenticated Socket.IO authority", () => {
             eventSequence: stageEvent.eventSequence,
           }),
           activeLobbyEvent: stageEvent,
-          participantPrivateEvent: null,
+          participantPrivateEvents: [],
         };
       },
     });
@@ -3711,7 +3712,7 @@ describe("authenticated Socket.IO authority", () => {
           eventSequence: 1,
         }),
         activeLobbyEvent: null,
-        participantPrivateEvent: null,
+        participantPrivateEvents: [],
       }),
     });
     const client = await harness.connect(credential);
@@ -3745,7 +3746,7 @@ describe("authenticated Socket.IO authority", () => {
           eventSequence: null,
         }),
         activeLobbyEvent: null,
-        participantPrivateEvent: markEvent,
+        participantPrivateEvents: [markEvent],
       }),
     });
     const client = await harness.connect(credential);
@@ -3768,6 +3769,47 @@ describe("authenticated Socket.IO authority", () => {
   });
 
   test.each([
+    { name: "reversed", events: [nearWinEvent, markEvent] },
+    { name: "duplicate mark", events: [markEvent, markEvent] },
+    { name: "lone near-win", events: [nearWinEvent] },
+  ])("rejects a $name private batch before delivery", async ({ events }) => {
+    const credential = ticket(52 + events.length);
+    const harness = await createHarness({
+      tickets: new Map([[ticketHash(credential), identities.host]]),
+      execute: async () => ({
+        ok: true,
+        acknowledgement: CommandAckSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "ack",
+          commandId: markEvent.commandId,
+          occurredAt: NOW,
+          idempotentReplay: false,
+          scope: "participant-private",
+          eventSequence: null,
+        }),
+        activeLobbyEvent: null,
+        participantPrivateEvents: events,
+      }),
+    });
+    const client = await harness.connect(credential);
+    const error = once<unknown>(client, "v1:error");
+    const noPrivateEvent = expectNoEvent(client, "v1:private-event");
+    const acknowledgements: unknown[] = [];
+    client.on("v1:ack", (acknowledgement) => acknowledgements.push(acknowledgement));
+
+    client.emit("v1:command", {
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "mark-card",
+      commandId: markEvent.commandId,
+      ball: 1,
+    });
+
+    await noPrivateEvent;
+    await expect(error).resolves.toMatchObject({ code: "INTERNAL_ERROR" });
+    expect(acknowledgements).toEqual([]);
+  });
+
+  test.each([
     {
       name: "fresh lobby result",
       fill: 37,
@@ -3781,7 +3823,7 @@ describe("authenticated Socket.IO authority", () => {
         eventSequence: 1,
       }),
       activeLobbyEvent: stageEvent,
-      participantPrivateEvent: null,
+      participantPrivateEvents: [],
     },
     {
       name: "lobby replay",
@@ -3796,7 +3838,7 @@ describe("authenticated Socket.IO authority", () => {
         eventSequence: 1,
       }),
       activeLobbyEvent: null,
-      participantPrivateEvent: null,
+      participantPrivateEvents: [],
     },
     {
       name: "fresh private result",
@@ -3811,7 +3853,7 @@ describe("authenticated Socket.IO authority", () => {
         eventSequence: null,
       }),
       activeLobbyEvent: null,
-      participantPrivateEvent: markEvent,
+      participantPrivateEvents: [markEvent],
     },
     {
       name: "private replay",
@@ -3826,7 +3868,7 @@ describe("authenticated Socket.IO authority", () => {
         eventSequence: null,
       }),
       activeLobbyEvent: null,
-      participantPrivateEvent: markEvent,
+      participantPrivateEvents: [markEvent],
     },
   ])("rejects a $name acknowledgement for a different incoming command", async (scenario) => {
     const credential = ticket(scenario.fill);
@@ -3836,7 +3878,7 @@ describe("authenticated Socket.IO authority", () => {
         ok: true,
         acknowledgement: scenario.acknowledgement,
         activeLobbyEvent: scenario.activeLobbyEvent,
-        participantPrivateEvent: scenario.participantPrivateEvent,
+        participantPrivateEvents: scenario.participantPrivateEvents,
       }),
     });
     const client = await harness.connect(credential);
@@ -3880,7 +3922,7 @@ describe("authenticated Socket.IO authority", () => {
           eventSequence: null,
         }),
         activeLobbyEvent: null,
-        participantPrivateEvent: null,
+        participantPrivateEvents: [],
       }),
     });
     const client = await harness.connect(credential);
@@ -4115,15 +4157,23 @@ describe("authenticated Socket.IO authority", () => {
             eventSequence: null,
           }),
           activeLobbyEvent: null,
-          participantPrivateEvent: markEvent,
+          participantPrivateEvents: [markEvent, nearWinEvent],
         };
       },
     });
     const caller = await harness.connect(credentials[0]!);
     const sameParticipant = await harness.connect(credentials[1]!);
     const otherParticipant = await harness.connect(credentials[2]!);
-    const callerEvent = once<unknown>(caller, "v1:private-event");
-    const sameParticipantEvent = once<unknown>(sameParticipant, "v1:private-event");
+    const collectPrivateEvents = (client: Socket) =>
+      new Promise<unknown[]>((resolve) => {
+        const events: unknown[] = [];
+        client.on("v1:private-event", (event: unknown) => {
+          events.push(event);
+          if (events.length === 2) resolve(events);
+        });
+      });
+    const callerEvents = collectPrivateEvents(caller);
+    const sameParticipantEvents = collectPrivateEvents(sameParticipant);
     const noOtherParticipantEvent = expectNoEvent(otherParticipant, "v1:private-event");
     const noLobbyEvent = expectNoEvent(otherParticipant, "v1:lobby-event");
 
@@ -4134,11 +4184,11 @@ describe("authenticated Socket.IO authority", () => {
       ball: 1,
     });
 
-    await expect(callerEvent).resolves.toEqual(markEvent);
-    await expect(sameParticipantEvent).resolves.toEqual(markEvent);
+    await expect(callerEvents).resolves.toEqual([markEvent, nearWinEvent]);
+    await expect(sameParticipantEvents).resolves.toEqual([markEvent, nearWinEvent]);
     await Promise.all([noOtherParticipantEvent, noLobbyEvent]);
 
-    const replayEvent = once<unknown>(caller, "v1:private-event");
+    const replayEvents = collectPrivateEvents(caller);
     const replayAcknowledgement = once<unknown>(caller, "v1:ack");
     const noReplayToOtherTab = expectNoEvent(sameParticipant, "v1:private-event");
     caller.emit("v1:command", {
@@ -4147,7 +4197,7 @@ describe("authenticated Socket.IO authority", () => {
       commandId: markEvent.commandId,
       ball: 1,
     });
-    await expect(replayEvent).resolves.toEqual(markEvent);
+    await expect(replayEvents).resolves.toEqual([markEvent, nearWinEvent]);
     await expect(replayAcknowledgement).resolves.toMatchObject({ idempotentReplay: true });
     await noReplayToOtherTab;
   });
@@ -4297,7 +4347,7 @@ describe("authenticated Socket.IO authority", () => {
             eventSequence: 1,
           }),
           activeLobbyEvent: null,
-          participantPrivateEvent: null,
+          participantPrivateEvents: [],
         };
       },
     });

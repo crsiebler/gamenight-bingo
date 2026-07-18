@@ -301,6 +301,8 @@ model CommandResult {
   commandType   String        @map("command_type") @db.VarChar(64)
   deliveryScope DeliveryScope @map("delivery_scope")
   eventSequence BigInt?       @map("event_sequence")
+  resultFormat  Int           @default(1) @map("result_format") @db.SmallInt
+  resultIntegrity Bytes?      @map("result_integrity")
   result        Json
   createdAt     DateTime      @map("created_at") @db.Timestamptz(3)
   lobby         Lobby         @relation(fields: [lobbyId], references: [id], onDelete: Cascade)

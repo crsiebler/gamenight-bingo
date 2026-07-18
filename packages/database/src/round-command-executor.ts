@@ -1,3 +1,5 @@
+import { createHash, timingSafeEqual } from "node:crypto";
+
 import {
   ActiveLobbyEventSchema,
   CONTRACT_SCHEMA_VERSION,
@@ -18,6 +20,13 @@ import {
   type RoundPatternMode,
   type RoundState,
 } from "@gamenight-bingo/domain";
+import {
+  PatternCardStateSchema,
+  PatternDefinitionSchema,
+  calculatePatternProgress,
+  type PatternCardState,
+  type PatternDefinition,
+} from "@gamenight-bingo/patterns";
 
 import {
   Prisma,
@@ -32,13 +41,12 @@ import {
 import { expireDueParticipantSessions } from "./participant-session-expiry.js";
 import { runTransactionWithRetry, type TransactionRetryOptions } from "./transaction-retry.js";
 
-export interface RoundCommandPattern {
-  readonly id: string;
-  readonly mode: RoundPatternMode;
-}
+export type RoundCommandPattern = PatternDefinition;
+type RoundCommandPatternReference = Pick<RoundCommandPattern, "id" | "mode">;
 
 export interface RoundCommandRuntimeOptions {
   readonly patterns: readonly RoundCommandPattern[];
+  readonly nearWinFeedbackEnabled: boolean;
   readonly randomBytes: CryptographicRandomBytes;
   readonly nextId: (prefix: "round" | "card" | "call" | "mark") => string;
   readonly clock: () => Date;
@@ -66,7 +74,7 @@ export type RoundCommandExecutionResult =
       readonly ok: true;
       readonly acknowledgement: RoundCommandAcknowledgement;
       readonly activeLobbyEvent: ActiveLobbyEvent | null;
-      readonly participantPrivateEvent: ParticipantPrivateEvent | null;
+      readonly participantPrivateEvents: readonly ParticipantPrivateEvent[];
     }
   | {
       readonly ok: false;
@@ -104,7 +112,8 @@ type PendingCommand =
   | {
       readonly roundId: string;
       readonly scope: "participant-private";
-      readonly event: ParticipantPrivateEvent;
+      readonly progress: ParticipantPrivateProgress;
+      readonly events: readonly ParticipantPrivateEvent[];
     };
 
 interface CurrentRound {
@@ -159,14 +168,14 @@ export function isRoundCommandAuthorized(
 }
 
 export function resolveRoundPatternMode(
-  patterns: readonly RoundCommandPattern[],
+  patterns: readonly RoundCommandPatternReference[],
   patternId: string,
 ): RoundPatternMode | null {
   return patterns.find((pattern) => pattern.id === patternId)?.mode ?? null;
 }
 
 function patternModeOrThrow(
-  patterns: readonly RoundCommandPattern[],
+  patterns: readonly RoundCommandPatternReference[],
   patternId: string,
 ): RoundPatternMode {
   const mode = resolveRoundPatternMode(patterns, patternId);
@@ -174,12 +183,276 @@ function patternModeOrThrow(
   return mode;
 }
 
+function patternOrThrow(
+  patterns: readonly RoundCommandPattern[],
+  patternId: string,
+): RoundCommandPattern {
+  const pattern = patterns.find((candidate) => candidate.id === patternId);
+  if (pattern === undefined)
+    throw new Error("Persisted round references an unknown canonical pattern.");
+  return pattern;
+}
+
+interface ParsedParticipantPrivateEvents {
+  readonly events: readonly ParticipantPrivateEvent[];
+  readonly progress: ParticipantPrivateProgress | null;
+  readonly legacy: boolean;
+}
+
+interface ParticipantPrivateProgress {
+  readonly pattern: RoundCommandPattern;
+  readonly calledCells: PatternCardState;
+  readonly markedCells: PatternCardState;
+  readonly nearWinFeedbackEnabled: boolean;
+}
+
+function parseParticipantPrivateProgress(value: unknown): ParticipantPrivateProgress {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Persisted participant-private progress is invalid.");
+  }
+  const progress = value as Record<string, unknown>;
+  if (
+    Object.keys(progress).sort().join(",") !==
+      ["calledCells", "markedCells", "nearWinFeedbackEnabled", "pattern"].join(",") ||
+    typeof progress["nearWinFeedbackEnabled"] !== "boolean"
+  ) {
+    throw new Error("Persisted participant-private progress is invalid.");
+  }
+  const calledCells = PatternCardStateSchema.parse(progress["calledCells"]);
+  const markedCells = PatternCardStateSchema.parse(progress["markedCells"]);
+  if (
+    !calledCells[12] ||
+    !markedCells[12] ||
+    markedCells.some((marked, index) => marked && !calledCells[index])
+  ) {
+    throw new Error("Persisted participant-private progress is inconsistent.");
+  }
+  return {
+    pattern: PatternDefinitionSchema.parse(progress["pattern"]),
+    calledCells,
+    markedCells,
+    nearWinFeedbackEnabled: progress["nearWinFeedbackEnabled"],
+  };
+}
+
+function parseParticipantPrivateEvents(
+  result: Readonly<Record<string, unknown>>,
+  resultFormat: number,
+): ParsedParticipantPrivateEvents {
+  const persistedEvents = result["participantPrivateEvents"];
+  const legacyEvent = result["participantPrivateEvent"];
+  const persistedProgress = result["participantPrivateProgress"];
+  if (persistedEvents !== undefined && legacyEvent !== undefined) {
+    throw new Error("Persisted participant-private event shapes conflict.");
+  }
+  if (resultFormat === 3) {
+    if (legacyEvent !== undefined) {
+      throw new Error("Current participant-private results cannot use the legacy event shape.");
+    }
+    if (persistedEvents === undefined && persistedProgress === undefined) {
+      return { events: [], progress: null, legacy: false };
+    }
+    if (persistedEvents === undefined || persistedProgress === undefined) {
+      throw new Error("Persisted participant-private result context is incomplete.");
+    }
+    if (!Array.isArray(persistedEvents) || persistedEvents.length > 2) {
+      throw new Error("Persisted participant-private events are invalid.");
+    }
+    const events = persistedEvents.map((event) => ParticipantPrivateEventSchema.parse(event));
+    if (
+      (events.length > 0 && events[0]?.type !== "mark-result") ||
+      (events.length === 2 && events[1]?.type !== "near-win")
+    ) {
+      throw new Error("Persisted participant-private event order is invalid.");
+    }
+    return {
+      events,
+      progress: parseParticipantPrivateProgress(persistedProgress),
+      legacy: false,
+    };
+  }
+  if (resultFormat === 2) {
+    throw new Error("Unverified participant-private result format is not replayable.");
+  }
+  if (resultFormat !== 1 || persistedEvents !== undefined || persistedProgress !== undefined) {
+    throw new Error("Persisted participant-private result format is invalid.");
+  }
+  if (legacyEvent === undefined) return { events: [], progress: null, legacy: true };
+  const parsedLegacyEvent = ParticipantPrivateEventSchema.parse(legacyEvent);
+  if (parsedLegacyEvent.type !== "mark-result") {
+    throw new Error("Persisted legacy participant-private event is invalid.");
+  }
+  return { events: [parsedLegacyEvent], progress: null, legacy: true };
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value === "boolean" || typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("Integrity data contains an invalid number.");
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (typeof value === "object") {
+    const record = value as Readonly<Record<string, unknown>>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+      .join(",")}}`;
+  }
+  throw new Error("Integrity data is not JSON-compatible.");
+}
+
+function participantPrivateResultIntegrity(input: {
+  readonly lobbyId: string;
+  readonly participantId: string;
+  readonly commandId: string;
+  readonly roundId: string;
+  readonly commandType: string;
+  readonly result: Readonly<Record<string, unknown>>;
+  readonly createdAt: Date;
+}): Uint8Array<ArrayBuffer> {
+  return Uint8Array.from(
+    createHash("sha256")
+      .update(
+        canonicalJson({
+          ...input,
+          createdAt: input.createdAt.toISOString(),
+          deliveryScope: "PARTICIPANT_PRIVATE",
+          eventSequence: null,
+          resultFormat: 3,
+        }),
+        "utf8",
+      )
+      .digest(),
+  );
+}
+
+function verifyParticipantPrivateResultIntegrity(
+  expected: Uint8Array | null,
+  input: Parameters<typeof participantPrivateResultIntegrity>[0],
+): void {
+  if (expected === null || expected.length !== 32) {
+    throw new Error("Persisted participant-private result integrity is missing.");
+  }
+  const actual = participantPrivateResultIntegrity(input);
+  if (!timingSafeEqual(expected, actual)) {
+    throw new Error("Persisted participant-private result integrity is invalid.");
+  }
+}
+
+async function validateReplayedParticipantPrivateEvents(
+  transaction: Prisma.TransactionClient,
+  input: {
+    readonly participantId: string;
+    readonly roundId: string | null;
+    readonly command: MutationCommand;
+    readonly events: readonly ParticipantPrivateEvent[];
+    readonly progress: ParticipantPrivateProgress | null;
+    readonly legacy: boolean;
+    readonly committedAt: Date;
+  },
+): Promise<void> {
+  if (input.events.length === 0) {
+    if (input.roundId !== null) {
+      throw new Error("Persisted current-round participant-private replay has no events.");
+    }
+    return;
+  }
+  const markResult = input.events[0];
+  if (
+    input.command.type !== "mark-card" ||
+    input.roundId === null ||
+    markResult?.type !== "mark-result" ||
+    markResult.commandId !== input.command.commandId ||
+    markResult.mark.ball !== input.command.ball
+  ) {
+    throw new Error("Persisted participant-private replay metadata is invalid.");
+  }
+  const card = await transaction.card.findFirst({
+    where: {
+      id: markResult.mark.cardId,
+      roundId: input.roundId,
+      participantId: input.participantId,
+    },
+    select: {
+      cells: true,
+      marks: { select: { ball: true } },
+    },
+  });
+  const round = await transaction.round.findUnique({
+    where: { id: input.roundId },
+    select: {
+      calls: { select: { ball: true } },
+    },
+  });
+  const persistedMark = await transaction.mark.findUnique({
+    where: {
+      cardId_ball: { cardId: markResult.mark.cardId, ball: markResult.mark.ball },
+    },
+    select: { id: true, markedAt: true },
+  });
+  const nearWin = input.events[1];
+  if (
+    card === null ||
+    round === null ||
+    persistedMark === null ||
+    persistedMark.id !== markResult.mark.id ||
+    persistedMark.markedAt.toISOString() !== markResult.mark.markedAt ||
+    markResult.occurredAt !== input.committedAt.toISOString() ||
+    !card.cells.includes(markResult.mark.ball) ||
+    (nearWin !== undefined &&
+      (nearWin.type !== "near-win" || !card.cells.includes(nearWin.requiredBall)))
+  ) {
+    throw new Error("Persisted participant-private replay does not match authoritative state.");
+  }
+  if (input.legacy) return;
+  if (input.progress === null) {
+    throw new Error("Persisted participant-private replay has no canonical progress.");
+  }
+  const calledBalls = new Set(round.calls.map(({ ball }) => ball));
+  const markedBalls = new Set(card.marks.map(({ ball }) => ball));
+  if (
+    input.progress.calledCells.some(
+      (called, index) => called && card.cells[index] !== 0 && !calledBalls.has(card.cells[index]!),
+    ) ||
+    input.progress.markedCells.some(
+      (marked, index) => marked && card.cells[index] !== 0 && !markedBalls.has(card.cells[index]!),
+    )
+  ) {
+    throw new Error("Persisted participant-private progress exceeds authoritative state.");
+  }
+  const progress = calculatePatternProgress(input.progress.pattern, {
+    calledCells: input.progress.calledCells,
+    markedCells: input.progress.markedCells,
+  });
+  const expectedRequiredBall =
+    progress.nearWinCellIndex === null ? null : card.cells[progress.nearWinCellIndex];
+  if (expectedRequiredBall === undefined || expectedRequiredBall === 0) {
+    throw new Error("Canonical near-win progress references an invalid card cell.");
+  }
+  const shouldIncludeNearWin =
+    input.progress.nearWinFeedbackEnabled && expectedRequiredBall !== null;
+  if (
+    shouldIncludeNearWin !== (nearWin !== undefined) ||
+    (nearWin !== undefined &&
+      (nearWin.requiredBall !== expectedRequiredBall ||
+        nearWin.occurredAt !== markResult.occurredAt))
+  ) {
+    throw new Error("Persisted near-win replay does not match authoritative progress.");
+  }
+}
+
 function requireDate(value: Date | null, name: string): Date {
   if (value === null) throw new Error(`${name} is required by the persisted round stage.`);
   return value;
 }
 
-function toDomainRound(round: CurrentRound, patterns: readonly RoundCommandPattern[]): RoundState {
+function toDomainRound(
+  round: CurrentRound,
+  patterns: readonly RoundCommandPatternReference[],
+): RoundState {
   const base = {
     initialPatternMode: patternModeOrThrow(patterns, round.initialPatternId),
     patternMode: patternModeOrThrow(patterns, round.currentPatternId),
@@ -545,7 +818,9 @@ async function executeMutation(
       await transaction.$executeRaw`
         UPDATE "command_results"
            SET "round_id" = NULL,
-               "result" = "result" - 'participantPrivateEvent'
+                 "result_integrity" = NULL,
+                 "result" = "result" - 'participantPrivateEvent' - 'participantPrivateEvents'
+                   - 'patternId' - 'participantPrivateProgress'
          WHERE "round_id" = ${current.id}
       `;
       await transaction.round.delete({ where: { id: current.id } });
@@ -762,14 +1037,15 @@ async function executeMutation(
     if (!["ACTIVE", "PAUSED", "CO_WINNER_WINDOW"].includes(current.stage)) return null;
     const card = await transaction.card.findUnique({
       where: { roundId_participantId: { roundId: current.id, participantId } },
-      select: { id: true, cells: true },
+      select: { id: true, cells: true, marks: { select: { ball: true } } },
     });
     if (card === null || !card.cells.includes(command.ball)) return null;
-    const called = await transaction.call.findUnique({
-      where: { roundId_ball: { roundId: current.id, ball: command.ball } },
-      select: { id: true },
+    const calls = await transaction.call.findMany({
+      where: { roundId: current.id },
+      select: { ball: true },
     });
-    if (called === null) return null;
+    const calledBalls = new Set(calls.map(({ ball }) => ball));
+    if (!calledBalls.has(command.ball)) return null;
     const priorMark = await transaction.mark.findUnique({
       where: { cardId_ball: { cardId: card.id, ball: command.ball } },
       select: { id: true, markedAt: true },
@@ -786,21 +1062,52 @@ async function executeMutation(
         },
         select: { id: true, markedAt: true },
       }));
+    const markResult = ParticipantPrivateEventSchema.parse({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "mark-result",
+      commandId: command.commandId,
+      occurredAt: now.toISOString(),
+      mark: {
+        id: mark.id,
+        cardId: card.id,
+        ball: command.ball,
+        markedAt: mark.markedAt.toISOString(),
+      },
+    });
+    const markedBalls = new Set([...card.marks.map(({ ball }) => ball), command.ball]);
+    const progressInput = {
+      calledCells: card.cells.map((ball) => ball === 0 || calledBalls.has(ball)),
+      markedCells: card.cells.map((ball) => ball === 0 || markedBalls.has(ball)),
+    };
+    const pattern = patternOrThrow(options.patterns, current.currentPatternId);
+    const progress = calculatePatternProgress(pattern, progressInput);
+    const requiredBall =
+      progress.nearWinCellIndex === null ? null : card.cells[progress.nearWinCellIndex];
+    if (requiredBall === undefined || requiredBall === 0) {
+      throw new Error("Canonical near-win progress references an invalid card cell.");
+    }
+    const events = [
+      markResult,
+      ...(options.nearWinFeedbackEnabled && requiredBall !== null
+        ? [
+            ParticipantPrivateEventSchema.parse({
+              schemaVersion: CONTRACT_SCHEMA_VERSION,
+              type: "near-win",
+              occurredAt: now.toISOString(),
+              requiredBall,
+            }),
+          ]
+        : []),
+    ];
     return {
       roundId: current.id,
       scope: "participant-private",
-      event: ParticipantPrivateEventSchema.parse({
-        schemaVersion: CONTRACT_SCHEMA_VERSION,
-        type: "mark-result",
-        commandId: command.commandId,
-        occurredAt: now.toISOString(),
-        mark: {
-          id: mark.id,
-          cardId: card.id,
-          ball: command.ball,
-          markedAt: mark.markedAt.toISOString(),
-        },
-      }),
+      progress: {
+        pattern,
+        ...progressInput,
+        nearWinFeedbackEnabled: options.nearWinFeedbackEnabled,
+      },
+      events,
     };
   }
 
@@ -1031,10 +1338,35 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
                 existing.deliveryScope === "ACTIVE_LOBBY"
                   ? ("active-lobby" as const)
                   : ("participant-private" as const);
-              const participantPrivateEvent =
-                scope === "participant-private" && result["participantPrivateEvent"] !== undefined
-                  ? ParticipantPrivateEventSchema.parse(result["participantPrivateEvent"])
-                  : null;
+              const parsedParticipantPrivateEvents =
+                scope === "participant-private"
+                  ? parseParticipantPrivateEvents(result, existing.resultFormat)
+                  : { events: [], progress: null, legacy: false };
+              const participantPrivateEvents = parsedParticipantPrivateEvents.events;
+              if (scope === "participant-private") {
+                if (existing.resultFormat === 3 && existing.roundId !== null) {
+                  verifyParticipantPrivateResultIntegrity(existing.resultIntegrity, {
+                    lobbyId: existing.lobbyId,
+                    participantId: existing.participantId,
+                    commandId: existing.commandId,
+                    roundId: existing.roundId,
+                    commandType: existing.commandType,
+                    result,
+                    createdAt: existing.createdAt,
+                  });
+                } else if (existing.resultIntegrity !== null) {
+                  throw new Error("Persisted participant-private result integrity is unexpected.");
+                }
+                await validateReplayedParticipantPrivateEvents(transaction, {
+                  participantId,
+                  roundId: existing.roundId,
+                  command: input.command,
+                  events: participantPrivateEvents,
+                  progress: parsedParticipantPrivateEvents.progress,
+                  legacy: parsedParticipantPrivateEvents.legacy,
+                  committedAt: existing.createdAt,
+                });
+              }
               return {
                 ok: true,
                 acknowledgement: {
@@ -1045,7 +1377,7 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
                   idempotentReplay: true,
                 },
                 activeLobbyEvent: null,
-                participantPrivateEvent,
+                participantPrivateEvents,
               } as const;
             }
             if (
@@ -1063,7 +1395,8 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
 
             let eventSequence: bigint | null = null;
             let activeLobbyEvent: ActiveLobbyEvent | null = null;
-            let participantPrivateEvent: ParticipantPrivateEvent | null = null;
+            let participantPrivateEvents: readonly ParticipantPrivateEvent[] = [];
+            let participantPrivateProgress: ParticipantPrivateProgress | null = null;
             if (pending.scope === "active-lobby") {
               const rows = await transaction.$queryRaw<readonly { sequence: bigint }[]>`
                 UPDATE "lobbies"
@@ -1099,13 +1432,44 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
                 )
               `;
             } else {
-              participantPrivateEvent = pending.event;
+              participantPrivateEvents = pending.events;
+              participantPrivateProgress = pending.progress;
               await transaction.$executeRaw`
                 UPDATE "lobbies"
                    SET "last_activity_at" = GREATEST("last_activity_at", ${now})
                  WHERE "id" = ${input.lobbyId}
               `;
             }
+            const persistedResult = {
+              intent: commandIntent(input.command),
+              ...(participantPrivateProgress === null
+                ? {}
+                : {
+                    participantPrivateProgress: JSON.parse(
+                      JSON.stringify(participantPrivateProgress),
+                    ) as Prisma.InputJsonObject,
+                  }),
+              ...(participantPrivateEvents.length === 0
+                ? {}
+                : {
+                    participantPrivateEvents: JSON.parse(
+                      JSON.stringify(participantPrivateEvents),
+                    ) as Prisma.InputJsonArray,
+                  }),
+            };
+            const resultFormat = pending.scope === "participant-private" ? 3 : 1;
+            const resultIntegrity =
+              pending.scope === "participant-private"
+                ? participantPrivateResultIntegrity({
+                    lobbyId: input.lobbyId,
+                    participantId,
+                    commandId: input.command.commandId,
+                    roundId: pending.roundId,
+                    commandType: input.command.type,
+                    result: persistedResult,
+                    createdAt: now,
+                  })
+                : null;
             await transaction.commandResult.create({
               data: {
                 lobbyId: input.lobbyId,
@@ -1116,16 +1480,9 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
                 deliveryScope:
                   pending.scope === "active-lobby" ? "ACTIVE_LOBBY" : "PARTICIPANT_PRIVATE",
                 eventSequence,
-                result: {
-                  intent: commandIntent(input.command),
-                  ...(participantPrivateEvent === null
-                    ? {}
-                    : {
-                        participantPrivateEvent: JSON.parse(
-                          JSON.stringify(participantPrivateEvent),
-                        ) as Prisma.InputJsonObject,
-                      }),
-                },
+                resultFormat,
+                resultIntegrity,
+                result: persistedResult,
                 createdAt: now,
               },
             });
@@ -1139,7 +1496,7 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
                 idempotentReplay: false,
               },
               activeLobbyEvent,
-              participantPrivateEvent,
+              participantPrivateEvents,
             } as const;
           },
           {

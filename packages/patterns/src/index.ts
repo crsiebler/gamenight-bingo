@@ -19,7 +19,14 @@ export {
   type PatternDefinition,
 } from "./catalog.js";
 export { generateCorePatternDocumentation } from "./documentation.js";
-export { PatternCardStateSchema, matchesPattern, type PatternCardState } from "./matcher.js";
+export {
+  PatternCardStateSchema,
+  calculatePatternProgress,
+  matchesPattern,
+  type PatternCardState,
+  type PatternProgress,
+  type PatternProgressInput,
+} from "./matcher.js";
 export {
   createChristmasPatternPreviews,
   createLetterPatternPreviews,

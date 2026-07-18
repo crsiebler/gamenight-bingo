@@ -4,6 +4,7 @@ import {
   PatternCardStateSchema,
   PatternDefinitionSchema,
   PatternSourceSchema,
+  calculatePatternProgress,
   patternCatalog,
   matchesPattern,
 } from "../packages/patterns/src/index.js";
@@ -549,5 +550,158 @@ describe("pattern matching", () => {
     expect(matchesPattern(blackout, allNoncenter)).toBe(true);
     allNoncenter[24] = false;
     expect(matchesPattern(blackout, allNoncenter)).toBe(false);
+  });
+
+  test("calculates exact progress from called and marked cells while satisfying the center", () => {
+    const pattern = PatternDefinitionSchema.parse({
+      id: "shape-progress",
+      name: "Progress",
+      category: "shape",
+      version: 1,
+      mode: "exact",
+      source: {
+        file: "shapes-bingo-patterns.pdf",
+        references: ["p1/d99"],
+        alias: null,
+      },
+      masks: ["##.../...../..#../...../....#"],
+    });
+    const calledCells = cardWith(0, 1);
+    const markedCells = cardWith(0, 1);
+
+    expect(calculatePatternProgress(pattern, { calledCells, markedCells })).toEqual({
+      complete: false,
+      requiredCellCount: 3,
+      satisfiedCellCount: 2,
+      remainingRequiredCellCount: 1,
+      nearWinCellIndex: null,
+    });
+    expect(
+      calculatePatternProgress(pattern, {
+        calledCells: cardWith(0, 1, 24),
+        markedCells,
+      }),
+    ).toEqual({
+      complete: false,
+      requiredCellCount: 3,
+      satisfiedCellCount: 2,
+      remainingRequiredCellCount: 1,
+      nearWinCellIndex: 24,
+    });
+    expect(
+      calculatePatternProgress(pattern, {
+        calledCells: cardWith(0, 1, 24),
+        markedCells: cardWith(0, 1, 24),
+      }),
+    ).toEqual({
+      complete: true,
+      requiredCellCount: 3,
+      satisfiedCellCount: 3,
+      remainingRequiredCellCount: 0,
+      nearWinCellIndex: null,
+    });
+  });
+
+  test("selects deterministic progress and near-win paths for flexible patterns", () => {
+    const oneLine = catalogPattern("standard-one-line");
+    const calledCells = cardWith(0, 1, 2, 3, 5, 10, 15);
+    const markedCells = cardWith(0, 1, 2, 3, 5, 10, 15);
+
+    expect(calculatePatternProgress(oneLine, { calledCells, markedCells })).toEqual({
+      complete: false,
+      requiredCellCount: 5,
+      satisfiedCellCount: 4,
+      remainingRequiredCellCount: 1,
+      nearWinCellIndex: null,
+    });
+    expect(
+      calculatePatternProgress(oneLine, {
+        calledCells: cardWith(0, 1, 2, 3, 4, 5, 10, 15),
+        markedCells,
+      }),
+    ).toEqual({
+      complete: false,
+      requiredCellCount: 5,
+      satisfiedCellCount: 4,
+      remainingRequiredCellCount: 1,
+      nearWinCellIndex: 4,
+    });
+    expect(
+      calculatePatternProgress(oneLine, {
+        calledCells: cardWith(0, 4, 5, 10, 15, 20),
+        markedCells: cardWith(0, 5, 10, 15),
+      }),
+    ).toMatchObject({
+      remainingRequiredCellCount: 1,
+      nearWinCellIndex: 20,
+    });
+    expect(
+      calculatePatternProgress(oneLine, {
+        calledCells: cardWith(0, 1, 2, 3, 4, 5, 10, 15, 20),
+        markedCells,
+      }),
+    ).toMatchObject({
+      remainingRequiredCellCount: 1,
+      nearWinCellIndex: 4,
+    });
+    expect(
+      calculatePatternProgress(oneLine, {
+        calledCells: cardWith(0, 1, 2, 3, 5, 10, 15, 20),
+        markedCells,
+      }),
+    ).toMatchObject({
+      remainingRequiredCellCount: 1,
+      nearWinCellIndex: null,
+    });
+    expect(
+      calculatePatternProgress(oneLine, {
+        calledCells: cardWith(0, 1, 2, 3, 4, 5, 10, 15),
+        markedCells: cardWith(0, 1, 2, 3, 4, 5, 10, 15),
+      }),
+    ).toMatchObject({ complete: true, nearWinCellIndex: null });
+
+    const twoLines = catalogPattern("standard-two-lines");
+    const twoLineProgress = calculatePatternProgress(twoLines, {
+      calledCells: cardWith(0, 1, 2, 3, 4),
+      markedCells: cardWith(0, 1, 2, 3, 4),
+    });
+    expect(twoLineProgress).toEqual({
+      complete: false,
+      requiredCellCount: 8,
+      satisfiedCellCount: 5,
+      remainingRequiredCellCount: 3,
+      nearWinCellIndex: null,
+    });
+    expect(
+      calculatePatternProgress(twoLines, {
+        calledCells: cardWith(0, 1, 2, 3, 4, 5, 6, 7, 8, 9),
+        markedCells: cardWith(0, 1, 2, 3, 4, 5, 6, 7, 8),
+      }),
+    ).toEqual({
+      complete: false,
+      requiredCellCount: 10,
+      satisfiedCellCount: 9,
+      remainingRequiredCellCount: 1,
+      nearWinCellIndex: 9,
+    });
+
+    const blackout = catalogPattern("standard-blackout");
+    const calledBlackout = Array<boolean>(25).fill(true);
+    const markedBlackout = Array<boolean>(25).fill(true);
+    calledBlackout[12] = false;
+    markedBlackout[12] = false;
+    markedBlackout[24] = false;
+    expect(
+      calculatePatternProgress(blackout, {
+        calledCells: calledBlackout,
+        markedCells: markedBlackout,
+      }),
+    ).toEqual({
+      complete: false,
+      requiredCellCount: 24,
+      satisfiedCellCount: 23,
+      remainingRequiredCellCount: 1,
+      nearWinCellIndex: 24,
+    });
   });
 });

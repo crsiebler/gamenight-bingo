@@ -111,6 +111,11 @@ unexpected package directories matched by them.
 The server remains authoritative. Never move validation of calls, marks,
 winners, presence, timers, permissions, or progression into a browser-only
 path. Never expose another participant's card or any future draw position.
+Calculate pattern progress from canonical masks and authoritative called/marked
+cell projections. Treat the center as satisfied, use canonical mask order for
+deterministic flexible-rule ties, define near-win as one required called but
+unmarked cell, and keep optional feedback gating separate from
+completion/winner validation.
 Domain transitions return discriminated result errors for expected state
 rejections; reserve thrown `RangeError`s for malformed internal values such as
 invalid counts, timestamps, or durations.
@@ -257,6 +262,17 @@ invalid counts, timestamps, or durations.
   Validate every successful acknowledgement's command ID against the incoming
   mutation before emitting any result. Eventless idempotent replay tombstones may
   return their original acknowledgement for either delivery scope.
+- Persist bounded participant-private event batches in delivery order before
+  returning them to realtime adapters. Validate a complete batch before emitting
+  it; fresh commits may reach the participant room, while replays return only to
+  the requesting socket. Persist the immutable canonical pattern, called/marked
+  canonical pattern definition, called/marked projection, and feedback decision
+  used to derive each current-round batch; replay validation must not depend on
+  later round state, deployed catalog revisions, or runtime policy. Distinguish
+  legacy and current durable result formats outside mutable result JSON, bind
+  verified current batches and their row metadata with an integrity digest,
+  constrain them to private delivery, and strip private payload/context plus the
+  digest from detached intent-only tombstones.
 - Disconnect immediately when transactional revalidation rejects an identity,
   and revalidate room members before later lobby/private delivery so deactivated
   sessions cannot remain subscribed. Authorize one persisted identity once per

@@ -48,7 +48,7 @@ export type RealtimeCommandExecutionResult =
       readonly ok: true;
       readonly acknowledgement: CommandAck;
       readonly activeLobbyEvent: ActiveLobbyEvent | null;
-      readonly participantPrivateEvent: ParticipantPrivateEvent | null;
+      readonly participantPrivateEvents: readonly ParticipantPrivateEvent[];
     }
   | {
       readonly ok: false;
@@ -842,11 +842,11 @@ export function createGameServer(options: GameServerOptions): GameServer {
     await reconcileAutomaticCall(lobbyId);
   };
 
-  const emitParticipantEvent = async (
+  const emitParticipantEvents = async (
     participantId: string,
-    event: ParticipantPrivateEvent,
+    events: readonly ParticipantPrivateEvent[],
   ): Promise<void> => {
-    const parsed = ParticipantPrivateEventSchema.parse(event);
+    const parsed = events.map((event) => ParticipantPrivateEventSchema.parse(event));
     const sockets = await io.in(room("participant", participantId)).fetchSockets();
     const authorizations = new Map<string, Promise<boolean>>();
     await Promise.all(
@@ -857,32 +857,37 @@ export function createGameServer(options: GameServerOptions): GameServer {
           if (
             synchronizationAtStart.lobbyEvents.length +
               synchronizationAtStart.participantEvents.length +
-              synchronizationAtStart.reservedDeliveries >=
+              synchronizationAtStart.reservedDeliveries +
+              parsed.length >
             MAXIMUM_PENDING_SYNCHRONIZATION_EVENTS
           ) {
             socket.emit("v1:error", createContractError("INTERNAL_ERROR", options.clock));
             socket.disconnect(true);
             return;
           }
-          synchronizationAtStart.reservedDeliveries += 1;
+          synchronizationAtStart.reservedDeliveries += parsed.length;
         }
         try {
           if (await authorizeIdentityOnce(authorizations, socket.data.identity)) {
             const synchronization = socket.data.synchronization;
             if (synchronization?.status === "pending") {
-              synchronization.participantEvents.push(parsed);
+              synchronization.participantEvents.push(...parsed);
             } else {
-              socket.emit("v1:private-event", parsed);
+              parsed.forEach((event) => socket.emit("v1:private-event", event));
             }
           } else {
             socket.disconnect(true);
           }
         } finally {
-          if (reserved) synchronizationAtStart.reservedDeliveries -= 1;
+          if (reserved) synchronizationAtStart.reservedDeliveries -= parsed.length;
         }
       }),
     );
   };
+  const emitParticipantEvent = (
+    participantId: string,
+    event: ParticipantPrivateEvent,
+  ): Promise<void> => emitParticipantEvents(participantId, [event]);
 
   io.on("connection", (socket) => {
     const identity = socket.data.identity;
@@ -1064,24 +1069,33 @@ export function createGameServer(options: GameServerOptions): GameServer {
             if (
               acknowledgement.scope !== "active-lobby" ||
               acknowledgement.eventSequence !== event.eventSequence ||
-              result.participantPrivateEvent !== null ||
+              result.participantPrivateEvents.length > 0 ||
               acknowledgement.idempotentReplay
             ) {
               throw new Error("Committed lobby event delivery metadata is inconsistent.");
             }
             await emitLobbyEvent(identity.lobbyId, event);
-          } else if (result.participantPrivateEvent !== null) {
-            const event = ParticipantPrivateEventSchema.parse(result.participantPrivateEvent);
+          } else if (result.participantPrivateEvents.length > 0) {
+            if (result.participantPrivateEvents.length > 2) {
+              throw new Error("Committed private event batch exceeds its bound.");
+            }
+            const events = result.participantPrivateEvents.map((event) =>
+              ParticipantPrivateEventSchema.parse(event),
+            );
+            const markResult = events[0];
+            const nearWin = events[1];
             if (
               acknowledgement.scope !== "participant-private" ||
-              (event.type === "mark-result" && event.commandId !== acknowledgement.commandId)
+              markResult?.type !== "mark-result" ||
+              markResult.commandId !== acknowledgement.commandId ||
+              (nearWin !== undefined && nearWin.type !== "near-win")
             ) {
               throw new Error("Committed private event delivery metadata is inconsistent.");
             }
             if (acknowledgement.idempotentReplay) {
-              socket.emit("v1:private-event", event);
+              events.forEach((event) => socket.emit("v1:private-event", event));
             } else {
-              await emitParticipantEvent(identity.participantId, event);
+              await emitParticipantEvents(identity.participantId, events);
             }
           } else if (!acknowledgement.idempotentReplay) {
             throw new Error("Committed replay delivery metadata is inconsistent.");

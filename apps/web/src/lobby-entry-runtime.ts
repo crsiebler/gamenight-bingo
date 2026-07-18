@@ -37,6 +37,7 @@ const handler =
   connectDatabase(databaseUrl, {
     roundCommands: {
       patterns: patternCatalog,
+      nearWinFeedbackEnabled: true,
       clock: () => new Date(),
       randomBytes: (length) => new Uint8Array(randomBytes(length)),
       nextId: (prefix) => `${prefix}-${randomUUID()}`,
