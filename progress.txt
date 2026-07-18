@@ -3365,3 +3365,52 @@ Targeted re-review outcome for US-034 at 2026-07-17 21:51:00 MST:
 - `code-reviewer` and `qa-expert` reviewed the revised complete staged diff and returned empty actionable finding lists with no residual risks.
 - The exact-deadline lifecycle sweep, valid-target player authorization test, and both reconnect/override lock orderings fully resolve the initial findings.
 - Security review had already returned an empty finding list. No in-scope critical, high, or medium findings remain; US-034 can be marked passing and committed after the final consistency check.
+
+## 2026-07-17 21:58:21 MST - US-035
+- What was implemented
+  - Confirmed the versioned contracts and existing Serializable round-command executor already implement the required strict call-configuration union, default One Line round, unique cards, and private 75-ball draw order.
+  - Added PostgreSQL coverage for persisted manual mode and every supported automatic interval, plus persisted card ownership, uniqueness, column ranges, free center, and complete nonrepeating draw-order invariants.
+  - Added a deterministic duplicate-card-ID failure proving round, draw positions, cards, event sequence, active event, and command result roll back as one transaction.
+- Files changed: `packages/database/src/database.integration.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-035 - Configure call mode and create a round`
+- Auto approval: `enabled`
+- Checks:
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t 'commits create, configure|persists the supported|rolls back round state'` (pass; 8 focused tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test:database` (pass; 107 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass; typecheck, 25 files, and 520 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: none
+  - Used: skipped because the feature behavior and transaction boundary were already implemented by dependency stories and this iteration only completed focused acceptance coverage
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and targeted re-review by `qa-expert`
+  - Findings: code review returned none; fixed the QA medium gap by making the manual case transition from persisted automatic mode and prove the prior interval is cleared; targeted re-review returned none
+- Decisions (why):
+  - Kept production code unchanged because the strict contract, default pattern, persisted configuration mapping, unique card generation, private draw order, and Serializable transaction already satisfy the story; duplicating those rules would create drift.
+  - Injected only the existing ID dependency in the integration helper so a database uniqueness failure can prove rollback without adding test-only production behavior or monkey patching.
+  - Compared card owners as a set because aggregate card order is not part of the repository contract; the initial stronger assertion correctly exposed that an ordering expectation would be brittle rather than a product defect.
+  - Testing decision: this iteration completed missing regression coverage for previously implemented behavior, so no new behavioral production code required a red-green cycle; the focused suite passed after correcting the test-only ordering assumption.
+- **Learnings for future iterations:**
+  - Round-creation acceptance spans existing layers: strict mode/interval rejection belongs to versioned contract tests, card/draw generation invariants belong to domain tests, and PostgreSQL tests should prove persisted mapping and all-or-nothing transaction behavior.
+  - Aggregate card order is intentionally unspecified; compare participant ownership independently of returned card ordering.
+- Known issues / follow-ups:
+  - The unrelated `apps/web/next-env.d.ts` side effect and untracked browser-report artifacts remain untouched and unstaged.
+- Next iteration start:
+  - If review passes, implement US-036 active-round waiting-player behavior; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-035 at 2026-07-17 22:02:39 MST:
+- The initial `code-reviewer` pass returned no actionable findings; `qa-expert` identified one medium coverage gap because configuring manual mode from the default manual state did not prove a prior automatic interval is cleared.
+- Changed the manual parameterized case to first persist automatic mode at 30 seconds, then configure manual mode and assert `callIntervalSeconds` returns to null.
+- Post-fix checks: the 8 focused PostgreSQL tests pass, the PostgreSQL-enabled root suite passes typecheck with 25 files and 520 tests, lint and tracked formatting pass, and staged/unstaged whitespace checks pass.
+- Targeted re-review: pending `qa-expert` because only QA coverage changed; code review is not repeated because its initial finding list was empty.
+
+Targeted re-review outcome for US-035 at 2026-07-17 22:04:00 MST:
+- `qa-expert` reviewed the revised complete staged diff and returned an empty actionable finding list with no residual risk in the remediation scope.
+- The automatic-to-manual transition directly proves the persisted interval is cleared; code review had already returned an empty finding list.
+- No in-scope critical, high, or medium findings remain; US-035 can be marked passing and committed after the final consistency check.

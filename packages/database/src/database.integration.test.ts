@@ -411,7 +411,12 @@ describeDatabase("PostgreSQL durable game state", () => {
     return connection;
   }
 
-  async function connectWithRoundCommands(clock: () => Date) {
+  async function connectWithRoundCommands(
+    clock: () => Date,
+    overrides: {
+      readonly nextId?: (prefix: "round" | "card" | "call" | "mark") => string;
+    } = {},
+  ) {
     const connection = await connectDatabase(testDatabaseUrl!, {
       lifecycleClock: clock,
       roundCommands: {
@@ -422,7 +427,7 @@ describeDatabase("PostgreSQL durable game state", () => {
         ],
         clock,
         randomBytes: (length) => new Uint8Array(randomBytes(length)),
-        nextId: (prefix) => `${prefix}-${randomUUID()}`,
+        nextId: overrides.nextId ?? ((prefix) => `${prefix}-${randomUUID()}`),
       },
     });
     connections.push(connection);
@@ -4656,6 +4661,28 @@ describeDatabase("PostgreSQL durable game state", () => {
     });
     expect(restored?.round?.cards).toHaveLength(2);
     expect(restored?.round?.drawOrder).toHaveLength(75);
+    expect(restored?.round?.drawOrder.map(({ position }) => position)).toEqual(
+      Array.from({ length: 75 }, (_, index) => index + 1),
+    );
+    expect(
+      [...new Set(restored?.round?.drawOrder.map(({ ball }) => ball))].sort(
+        (left, right) => left - right,
+      ),
+    ).toEqual(Array.from({ length: 75 }, (_, index) => index + 1));
+    expect(restored?.round?.cards.map(({ participantId }) => participantId).sort()).toEqual(
+      state.participants.map(({ id }) => id).sort(),
+    );
+    expect(new Set(restored?.round?.cards.map(({ cells }) => cells.join(","))).size).toBe(2);
+    for (const card of restored?.round?.cards ?? []) {
+      expect(card.cells[12]).toBe(0);
+      for (let column = 0; column < 5; column += 1) {
+        const values = card.cells.filter((_, index) => index % 5 === column && index !== 12);
+        expect(new Set(values).size).toBe(values.length);
+        expect(values.every((value) => value >= column * 15 + 1 && value <= column * 15 + 15)).toBe(
+          true,
+        );
+      }
+    }
 
     now = new Date("2026-07-17T09:11:00.000Z");
     await expect(
@@ -4737,6 +4764,120 @@ describeDatabase("PostgreSQL durable game state", () => {
     ]);
     expect(restored?.events).toHaveLength(6);
     expect(restored?.commandResults).toHaveLength(6);
+  });
+
+  test.each([
+    {
+      callConfiguration: { mode: "manual" } as const,
+      expectedMode: "manual",
+      expectedInterval: null,
+    },
+    ...([5, 10, 30, 60, 120] as const).map((intervalSeconds) => ({
+      callConfiguration: { mode: "automatic" as const, intervalSeconds },
+      expectedMode: "automatic" as const,
+      expectedInterval: intervalSeconds,
+    })),
+  ])(
+    "persists the supported $callConfiguration.mode/$expectedInterval call configuration",
+    async ({ callConfiguration, expectedInterval, expectedMode }) => {
+      const occurredAt = new Date("2026-07-17T09:15:30.000Z");
+      const connection = await connectWithRoundCommands(() => occurredAt);
+      const initial = createLobbyState();
+      const state: DurableLobbyState = {
+        ...initial,
+        lobby: { ...initial.lobby, status: "waiting", lastEventSequence: 0n },
+        round: null,
+        events: [],
+        commandResults: [],
+      };
+      await createPersistedLobby(connection, state);
+      const execute = (
+        command: Parameters<typeof connection.roundCommands.execute>[0]["command"],
+      ) =>
+        connection.roundCommands.execute({
+          lobbyId: state.lobby.id,
+          sessionTokenHash: state.sessions[0]!.tokenHash,
+          command,
+        });
+
+      await expect(
+        execute(
+          CreateRoundCommandSchema.parse({
+            schemaVersion: 1,
+            type: "create-round",
+            commandId: `create-configured-${randomUUID()}`,
+          }),
+        ),
+      ).resolves.toMatchObject({ ok: true });
+      if (callConfiguration.mode === "manual") {
+        await expect(
+          execute(
+            ConfigureCommandSchema.parse({
+              schemaVersion: 1,
+              type: "configure",
+              commandId: `configure-before-manual-${randomUUID()}`,
+              patternId: "standard-one-line",
+              callConfiguration: { mode: "automatic", intervalSeconds: 30 },
+            }),
+          ),
+        ).resolves.toMatchObject({ ok: true });
+      }
+      await expect(
+        execute(
+          ConfigureCommandSchema.parse({
+            schemaVersion: 1,
+            type: "configure",
+            commandId: `configure-supported-${randomUUID()}`,
+            patternId: "standard-one-line",
+            callConfiguration,
+          }),
+        ),
+      ).resolves.toMatchObject({ ok: true });
+
+      await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toMatchObject({
+        round: {
+          initialPatternId: "standard-one-line",
+          currentPatternId: "standard-one-line",
+          callMode: expectedMode,
+          callIntervalSeconds: expectedInterval,
+        },
+      });
+    },
+  );
+
+  test("rolls back round state when unique card persistence fails", async () => {
+    const occurredAt = new Date("2026-07-17T09:15:45.000Z");
+    const connection = await connectWithRoundCommands(() => occurredAt, {
+      nextId: (prefix) => (prefix === "card" ? "duplicate-card-id" : `${prefix}-${randomUUID()}`),
+    });
+    const initial = createLobbyState();
+    const state: DurableLobbyState = {
+      ...initial,
+      lobby: { ...initial.lobby, status: "waiting", lastEventSequence: 0n },
+      round: null,
+      events: [],
+      commandResults: [],
+    };
+    await createPersistedLobby(connection, state);
+
+    await expect(
+      connection.roundCommands.execute({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: state.sessions[0]!.tokenHash,
+        command: CreateRoundCommandSchema.parse({
+          schemaVersion: 1,
+          type: "create-round",
+          commandId: `create-rollback-${randomUUID()}`,
+        }),
+      }),
+    ).rejects.toThrow();
+
+    await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toMatchObject({
+      lobby: { status: "waiting", lastEventSequence: 0n },
+      round: null,
+      events: [],
+      commandResults: [],
+    });
   });
 
   test("continues a settled One Line result without replacing round play state", async () => {
