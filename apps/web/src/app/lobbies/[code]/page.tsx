@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
-import { LobbyCodeSchema } from "@gamenight-bingo/contracts";
+import { LobbyCodeSchema, parseRuntimeConfig } from "@gamenight-bingo/contracts";
 import { normalizeLobbyCodeEntry } from "@gamenight-bingo/domain";
 import { patternCatalog } from "@gamenight-bingo/patterns";
 
@@ -25,5 +25,13 @@ const patterns = patternCatalog.map(({ category, id, name }) => ({ category, id,
 export default async function LobbyPage({ params }: LobbyPageProps) {
   const code = normalizeLobbyCodeEntry((await params).code);
   if (!LobbyCodeSchema.safeParse(code).success) notFound();
-  return <PrivateLobbyPage code={code} patterns={patterns} />;
+  const realtimeServerUrl = parseRuntimeConfig(process.env).publicGameServerUrl;
+  return (
+    <PrivateLobbyPage
+      code={code}
+      enableRealtime
+      patterns={patterns}
+      {...(realtimeServerUrl === undefined ? {} : { realtimeServerUrl })}
+    />
+  );
 }

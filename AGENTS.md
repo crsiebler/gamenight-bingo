@@ -369,6 +369,14 @@ then refactor while green.
   tests and a production Next build.
 - Treat server snapshots and sequenced committed events as UI state inputs; do
   not infer authoritative game state from animation or local timers.
+- Browser live projections apply only the exact next lobby sequence, ignore
+  stale duplicates, and request one full resync for gaps or inconsistent event
+  references. A call event can update the visible call immediately, but an
+  automatic call requires resync to restore its next authoritative deadline;
+  snapshots replace the baseline without replaying call-history announcements.
+- Reject realtime snapshots below the current lobby sequence, validate every
+  locally projected snapshot, and treat own marks as append-only within one card
+  when merging equal-sequence snapshots and participant-private mark events.
 - Show loading, offline, reconnecting, snapshot-syncing, grace, paused, waiting,
   co-winner-window, result, and expired states explicitly where applicable.
 - Keep current call, card, call mode/timer, pause reason, and valid controls

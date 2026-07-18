@@ -179,6 +179,12 @@ The game-server listener settings are:
 | `GAME_SERVER_PORT` | `3001`                  | Socket.IO listener port, from 1 through 65535 |
 | `WEB_ORIGIN`       | `http://localhost:3000` | Exact browser origin allowed to connect       |
 
+The optional browser build variable `NEXT_PUBLIC_GAME_SERVER_URL` selects an
+absolute public Socket.IO origin, such as `http://localhost:3001` for separate
+local web and game-server processes. Omit it when hosted ingress forwards
+Socket.IO on the web origin. It is public routing configuration and must never
+contain a credential or ticket.
+
 `WEB_ORIGIN` must be one HTTP or HTTPS origin without credentials, path, query,
 or fragment. Hosted ingress terminates TLS and forwards WebSocket upgrades to
 the configured game-server listener. The web rate limiter treats the rightmost

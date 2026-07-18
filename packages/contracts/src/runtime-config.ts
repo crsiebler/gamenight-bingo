@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export type RuntimeConfig = Readonly<{
   maxPlayersPerLobby: number;
   maxActiveLobbies: number;
@@ -7,10 +9,14 @@ export type RuntimeConfig = Readonly<{
   realtimeTicketTtlSeconds: number;
   coWinnerWindowMs: number;
   databaseUrl?: string;
+  publicGameServerUrl?: string;
   trustedProxySecret?: string;
 }>;
 
-type RuntimeConfigProperty = Exclude<keyof RuntimeConfig, "databaseUrl" | "trustedProxySecret">;
+type RuntimeConfigProperty = Exclude<
+  keyof RuntimeConfig,
+  "databaseUrl" | "publicGameServerUrl" | "trustedProxySecret"
+>;
 
 type RuntimeConfigDefinition = Readonly<{
   environmentKey: string;
@@ -73,7 +79,9 @@ const CONFIG_DEFINITIONS: readonly RuntimeConfigDefinition[] = [
     maximum: 10_000,
   },
 ];
-
+const PUBLIC_HTTP_ORIGIN =
+  /^https?:\/\/(?:localhost|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?|\[[0-9a-f:.]+\])(?::(\d{1,5}))?$/i;
+const PUBLIC_HTTP_URL = z.url({ protocol: /^https?$/ });
 export class RuntimeConfigurationError extends Error {
   readonly code = "RUNTIME_CONFIG_INVALID";
   readonly issues: readonly string[];
@@ -90,6 +98,7 @@ export function parseRuntimeConfig(
 ): RuntimeConfig {
   const configuration: Record<RuntimeConfigProperty, number> & {
     databaseUrl?: string;
+    publicGameServerUrl?: string;
     trustedProxySecret?: string;
   } = {
     ...RUNTIME_CONFIG_DEFAULTS,
@@ -136,6 +145,23 @@ export function parseRuntimeConfig(
       issues.push("TRUSTED_PROXY_SECRET must contain at least 32 characters when configured.");
     } else {
       configuration.trustedProxySecret = trustedProxySecret;
+    }
+  }
+
+  const publicGameServerUrl = environment["NEXT_PUBLIC_GAME_SERVER_URL"];
+  if (publicGameServerUrl !== undefined) {
+    const match = PUBLIC_HTTP_ORIGIN.exec(publicGameServerUrl);
+    const port = match?.[1] === undefined ? null : Number(match[1]);
+    if (
+      !PUBLIC_HTTP_URL.safeParse(publicGameServerUrl).success ||
+      match === null ||
+      (port !== null && (port < 1 || port > 65_535))
+    ) {
+      issues.push(
+        "NEXT_PUBLIC_GAME_SERVER_URL must be one HTTP or HTTPS origin without credentials, path, query, or fragment.",
+      );
+    } else {
+      configuration.publicGameServerUrl = publicGameServerUrl;
     }
   }
 

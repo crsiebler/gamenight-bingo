@@ -64,6 +64,8 @@ Next story: US-001
 - Verify private App Router document cache headers with a production Next server; development mode rewrites document responses to `no-cache, must-revalidate` even when the production route proxy emits `no-store`.
 - After a browser mutation acknowledgement, serialize any mandatory snapshot reconciliation behind an in-flight refresh, require the snapshot sequence and expected projection to include the commit, and keep stale controls latched until authority confirms the transition.
 - Card mark clients accept both participant-private acknowledgements and active-lobby acknowledgements because a winning mark can open the co-winner window; reconcile the authoritative own mark against the same card and require a lobby sequence only for active-lobby scope.
+- Browser live projections apply only contiguous lobby events, ignore stale duplicates, reject lower-sequence snapshots, validate every locally projected snapshot, and request one resync for gaps or inconsistent references; automatic call events update the visible call immediately but require a snapshot to restore the next authoritative deadline without replaying call-history announcements. Participant-private marks carry no lobby sequence, so merge them append-only only within the same card and preserve them across equal-sequence snapshots.
+- Browser realtime adapters retry transient ticket, handshake, and retryable server failures with bounded delays and a fresh single-use ticket; strict non-retryable ticket errors terminate in an explicit expired state rather than looping or reusing credentials.
 
 Append-only iteration log
 -------------------------
@@ -4761,3 +4763,64 @@ Targeted re-review outcome for US-048 at 2026-07-18 11:37:34 MST:
 - Added a failing overlap regression that refreshes to a replacement card while the old request is in flight, rejects that old request, and requires the replacement card to create a fresh command session.
 - Guarded both late acknowledgement and rejection handling by exact retained-session identity so an authoritative refresh remains final and stale outcomes cannot mutate reconciliation state.
 - Final post-remediation checks: focused suites pass 32 tests, root test passes workspace/type checks with 541 tests and 135 database skips, lint passes, intended-file formatting passes, and no in-scope critical, high, or medium findings remain.
+
+## 2026-07-18 12:09:12 MST - US-049
+- What was implemented
+  - Added a mobile-first live game panel with the current letter/number, chronological calls, canonical pattern preview and authoritative own-card progress, call mode, server-deadline countdown, grace/pause/co-winner messaging, and explicit connection recovery states.
+  - Added a strict Socket.IO browser adapter that issues a fresh single-use ticket for each connection attempt, disables credential-reusing built-in reconnection, parses snapshots/events before delivery, sends heartbeats, retries transient failures with bounded delays, and terminates non-retryable ticket failures as expired.
+  - Applied only the exact next lobby sequence, ignored stale duplicates, requested one resync for gaps/inconsistent projections, and resynchronized every automatic call to restore the next authoritative deadline without inferring browser state.
+  - Added one controlled call live region that remains empty for snapshot history and announces each newly applied call once.
+- Files changed: `AGENTS.md`, `README.md`, `apps/web/package.json`, `apps/web/src/app/globals.css`, `apps/web/src/app/lobbies/[code]/page.tsx`, `apps/web/src/components/templates/private-lobby-page.test.tsx`, `apps/web/src/components/templates/private-lobby-page.tsx`, `apps/web/src/lib/index.ts`, `apps/web/src/lib/private-lobby-realtime.test.ts`, `apps/web/src/lib/private-lobby-realtime.ts`, `packages/contracts/src/runtime-config.ts`, `bun.lock`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-049 - Build live call and status UI`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/components/templates/private-lobby-page.test.tsx` (expected fail before implementation with 3 missing-behavior failures; pass after implementation and automatic-deadline regression remediation)
+  - `bunx vitest run apps/web/src/lib/private-lobby-realtime.test.ts apps/web/src/components/templates/private-lobby-page.test.tsx` (expected fail before adapter implementation with 2 missing-behavior failures; pass with 33 tests)
+  - `bunx vitest run apps/web/src/lib/private-lobby-realtime.test.ts apps/web/src/components/templates/private-lobby-page.test.tsx tests/runtime-config.test.ts` (pass after final review remediation with 93 tests)
+  - `bun run test` (pass after final review remediation; workspace/type checks, 33 files passed, 1 database file skipped, 567 tests passed, and 135 database-backed tests skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - Focused Prettier check for every intended source/test/documentation file (pass)
+  - `bun run format:check` (fails only on unrelated pre-existing untracked Lighthouse and Playwright reports; every intended story file passes)
+  - `bun install --frozen-lockfile` (pass; 393 installs checked with no changes)
+  - `DATABASE_URL=<approved local Compose database> bun run --cwd apps/web build` (pass)
+  - `TEST_DATABASE_URL=<approved isolated local database> bun run test:e2e` (pass; 3 Playwright tests against a production Next server)
+  - `git diff --check` (pass)
+  - Manual dev-browser verification with real HTTP ticket issuance and Socket.IO delivery at desktop and 320px mobile (pass; connected/offline states, automatic countdown, sequenced current/history updates, one new-call announcement, newest-history following, post-call deadline resync, explicit flexible-example labeling, and no horizontal overflow; no application errors, with one existing Next.js smooth-scroll development warning)
+  - Mobile Lighthouse snapshot (pass; accessibility 100, best practices 100, SEO 100, agentic browsing 100, and zero failed audits)
+- Implementation agents:
+  - Recommended: none
+  - Used: `frontend-developer` for component/adapter boundaries, sequence/reconnect risks, live-region discipline, and focused test guidance within the complex-story standard-mode budget
+- Specialist review:
+  - Agents used: initial and one targeted re-review by `code-reviewer`, `qa-expert`, and UI-triggered `ui-designer`; no additional specialist pass was launched after the permitted targeted re-review
+  - Findings: the initial review produced nine deduplicated blocking issues spanning fresh-ticket recovery, readiness state, stale snapshot races, authoritative automatic deadlines, configurable server origin, live-region separation, flexible-preview labeling, history orientation, and narrow-screen/forced-colors presentation. The targeted re-review identified terminal handshake handling, private-event/equal-sequence state, pre-readiness backoff, stale command reconciliation, resync serialization, exact-event validation, round-scoped history/announcement reset, strict URL parsing, keyboard history access, and active mobile hierarchy; all were fixed with regressions, followed by a clean staged self-review
+- Decisions (why):
+  - Kept snapshots as replaceable authoritative baselines while applying only self-contained contiguous events immediately because live rendering must not invent state omitted from an event.
+  - Disabled Socket.IO's built-in credential-reusing reconnect and created a fresh socket after a fresh ticket because every ticket is single-use and reconnects must not retain plaintext credentials.
+  - Resynchronized after automatic calls because call events intentionally omit the next persisted deadline; the countdown reaches an explicit server-wait state and never advances play locally.
+  - Resolved canonical masks from the existing pattern package in the client rather than serializing the full catalog through the server component.
+- **Learnings for future iterations:**
+  - A connected transport is not ready until its strict actor-scoped snapshot establishes the baseline; reconnect snapshots produce a recovered state without announcing historical calls.
+  - Automatic call events can update the current call immediately, but the next countdown must come from a resync snapshot rather than adding the configured interval in the browser.
+  - Keep call history outside live regions and update one atomic polite status only for a newly accepted contiguous call event.
+- Known issues / follow-ups:
+  - Root `bun run format:check` remains blocked by unrelated pre-existing untracked browser-report artifacts; every intended story file passes Prettier.
+  - The approved local browser database retains the waiting browser-verification fixtures, and `us049-mobile-browser.png` remains an untracked verification artifact; no local data or files were deleted.
+- Next iteration start:
+  - If review passes, implement US-050 live host controls; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-049 at 2026-07-18 12:45:00 MST:
+- The initial `code-reviewer`, `qa-expert`, and `ui-designer` pass produced nine deduplicated blocking findings: connection readiness preceded the baseline snapshot; disconnects reused single-use credentials instead of issuing fresh tickets; transient ticket/handshake failures lacked bounded retries; delayed HTTP snapshots could roll back newer lobby sequences; automatic-call refreshes could restore stale deadlines; the game-state and call announcements shared one live region; flexible One Line previews appeared canonical rather than exemplary; long call history opened away from its newest entry; and the server URL plus narrow-screen/forced-colors behavior were insufficiently robust.
+- Added failing regressions before making snapshot readiness explicit, disabling Socket.IO credential reuse, retrying with fresh tickets and bounded exponential delays, rejecting stale HTTP baselines, serializing automatic deadline reconciliation, separating status/call announcements, labeling flexible examples, and following the newest history entry only while the reader remains near the end.
+- Centralized optional `NEXT_PUBLIC_GAME_SERVER_URL` validation in the existing runtime parser, injected the validated value through the server page, and added mobile and forced-colors presentation coverage.
+- The final outage check reached the explicit offline state, then exposed one additional non-retryable ticket edge: a deactivated session returned repeated HTTP 401 responses. A failing regression now proves that a strict non-retryable ticket error stops retrying and renders the terminal expired state, while ambiguous/network failures remain retryable.
+- Post-fix checks before targeted re-review: focused adapter/component/runtime suites passed 82 tests, root test passed workspace/type checks with 556 tests and 135 database skips, lint passed, typecheck passed, intended formatting and production build passed, and mobile browser verification confirmed newest-history following, separate announcements, explicit flexible-example labeling, and 320px no-overflow.
+- Targeted re-review: `code-reviewer`, `qa-expert`, and `ui-designer` re-reviewed the complete staged remediation because the substantive correctness, test, and responsive/accessibility fixes addressed findings from all three specialists.
+
+Targeted re-review outcome for US-049 at 2026-07-18 13:10:00 MST:
+- The one permitted targeted pass found additional blocking paths: strict handshake and server errors could retry or report the wrong terminal state; terminal expiration retained private controls; participant-private marks and equal-sequence snapshots could overwrite each other; pre-snapshot reconnects reset backoff too early; stale HTTP/realtime snapshots could retain pending controls or roll back state; automatic events could emit overlapping resyncs; exact-next events were not validated as complete projections; round changes retained history/announcement state; URL validation accepted malformed hosts; call history lacked a reliable keyboard focus target; and the active card remained below lower-priority mobile content.
+- Added failing regressions before parsing strict HTTP/handshake errors, terminating session failures as expired, clearing actor-scoped content, parsing private events, merging same-card marks append-only, escalating retry delays until snapshot readiness, reconciling stale command responses against newer live state, rejecting lower-sequence snapshots, allowing one outstanding resync, validating every projected snapshot, resetting round-scoped history/announcements, using WHATWG-backed URL validation, focusing scrollable history, and ordering the concise live summary then card then round details on mobile.
+- Staged self-review found and fixed one lifecycle nuance with a failing regression: grace-to-absent is a valid same-generation presence transition, while only lower generations are stale.
+- Final checks: focused suites pass 93 tests; root test passes workspace/type checks with 567 tests and 135 database skips; lint, typecheck, intended formatting, frozen install, production build, and 3 production Playwright tests pass. The final 320px browser pass confirms live summary, card, round details, sharing, setup, and roster order with no horizontal overflow; the local authority exited during that pass, so expected connection-refused console entries remained while the UI correctly showed Offline.
+- No in-scope critical, high, or medium findings remain after the final staged self-review. Residual manual risk is limited to non-Chromium/assistive-technology rendering and a final connected socket pass after the layout-only hierarchy move; the earlier real-socket pass and deterministic final adapter/component coverage exercise those behaviors.

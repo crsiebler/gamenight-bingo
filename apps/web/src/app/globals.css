@@ -488,6 +488,201 @@ h2 {
   padding: 1rem;
 }
 
+.live-game-panel {
+  background: linear-gradient(145deg, rgb(16 42 67 / 98%), rgb(22 67 81 / 96%)), var(--bingo-ink);
+  border-color: var(--bingo-ink);
+  color: #ffffff;
+  grid-column: 1 / -1;
+}
+
+.live-game-panel .eyebrow {
+  color: var(--bingo-gold);
+}
+
+.live-game-heading,
+.live-game-summary {
+  display: grid;
+  gap: 1rem;
+}
+
+.connection-state {
+  align-self: start;
+  background: #ffffff;
+  border: 0.125rem solid currentColor;
+  border-radius: 999px;
+  color: var(--bingo-ink);
+  justify-self: start;
+  padding: 0.45rem 0.75rem;
+}
+
+.connection-state::before {
+  content: "Status: ";
+}
+
+.connection-state[data-state="expired"],
+.connection-state[data-state="offline"] {
+  color: var(--bingo-text-danger);
+}
+
+.connection-state[data-state="reconnecting"],
+.connection-state[data-state="snapshot-syncing"] {
+  color: #6a4300;
+}
+
+.connection-state[data-state="connected"],
+.connection-state[data-state="recovered"] {
+  color: #17634c;
+}
+
+.live-game-summary {
+  margin: 1rem 0;
+}
+
+.current-call,
+.call-mode-status {
+  border: 0.125rem solid rgb(255 255 255 / 35%);
+  border-radius: 1.25rem;
+  display: grid;
+  gap: 0.35rem;
+  padding: 1rem;
+}
+
+.current-call {
+  background: var(--bingo-gold);
+  color: var(--bingo-ink);
+}
+
+.current-call span,
+.call-mode-status span {
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.current-call strong {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(2.8rem, 16vw, 5.5rem);
+  line-height: 0.9;
+}
+
+.call-mode-status {
+  align-content: center;
+  background: rgb(255 255 255 / 8%);
+}
+
+.round-alert,
+.grace-status {
+  background: #ffffff;
+  border-left: 0.35rem solid var(--bingo-gold);
+  border-radius: 0 0.8rem 0.8rem 0;
+  color: var(--bingo-ink);
+  line-height: 1.45;
+  padding: 0.85rem 1rem;
+}
+
+.round-alert {
+  display: grid;
+  gap: 0.2rem;
+  margin-bottom: 1rem;
+}
+
+.grace-status {
+  margin-bottom: 1rem;
+}
+
+.live-game-detail {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.live-game-detail-panel {
+  grid-column: 1 / -1;
+}
+
+.live-game-detail > div {
+  min-width: 0;
+}
+
+.live-game-detail h3 {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.4rem;
+  margin: 0 0 0.75rem;
+}
+
+.call-history {
+  display: grid;
+  gap: 0.45rem;
+  grid-template-columns: repeat(auto-fill, minmax(3.4rem, 1fr));
+  list-style-position: inside;
+  margin: 0;
+  max-height: 13rem;
+  overflow-y: auto;
+  padding: 0;
+}
+
+.call-history:focus-visible {
+  outline: 0.2rem solid var(--bingo-gold);
+  outline-offset: 0.2rem;
+}
+
+.call-history li {
+  background: #ffffff;
+  border-radius: 0.65rem;
+  color: var(--bingo-ink);
+  font-weight: 900;
+  min-width: 0;
+  padding: 0.55rem 0.4rem;
+  text-align: center;
+}
+
+.pattern-miniature {
+  background: #ffffff;
+  border: 0.35rem solid #ffffff;
+  border-radius: 0.8rem;
+  display: grid;
+  gap: 0.2rem;
+  grid-template-columns: repeat(5, 1fr);
+  max-width: 10rem;
+  padding: 0.2rem;
+}
+
+.pattern-miniature span {
+  align-items: center;
+  aspect-ratio: 1;
+  background: #d8e0e5;
+  border: 0.0625rem solid #718391;
+  border-radius: 0.15rem;
+  display: flex;
+  justify-content: center;
+}
+
+.pattern-example-label {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 800;
+  margin-top: 0.55rem;
+  text-transform: uppercase;
+}
+
+.pattern-miniature span[data-required="true"] {
+  background: var(--bingo-coral);
+  border-color: #7e241f;
+}
+
+.pattern-progress {
+  line-height: 1.45;
+  margin: 0.75rem 0 0;
+}
+
+.call-announcement {
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
 .roster-panel {
   grid-column: 1 / -1;
 }
@@ -691,6 +886,16 @@ h2 {
     grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
   }
 
+  .live-game-heading {
+    align-items: start;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .live-game-summary,
+  .live-game-detail {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .card-panel {
     padding-inline: 2rem;
   }
@@ -728,5 +933,24 @@ h2 {
 
   .bingo-card-cell {
     border-color: ButtonText;
+  }
+
+  .live-game-panel,
+  .current-call,
+  .call-mode-status,
+  .pattern-miniature {
+    border-color: CanvasText;
+  }
+
+  .pattern-miniature span[data-required="true"] {
+    border-style: double;
+    border-width: 0.2rem;
+  }
+
+  .pattern-miniature span[data-required="true"]::after {
+    color: CanvasText;
+    content: "X";
+    font-size: 0.75rem;
+    font-weight: 900;
   }
 }

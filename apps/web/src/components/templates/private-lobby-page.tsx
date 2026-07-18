@@ -2,13 +2,17 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
-import type {
-  AutomaticCallInterval,
-  CallConfiguration,
-  CommandAck,
-  ParticipantSummary,
-  Snapshot,
+import {
+  SnapshotSchema,
+  type ParticipantPrivateEvent,
+  type ActiveLobbyEvent,
+  type AutomaticCallInterval,
+  type CallConfiguration,
+  type CommandAck,
+  type ParticipantSummary,
+  type Snapshot,
 } from "@gamenight-bingo/contracts";
+import { calculatePatternProgress, patternCatalog } from "@gamenight-bingo/patterns";
 import { BingoCard, type BingoCardCell } from "@gamenight-bingo/ui";
 
 import { Button, LinkButton, Option } from "@/atoms";
@@ -23,6 +27,12 @@ import {
   type WaitingLobbyCommand,
   type WaitingLobbyCommandAck,
 } from "@/lib/private-lobby-flow";
+import {
+  connectPrivateLobbyRealtime,
+  type PrivateLobbyConnectionState,
+  type PrivateLobbyRealtimeConnection,
+  type PrivateLobbyRealtimeHandlers,
+} from "@/lib/private-lobby-realtime";
 
 type PatternOption = {
   category: "standard" | "shape" | "letter" | "number" | "christmas";
@@ -43,6 +53,9 @@ type PrivateLobbyPageProps = {
   createMarkCommandSession?: (command: MarkCardCommandSelection) => {
     run(): Promise<CommandAck>;
   };
+  connectRealtime?: (handlers: PrivateLobbyRealtimeHandlers) => PrivateLobbyRealtimeConnection;
+  enableRealtime?: boolean;
+  realtimeServerUrl?: string;
 };
 
 type PendingCommandReconciliation = {
@@ -105,6 +118,136 @@ function patternLabel(pattern: PatternOption, duplicateNames: ReadonlySet<string
   return duplicateNames.has(pattern.name)
     ? `${pattern.name} (${PATTERN_CATEGORY_LABELS[pattern.category]})`
     : pattern.name;
+}
+
+function ballLabel(ball: number): string {
+  return `${["B", "I", "N", "G", "O"][Math.floor((ball - 1) / 15)]} ${ball}`;
+}
+
+function pauseDescription(reason: "host-command" | "host-absent" | "participant-absent"): string {
+  switch (reason) {
+    case "host-command":
+      return "Paused by the host.";
+    case "host-absent":
+      return "Paused because the host is absent.";
+    case "participant-absent":
+      return "Paused because a player is absent.";
+  }
+}
+
+function validateSnapshot(snapshot: Snapshot): Snapshot | null {
+  const parsed = SnapshotSchema.safeParse(snapshot);
+  return parsed.success ? parsed.data : null;
+}
+
+function mergeAppendOnlyMarks(current: Snapshot | null, next: Snapshot): Snapshot | null {
+  if (current === null || current.ownCard?.id !== next.ownCard?.id) return validateSnapshot(next);
+  const markIds = new Set(next.ownMarks.map(({ id }) => id));
+  const markedBalls = new Set(next.ownMarks.map(({ ball }) => ball));
+  const retained = current.ownMarks.filter(
+    ({ id, ball }) => !markIds.has(id) && !markedBalls.has(ball),
+  );
+  return validateSnapshot({ ...next, ownMarks: [...next.ownMarks, ...retained] });
+}
+
+function applyLobbyEvent(snapshot: Snapshot, event: ActiveLobbyEvent): Snapshot | null {
+  if (event.type === "call") {
+    if (
+      snapshot.round === null ||
+      event.call.roundId !== snapshot.round.id ||
+      event.call.position !== snapshot.calls.length + 1 ||
+      snapshot.calls.some(({ id, ball }) => id === event.call.id || ball === event.call.ball)
+    ) {
+      return null;
+    }
+    return validateSnapshot({
+      ...snapshot,
+      generatedAt: event.occurredAt,
+      lastEventSequence: event.eventSequence,
+      calls: [...snapshot.calls, event.call],
+      timer: snapshot.timer?.kind === "automatic-call" ? null : snapshot.timer,
+    });
+  }
+
+  if (event.type === "presence") {
+    const prior = snapshot.participants.find(({ id }) => id === event.presence.participantId);
+    if (prior === undefined || event.presence.generation < prior.presence.generation) return null;
+    const participants = snapshot.participants.map((participant) =>
+      participant.id === event.presence.participantId
+        ? { ...participant, presence: event.presence }
+        : participant,
+    );
+    return validateSnapshot({
+      ...snapshot,
+      generatedAt: event.occurredAt,
+      lastEventSequence: event.eventSequence,
+      participants,
+      self:
+        snapshot.self.id === event.presence.participantId
+          ? { ...snapshot.self, presence: event.presence }
+          : snapshot.self,
+    });
+  }
+
+  if (snapshot.round === null) return null;
+  if (event.type === "stage" || event.type === "round-end") {
+    if (event.round.id !== snapshot.round.id) return null;
+    return validateSnapshot({
+      ...snapshot,
+      generatedAt: event.occurredAt,
+      lastEventSequence: event.eventSequence,
+      round: event.round,
+      timer: null,
+    });
+  }
+  if (event.type === "co-winner-window") {
+    if (
+      snapshot.round.stage === "waiting" ||
+      snapshot.calls.at(-1)?.id !== event.window.triggeringCallId
+    ) {
+      return null;
+    }
+    return validateSnapshot({
+      ...snapshot,
+      generatedAt: event.occurredAt,
+      lastEventSequence: event.eventSequence,
+      round: {
+        id: snapshot.round.id,
+        lobbyId: snapshot.round.lobbyId,
+        patternId: snapshot.round.patternId,
+        callConfiguration: snapshot.round.callConfiguration,
+        startedAt: snapshot.round.startedAt,
+        stage: "co-winner-window",
+        window: event.window,
+      },
+      timer: {
+        kind: "co-winner",
+        triggeringCallId: event.window.triggeringCallId,
+        deadline: event.window.closesAt,
+      },
+    });
+  }
+  if (
+    snapshot.round.stage === "waiting" ||
+    snapshot.calls.at(-1)?.id !== event.result.triggeringCallId
+  ) {
+    return null;
+  }
+  return validateSnapshot({
+    ...snapshot,
+    generatedAt: event.occurredAt,
+    lastEventSequence: event.eventSequence,
+    round: {
+      id: snapshot.round.id,
+      lobbyId: snapshot.round.lobbyId,
+      patternId: snapshot.round.patternId,
+      callConfiguration: snapshot.round.callConfiguration,
+      startedAt: snapshot.round.startedAt,
+      stage: "result",
+      result: event.result,
+    },
+    timer: null,
+  });
 }
 
 function callConfigurationMatches(actual: CallConfiguration, expected: CallConfiguration): boolean {
@@ -175,6 +318,9 @@ export function PrivateLobbyPage({
   origin,
   createCommandSession = defaultCreateCommandSession,
   createMarkCommandSession = defaultCreateMarkCommandSession,
+  connectRealtime,
+  enableRealtime = false,
+  realtimeServerUrl,
 }: PrivateLobbyPageProps) {
   const codeRef = useRef<HTMLInputElement>(null);
   const inviteRef = useRef<HTMLInputElement>(null);
@@ -195,6 +341,12 @@ export function PrivateLobbyPage({
   const pendingCommandRef = useRef<PendingCommandReconciliation | null>(null);
   const pendingMarkRef = useRef<PendingMarkReconciliation | null>(null);
   const unresolvedMarkRef = useRef<UnresolvedMark | null>(null);
+  const snapshotRef = useRef<Snapshot | null>(null);
+  const liveConnectionRef = useRef<PrivateLobbyRealtimeConnection | null>(null);
+  const resyncRequestedRef = useRef(false);
+  const recoveringRef = useRef(false);
+  const callHistoryRef = useRef<HTMLOListElement>(null);
+  const followCallHistoryRef = useRef(true);
   const setupDirtyRef = useRef(false);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [snapshotMessage, setSnapshotMessage] = useState("Loading private lobby...");
@@ -214,10 +366,53 @@ export function PrivateLobbyPage({
   const [pendingCommand, setPendingCommand] = useState<PendingCommandReconciliation | null>(null);
   const [resolvedOrigin, setResolvedOrigin] = useState(origin ?? "");
   const [nativeShare, setNativeShare] = useState<NonNullable<typeof shareInvite> | null>(null);
+  const [connectionState, setConnectionState] =
+    useState<PrivateLobbyConnectionState>("snapshot-syncing");
+  const [callAnnouncement, setCallAnnouncement] = useState("");
+  const [clockNow, setClockNow] = useState(() => Date.now());
 
   function setSetupDraftDirty(dirty: boolean) {
     setupDirtyRef.current = dirty;
     setSetupDirty(dirty);
+  }
+
+  function reconcilePendingState(next: Snapshot): PendingCommandReconciliation | null {
+    const pending = pendingCommandRef.current;
+    const confirmedCommand =
+      pending !== null && snapshotConfirmsCommand(next, pending) ? pending : null;
+    if (confirmedCommand !== null) {
+      pendingCommandRef.current = null;
+      setPendingCommand(null);
+    }
+    const retainedMark = markCommandSessionRef.current;
+    if (retainedMark !== null) {
+      if (next.ownCard?.id !== retainedMark.cardId) {
+        markCommandSessionRef.current = null;
+        unresolvedMarkRef.current = null;
+        setUnresolvedMark(null);
+        setMarkPendingBall(null);
+        setMarkMessage("Your card changed. The prior mark command will not be replayed.");
+      } else if (next.ownMarks.some((mark) => mark.ball === retainedMark.ball)) {
+        markCommandSessionRef.current = null;
+        unresolvedMarkRef.current = null;
+        setUnresolvedMark(null);
+        setMarkPendingBall(null);
+        setMarkMessage(`${cardBallLabel(next, retainedMark.ball)} marked.`);
+      }
+    }
+    const pendingMark = pendingMarkRef.current;
+    if (pendingMark !== null) {
+      if (next.ownCard?.id !== pendingMark.cardId) {
+        pendingMarkRef.current = null;
+        setMarkPendingBall(null);
+        setMarkMessage("The round changed before the prior card mark could be shown.");
+      } else if (snapshotConfirmsMark(next, pendingMark)) {
+        pendingMarkRef.current = null;
+        setMarkPendingBall(null);
+        setMarkMessage(`${cardBallLabel(next, pendingMark.ball)} marked.`);
+      }
+    }
+    return confirmedCommand;
   }
 
   async function refreshSnapshot(
@@ -235,16 +430,26 @@ export function PrivateLobbyPage({
       setSnapshotPending(true);
       setSnapshotMessage(message);
       try {
-        const next = await loadSnapshot(code);
+        const received = await loadSnapshot(code);
         if (loadGenerationRef.current !== generation) return null;
-        setSnapshot(next);
-        const pending = pendingCommandRef.current;
-        const pendingConfirmed = pending !== null && snapshotConfirmsCommand(next, pending);
+        const liveSnapshot = snapshotRef.current;
+        const stale =
+          liveSnapshot !== null &&
+          (received.lastEventSequence ?? 0) < (liveSnapshot.lastEventSequence ?? 0);
+        const next = stale ? liveSnapshot : mergeAppendOnlyMarks(liveSnapshot, received);
+        if (next === null) {
+          throw new Error("The private lobby snapshot is inconsistent.");
+        }
+        if (!stale) {
+          snapshotRef.current = next;
+          setSnapshot(next);
+        }
+        const confirmedCommand = reconcilePendingState(next);
         if (
           options.syncSetup === true ||
           snapshot === null ||
           !setupDirtyRef.current ||
-          (pendingConfirmed && pending.command.type === "configure")
+          confirmedCommand?.command.type === "configure"
         ) {
           setPatternId(next.round?.patternId ?? "");
           setCallMode(next.round?.callConfiguration.mode ?? "manual");
@@ -254,38 +459,6 @@ export function PrivateLobbyPage({
               : "30",
           );
           setSetupDraftDirty(false);
-        }
-        if (pendingConfirmed) {
-          pendingCommandRef.current = null;
-          setPendingCommand(null);
-        }
-        const retainedMark = markCommandSessionRef.current;
-        if (retainedMark !== null) {
-          if (next.ownCard?.id !== retainedMark.cardId) {
-            markCommandSessionRef.current = null;
-            unresolvedMarkRef.current = null;
-            setUnresolvedMark(null);
-            setMarkPendingBall(null);
-            setMarkMessage("Your card changed. The prior mark command will not be replayed.");
-          } else if (next.ownMarks.some((mark) => mark.ball === retainedMark.ball)) {
-            markCommandSessionRef.current = null;
-            unresolvedMarkRef.current = null;
-            setUnresolvedMark(null);
-            setMarkPendingBall(null);
-            setMarkMessage(`${cardBallLabel(next, retainedMark.ball)} marked.`);
-          }
-        }
-        const pendingMark = pendingMarkRef.current;
-        if (pendingMark !== null) {
-          if (next.ownCard?.id !== pendingMark.cardId) {
-            pendingMarkRef.current = null;
-            setMarkPendingBall(null);
-            setMarkMessage("The round changed before the prior card mark could be shown.");
-          } else if (snapshotConfirmsMark(next, pendingMark)) {
-            pendingMarkRef.current = null;
-            setMarkPendingBall(null);
-            setMarkMessage(`${cardBallLabel(next, pendingMark.ball)} marked.`);
-          }
         }
         setSnapshotErrorCode(undefined);
         setSnapshotErrorRetryable(true);
@@ -304,6 +477,7 @@ export function PrivateLobbyPage({
             flowError.code === "LOBBY_EXPIRED")
         ) {
           setSnapshot(null);
+          snapshotRef.current = null;
         }
         if (options.mandatory === true) throw error;
         return null;
@@ -342,6 +516,146 @@ export function PrivateLobbyPage({
       setNativeShare(() => shareInvite ?? null);
     }
   }, [origin, shareInvite]);
+
+  useEffect(() => {
+    if (!enableRealtime || snapshot === null || liveConnectionRef.current !== null) {
+      return;
+    }
+    const requestResync = (lastEventSequence: number | null) => {
+      if (resyncRequestedRef.current) return;
+      resyncRequestedRef.current = true;
+      setConnectionState("snapshot-syncing");
+      liveConnectionRef.current?.requestResync(lastEventSequence);
+    };
+    const handlers: PrivateLobbyRealtimeHandlers = {
+      onConnectionState(state) {
+        if (state === "offline" || state === "reconnecting") recoveringRef.current = true;
+        if (state === "expired") {
+          snapshotRef.current = null;
+          setSnapshot(null);
+          setSnapshotErrorCode("UNAUTHORIZED");
+          setSnapshotErrorRetryable(false);
+          setSnapshotMessage(
+            "Your private lobby session is not active on this device. Join or rejoin to continue.",
+          );
+        }
+        setConnectionState(state);
+      },
+      onLobbyEvent(event) {
+        const current = snapshotRef.current;
+        if (current === null) return;
+        const baseline = current.lastEventSequence ?? 0;
+        if (event.eventSequence <= baseline) return;
+        if (event.eventSequence !== baseline + 1) {
+          requestResync(current.lastEventSequence);
+          return;
+        }
+        const next = applyLobbyEvent(current, event);
+        if (next === null) {
+          requestResync(current.lastEventSequence);
+          return;
+        }
+        snapshotRef.current = next;
+        setSnapshot(next);
+        const requiresAutomaticTimer =
+          next.round?.stage === "active" && next.round.callConfiguration.mode === "automatic";
+        if (event.type === "call") {
+          setCallAnnouncement(`New call: ${ballLabel(event.call.ball)}`);
+        }
+        if (requiresAutomaticTimer && (event.type === "call" || event.type === "stage")) {
+          requestResync(event.eventSequence);
+        }
+      },
+      onPrivateEvent(event: ParticipantPrivateEvent) {
+        const current = snapshotRef.current;
+        if (current === null) return;
+        if (event.type === "near-win") {
+          setMarkMessage(`Near win: ${ballLabel(event.requiredBall)} is still needed.`);
+          return;
+        }
+        if (current.ownCard?.id !== event.mark.cardId) {
+          requestResync(current.lastEventSequence);
+          return;
+        }
+        if (
+          current.ownMarks.some(({ id, ball }) => id === event.mark.id || ball === event.mark.ball)
+        ) {
+          return;
+        }
+        const next = validateSnapshot({
+          ...current,
+          generatedAt: event.occurredAt,
+          ownMarks: [...current.ownMarks, event.mark],
+        });
+        if (next === null) {
+          requestResync(current.lastEventSequence);
+          return;
+        }
+        snapshotRef.current = next;
+        setSnapshot(next);
+        reconcilePendingState(next);
+      },
+      onSnapshot(next) {
+        const current = snapshotRef.current;
+        if (current !== null && (next.lastEventSequence ?? 0) < (current.lastEventSequence ?? 0)) {
+          requestResync(current.lastEventSequence);
+          return;
+        }
+        const accepted = mergeAppendOnlyMarks(current, next);
+        if (accepted === null) {
+          requestResync(current?.lastEventSequence ?? null);
+          return;
+        }
+        const recovering = recoveringRef.current;
+        const roundChanged = current?.round?.id !== accepted.round?.id;
+        snapshotRef.current = accepted;
+        resyncRequestedRef.current = false;
+        setSnapshot(accepted);
+        const confirmedCommand = reconcilePendingState(accepted);
+        if (confirmedCommand?.command.type === "configure") {
+          setPatternId(accepted.round?.patternId ?? "");
+          setCallMode(accepted.round?.callConfiguration.mode ?? "manual");
+          setInterval(
+            accepted.round?.callConfiguration.mode === "automatic"
+              ? String(accepted.round.callConfiguration.intervalSeconds)
+              : "30",
+          );
+          setSetupDraftDirty(false);
+        }
+        if (recovering || roundChanged) setCallAnnouncement("");
+        if (roundChanged) followCallHistoryRef.current = true;
+        setConnectionState(recovering ? "recovered" : "connected");
+        recoveringRef.current = false;
+      },
+    };
+    liveConnectionRef.current =
+      connectRealtime?.(handlers) ??
+      connectPrivateLobbyRealtime({
+        code,
+        handlers,
+        ...(realtimeServerUrl === undefined ? {} : { serverUrl: realtimeServerUrl }),
+      });
+  }, [code, connectRealtime, enableRealtime, realtimeServerUrl, snapshot]);
+
+  useEffect(
+    () => () => {
+      liveConnectionRef.current?.close();
+      liveConnectionRef.current = null;
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (snapshot?.timer?.kind !== "automatic-call") return;
+    setClockNow(Date.now());
+    const timer = window.setInterval(() => setClockNow(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, [snapshot?.timer]);
+
+  useEffect(() => {
+    const history = callHistoryRef.current;
+    if (history !== null && followCallHistoryRef.current) history.scrollTop = history.scrollHeight;
+  }, [snapshot?.calls.length, snapshot?.round?.id]);
 
   const inviteUrl = resolvedOrigin
     ? (() => {
@@ -578,6 +892,9 @@ export function PrivateLobbyPage({
     patterns.map(({ name }) => name).filter((name, index, names) => names.indexOf(name) !== index),
   );
   const selectedPattern = patterns.find((pattern) => pattern.id === snapshot.round?.patternId);
+  const selectedPatternDefinition = patternCatalog.find(
+    (pattern) => pattern.id === snapshot.round?.patternId,
+  );
   const patternName =
     selectedPattern === undefined
       ? undefined
@@ -586,6 +903,13 @@ export function PrivateLobbyPage({
     snapshot.round?.callConfiguration.mode === "automatic"
       ? `Automatic every ${snapshot.round.callConfiguration.intervalSeconds} seconds`
       : "Manual calling";
+  const latestCall = snapshot.calls.at(-1);
+  const automaticCountdown =
+    snapshot.round?.stage === "active" &&
+    snapshot.round.callConfiguration.mode === "automatic" &&
+    snapshot.timer?.kind === "automatic-call"
+      ? Math.max(0, Math.ceil((Date.parse(snapshot.timer.deadline) - clockNow) / 1000))
+      : null;
 
   const waitingMessage =
     snapshot.round === null
@@ -619,6 +943,39 @@ export function PrivateLobbyPage({
               ? "called"
               : "uncalled",
     })) ?? [];
+  const patternProgress =
+    selectedPatternDefinition === undefined || snapshot.ownCard === null
+      ? null
+      : calculatePatternProgress(selectedPatternDefinition, {
+          calledCells: snapshot.ownCard.cells.map(
+            (cell) => cell === "FREE" || calledBalls.has(cell),
+          ),
+          markedCells: snapshot.ownCard.cells.map(
+            (cell) => cell === "FREE" || markedBalls.has(cell),
+          ),
+        });
+  const previewMask = selectedPatternDefinition?.masks[0]?.replaceAll("/", "") ?? "";
+  const connectionLabel =
+    connectionState === "snapshot-syncing"
+      ? "Snapshot syncing"
+      : connectionState.charAt(0).toUpperCase() + connectionState.slice(1);
+  const pauseAnnouncement =
+    snapshot.round?.stage === "paused" ? pauseDescription(snapshot.round.pauseReason) : null;
+  const coWinnerAnnouncement =
+    snapshot.round?.stage === "co-winner-window" ? "Co-winner window open." : null;
+  const graceAnnouncement = snapshot.participants.some(
+    ({ presence }) => presence.status === "grace",
+  )
+    ? "A participant is in the reconnect grace period."
+    : null;
+  const gameStatusAnnouncement = [
+    enableRealtime ? connectionLabel : null,
+    pauseAnnouncement,
+    coWinnerAnnouncement,
+    graceAnnouncement,
+  ]
+    .filter((message) => message !== null)
+    .join(" ");
 
   return (
     <main aria-busy={snapshotPending} className="private-lobby-shell">
@@ -647,6 +1004,162 @@ export function PrivateLobbyPage({
       </p>
 
       <div className="private-lobby-grid">
+        <section
+          aria-labelledby="live-game-heading"
+          className="lobby-panel live-game-panel"
+          role="region"
+        >
+          <div className="live-game-heading">
+            <div>
+              <p className="eyebrow">On the board</p>
+              <h2 id="live-game-heading">Live game status</h2>
+            </div>
+            {enableRealtime ? (
+              <strong className="connection-state" data-state={connectionState}>
+                {connectionLabel}
+              </strong>
+            ) : null}
+          </div>
+          <div className="live-game-summary">
+            <div className="current-call">
+              <span>Current call</span>
+              <strong>{latestCall === undefined ? "Waiting" : ballLabel(latestCall.ball)}</strong>
+            </div>
+            <div className="call-mode-status">
+              <strong>{snapshot.round === null ? "Round not configured" : callDescription}</strong>
+              {automaticCountdown === null ? null : (
+                <span>
+                  {automaticCountdown === 0
+                    ? "Waiting for the server to commit the next call."
+                    : `Next call in ${automaticCountdown} ${automaticCountdown === 1 ? "second" : "seconds"}`}
+                </span>
+              )}
+            </div>
+          </div>
+          {snapshot.round?.stage === "paused" ? (
+            <div className="round-alert">
+              <strong>{pauseDescription(snapshot.round.pauseReason)}</strong>
+              <span>Reconnecting does not resume calling. The host must resume explicitly.</span>
+            </div>
+          ) : null}
+          {snapshot.round?.stage === "co-winner-window" ? (
+            <div className="round-alert">
+              <strong>Co-winner window open</strong>
+              <span>Calling is paused while completions from the latest call are confirmed.</span>
+            </div>
+          ) : null}
+          {snapshot.participants.some(({ presence }) => presence.status === "grace") ? (
+            <p className="grace-status">A participant is in the reconnect grace period.</p>
+          ) : null}
+          <p
+            aria-atomic="true"
+            aria-label="Game status announcement"
+            aria-live="polite"
+            className="call-announcement"
+            role="status"
+          >
+            {gameStatusAnnouncement}
+          </p>
+          <p
+            aria-atomic="true"
+            aria-label="New call announcement"
+            aria-live="polite"
+            className="call-announcement"
+            role="status"
+          >
+            {callAnnouncement}
+          </p>
+        </section>
+
+        <section aria-labelledby="card-heading" className="lobby-panel card-panel">
+          <p className="eyebrow">Your numbers</p>
+          <h2 id="card-heading">Your card</h2>
+          {snapshot.ownCard === null ? (
+            <p className="waiting-note">
+              Your card is unavailable while you wait for the next round.
+            </p>
+          ) : (
+            <BingoCard
+              cells={cardCells}
+              onMark={(ball) => void markCard(ball)}
+              pendingBall={markPendingBall}
+              statusMessage={markMessage}
+              {...(cardUnavailableReason === undefined
+                ? {}
+                : { unavailableReason: cardUnavailableReason })}
+            />
+          )}
+          {unresolvedMark !== null && snapshot.ownCard?.id === unresolvedMark.cardId ? (
+            <Button
+              onClick={() => void markCard(unresolvedMark.ball)}
+              type="button"
+              variant="outline"
+            >
+              Retry {cardBallLabel(snapshot, unresolvedMark.ball)} mark
+            </Button>
+          ) : null}
+        </section>
+
+        <section
+          aria-labelledby="round-details-heading"
+          className="lobby-panel live-game-detail-panel"
+        >
+          <p className="eyebrow">Calls and pattern</p>
+          <h2 id="round-details-heading">Round details</h2>
+          <div className="live-game-detail">
+            <div>
+              <h3>Call history</h3>
+              {snapshot.calls.length === 0 ? (
+                <p>No balls called yet.</p>
+              ) : (
+                <ol
+                  aria-label="Calls in chronological order, newest at end"
+                  className="call-history"
+                  onScroll={(event) => {
+                    const history = event.currentTarget;
+                    followCallHistoryRef.current =
+                      history.scrollHeight - history.scrollTop - history.clientHeight <= 24;
+                  }}
+                  ref={callHistoryRef}
+                  tabIndex={0}
+                >
+                  {snapshot.calls.map((call) => (
+                    <li key={call.id}>{ballLabel(call.ball)}</li>
+                  ))}
+                </ol>
+              )}
+            </div>
+            <div>
+              <h3>{patternName ?? "Winning pattern"}</h3>
+              {selectedPatternDefinition === undefined ? (
+                <p>Pattern preview unavailable.</p>
+              ) : (
+                <>
+                  <div
+                    aria-label={`${selectedPatternDefinition.name} pattern ${selectedPatternDefinition.mode === "exact" ? "preview" : "example"}. Filled spaces are required.`}
+                    className="pattern-miniature"
+                    role="img"
+                  >
+                    {Array.from(previewMask, (cell, index) => (
+                      <span aria-hidden="true" data-required={cell === "#"} key={index} />
+                    ))}
+                  </div>
+                  <span className="pattern-example-label">
+                    {selectedPatternDefinition.mode === "exact"
+                      ? "Required pattern"
+                      : "One possible pattern example"}
+                  </span>
+                  <p className="pattern-progress">
+                    {patternProgress === null
+                      ? "Progress is available when your card is active."
+                      : `${selectedPatternDefinition.mode === "exact" ? "Progress" : "Closest eligible variation"}: ${patternProgress.satisfiedCellCount} of ${patternProgress.requiredCellCount} required spaces marked.`}
+                  </p>
+                </>
+              )}
+            </div>
+          </div>
+        </section>
+
         <section aria-labelledby="invite-heading" className="lobby-panel share-panel">
           <p className="eyebrow">Bring everyone in</p>
           <h2 id="invite-heading">Share the lobby</h2>
@@ -816,35 +1329,6 @@ export function PrivateLobbyPage({
           ) : (
             <p className="waiting-note">{waitingMessage}</p>
           )}
-        </section>
-
-        <section aria-labelledby="card-heading" className="lobby-panel card-panel">
-          <p className="eyebrow">Your numbers</p>
-          <h2 id="card-heading">Your card</h2>
-          {snapshot.ownCard === null ? (
-            <p className="waiting-note">
-              Your card is unavailable while you wait for the next round.
-            </p>
-          ) : (
-            <BingoCard
-              cells={cardCells}
-              onMark={(ball) => void markCard(ball)}
-              pendingBall={markPendingBall}
-              statusMessage={markMessage}
-              {...(cardUnavailableReason === undefined
-                ? {}
-                : { unavailableReason: cardUnavailableReason })}
-            />
-          )}
-          {unresolvedMark !== null && snapshot.ownCard?.id === unresolvedMark.cardId ? (
-            <Button
-              onClick={() => void markCard(unresolvedMark.ball)}
-              type="button"
-              variant="outline"
-            >
-              Retry {cardBallLabel(snapshot, unresolvedMark.ball)} mark
-            </Button>
-          ) : null}
         </section>
 
         <section aria-labelledby="participants-heading" className="lobby-panel roster-panel">
