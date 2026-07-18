@@ -7,6 +7,7 @@ import {
   ParticipantIdSchema,
   PatternIdSchema,
   PresenceGenerationSchema,
+  RealtimeTicketSchema,
   SchemaVersionSchema,
 } from "./primitives.js";
 import { CallConfigurationSchema } from "./game-state.js";
@@ -15,6 +16,11 @@ const mutationShape = {
   schemaVersion: SchemaVersionSchema,
   commandId: CommandIdSchema,
 };
+
+export const RealtimeHandshakeAuthSchema = z.strictObject({
+  schemaVersion: SchemaVersionSchema,
+  ticket: RealtimeTicketSchema,
+});
 
 export const ConfigureCommandSchema = z.strictObject({
   ...mutationShape,
@@ -96,3 +102,4 @@ export type MutationCommand = z.infer<typeof MutationCommandSchema>;
 export type HeartbeatCommand = z.infer<typeof HeartbeatCommandSchema>;
 export type ResyncCommand = z.infer<typeof ResyncCommandSchema>;
 export type RealtimeCommand = z.infer<typeof RealtimeCommandSchema>;
+export type RealtimeHandshakeAuth = z.infer<typeof RealtimeHandshakeAuthSchema>;

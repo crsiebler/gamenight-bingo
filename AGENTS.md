@@ -204,9 +204,47 @@ invalid counts, timestamps, or durations.
   abandoned tickets during issuance, and invalidate outstanding tickets whenever
   their participant session leaves active status so rejoin cannot revive them.
 - Version realtime command and event contracts in `packages/contracts`.
+- Accept Socket.IO authentication only as strict `{ schemaVersion, ticket }`
+  handshake auth from the exact configured browser origin. Consume the ticket
+  before connection, discard it, and put only persistence-returned lobby,
+  participant, and session identity in `socket.data`; never trust client identity
+  claims or accept tickets from URLs.
+- Bound Engine.IO admission and Socket.IO namespace authentication separately by
+  the direct peer address, close the underlying transport after rejected
+  authentication, and mark the transport terminal as soon as rejection is known
+  before awaiting any required bounded ticket burn. Bound active limiter buckets
+  without scanning every active bucket on overflow, rate-limit every
+  authenticated command/resync attempt before database work, cap authenticated
+  sockets globally and per participant session, track transport closure across
+  asynchronous ticket consumption so closed transports never reserve socket
+  capacity, recheck transport-wide rejection state after ticket consumption so
+  an older in-flight namespace attempt cannot authenticate a terminal transport,
+  and permit only one in-flight command per socket.
 - Acknowledge commands with their committed result/sequence or a stable error.
 - Keep broadcasts derived from committed events. Do not emit optimistic domain
-  state before persistence succeeds.
+  state before persistence succeeds. Emit the active-event PostgreSQL
+  notification inside the committing transaction so HTTP fallback mutations can
+  reach the separate game-server process only after commit; the game server
+  reloads and validates the committed event before publishing it. Treat listener,
+  malformed dedicated-channel notification, reload, or publication failure as
+  fatal so a supervisor restarts an authority that can no longer prove
+  continuity; stop Socket.IO from accepting work before awaiting subscription or
+  database drain. Serialize asynchronous room authorization and delivery per
+  lobby so committed sequences cannot arrive out of order; accept only bounded,
+  canonical exact-sequence echoes as idempotent and reject same-sequence conflicts
+  or unknown stale deliveries.
+- Realtime command adapters revalidate the consumed-ticket identity inside the
+  lobby-fenced transaction. Fresh lobby commits broadcast their validated event
+  before the caller acknowledgement, replays acknowledge without rebroadcasting,
+  and participant-private results use participant rooms without lobby sequences.
+  Validate every successful acknowledgement's command ID against the incoming
+  mutation before emitting any result. Eventless idempotent replay tombstones may
+  return their original acknowledgement for either delivery scope.
+- Disconnect immediately when transactional revalidation rejects an identity,
+  and revalidate room members before later lobby/private delivery so deactivated
+  sessions cannot remain subscribed. Authorize one persisted identity once per
+  delivery rather than once per sibling socket. A replayed private result may
+  return only to its requesting socket, never rebroadcast to sibling tabs.
 - Aggregate multiple connections for one session as one participant and persist
   presence generations before broadcasting presence changes.
 

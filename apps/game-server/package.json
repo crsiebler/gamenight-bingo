@@ -4,9 +4,16 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@gamenight-bingo/contracts": "workspace:*"
+    "@gamenight-bingo/contracts": "workspace:*",
+    "@gamenight-bingo/database": "workspace:*",
+    "@gamenight-bingo/patterns": "workspace:*",
+    "socket.io": "4.8.3"
+  },
+  "devDependencies": {
+    "socket.io-client": "4.8.3"
   },
   "scripts": {
+    "dev": "bun --watch src/index.ts",
     "typecheck": "tsc --project tsconfig.json --pretty false"
   }
 }

@@ -6,6 +6,7 @@ import {
   type Snapshot,
 } from "@gamenight-bingo/contracts";
 import { normalizeUsername, type UsernameNormalizationResult } from "@gamenight-bingo/domain";
+import { Client, type Notification } from "pg";
 
 import {
   Prisma,
@@ -26,6 +27,11 @@ import {
   type RoundCommandExecutor,
   type RoundCommandRuntimeOptions,
 } from "./round-command-executor.js";
+import {
+  ACTIVE_LOBBY_EVENT_CHANNEL,
+  encodeActiveLobbyEventReference,
+  parseActiveLobbyEventReference,
+} from "./active-lobby-events.js";
 import { expireDueParticipantSessions } from "./participant-session-expiry.js";
 import { runTransactionWithRetry, type TransactionRetryOptions } from "./transaction-retry.js";
 
@@ -152,6 +158,23 @@ export interface DurableActiveLobbyEvent {
   readonly schemaVersion: number;
   readonly payload: JsonObject;
   readonly createdAt: Date;
+}
+
+export interface ActiveLobbyEventNotification {
+  readonly lobbyId: string;
+  readonly sequence: bigint;
+  loadEvent(): Promise<DurableActiveLobbyEvent>;
+}
+
+export interface ActiveLobbyEventSubscription {
+  readonly completion: Promise<void>;
+  close(): Promise<void>;
+}
+
+export interface ActiveLobbyEventSubscriber {
+  subscribe(
+    listener: (notification: ActiveLobbyEventNotification) => void | Promise<void>,
+  ): Promise<ActiveLobbyEventSubscription>;
 }
 
 export interface DurableCommandResult<Result extends JsonObject = JsonObject> {
@@ -376,6 +399,16 @@ export interface LobbyStateRepository {
     readonly lobbyId: string;
     readonly tokenHash: Uint8Array;
   }): Promise<Snapshot | null>;
+  findAuthorizedSnapshotByIdentity(input: {
+    readonly lobbyId: string;
+    readonly participantId: string;
+    readonly participantSessionId: string;
+  }): Promise<Snapshot | null>;
+  isParticipantSessionIdentityActive(input: {
+    readonly lobbyId: string;
+    readonly participantId: string;
+    readonly participantSessionId: string;
+  }): Promise<boolean>;
   resolveParticipantSessionByTokenHash(input: {
     readonly lobbyId: string;
     readonly tokenHash: Uint8Array;
@@ -455,6 +488,7 @@ export interface DatabaseConnection {
   readonly lobbyStates: LobbyStateRepository;
   readonly commandTransactions: CommandTransactionRepository;
   readonly roundCommands: RoundCommandExecutor;
+  readonly activeLobbyEvents: ActiveLobbyEventSubscriber;
   disconnect(): Promise<void>;
 }
 
@@ -2137,6 +2171,45 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
       throw new RangeError("Participant session token hashes must contain exactly 32 bytes.");
     }
 
+    return this.findAuthorizedSnapshotForActor(input);
+  }
+
+  async findAuthorizedSnapshotByIdentity(input: {
+    readonly lobbyId: string;
+    readonly participantId: string;
+    readonly participantSessionId: string;
+  }): Promise<Snapshot | null> {
+    return this.findAuthorizedSnapshotForActor(input);
+  }
+
+  async isParticipantSessionIdentityActive(input: {
+    readonly lobbyId: string;
+    readonly participantId: string;
+    readonly participantSessionId: string;
+  }): Promise<boolean> {
+    const session = await this.prisma.participantSession.findFirst({
+      where: {
+        id: input.participantSessionId,
+        lobbyId: input.lobbyId,
+        participantId: input.participantId,
+        status: "ACTIVE",
+        lobby: { status: { in: ["WAITING", "ACTIVE"] } },
+        participant: { departedAt: null },
+      },
+      select: { id: true },
+    });
+    return session !== null;
+  }
+
+  private findAuthorizedSnapshotForActor(
+    input:
+      | { readonly lobbyId: string; readonly tokenHash: Uint8Array }
+      | {
+          readonly lobbyId: string;
+          readonly participantId: string;
+          readonly participantSessionId: string;
+        },
+  ): Promise<Snapshot | null> {
     return runTransactionWithRetry(
       async () =>
         this.prisma.$transaction(
@@ -2157,7 +2230,12 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
             const session = await transaction.participantSession.findFirst({
               where: {
                 lobbyId: input.lobbyId,
-                tokenHash: new Uint8Array(input.tokenHash),
+                ...("tokenHash" in input
+                  ? { tokenHash: new Uint8Array(input.tokenHash) }
+                  : {
+                      id: input.participantSessionId,
+                      participantId: input.participantId,
+                    }),
                 status: "ACTIVE",
                 participant: { departedAt: null },
               },
@@ -2886,6 +2964,12 @@ class PrismaCommandTransactionRepository implements CommandTransactionRepository
                   createdAt: pending.event.createdAt,
                 },
               });
+              await transaction.$executeRaw`
+                SELECT pg_notify(
+                  ${ACTIVE_LOBBY_EVENT_CHANNEL},
+                  ${encodeActiveLobbyEventReference(request.lobbyId, sequence)}
+                )
+              `;
             }
 
             const storedCommand = await transaction.commandResult.create({
@@ -2919,6 +3003,148 @@ class PrismaCommandTransactionRepository implements CommandTransactionRepository
   }
 }
 
+class PostgresActiveLobbyEventSubscriber implements ActiveLobbyEventSubscriber {
+  private readonly closeSubscriptions = new Set<() => Promise<void>>();
+
+  constructor(
+    private readonly connectionString: string,
+    private readonly prisma: GeneratedPrismaClient,
+  ) {}
+
+  async subscribe(
+    listener: (notification: ActiveLobbyEventNotification) => void | Promise<void>,
+  ): Promise<ActiveLobbyEventSubscription> {
+    const client = new Client({ connectionString: this.connectionString });
+    let closed = false;
+    let closing = false;
+    const deliveries = new Map<string, Promise<void>>();
+    let completionSettled = false;
+    let resolveCompletion!: () => void;
+    let rejectCompletion!: (reason: unknown) => void;
+    const completion = new Promise<void>((resolve, reject) => {
+      resolveCompletion = resolve;
+      rejectCompletion = reject;
+    });
+    const fail = () => {
+      if (closed) return;
+      closed = true;
+      client.off("notification", onNotification);
+      if (!completionSettled) {
+        completionSettled = true;
+        rejectCompletion(new Error("Active-lobby event subscription failed."));
+      }
+    };
+    const onNotification = (notification: Notification) => {
+      if (closed || notification.channel !== ACTIVE_LOBBY_EVENT_CHANNEL) {
+        return;
+      }
+      if (notification.payload === undefined) {
+        fail();
+        return;
+      }
+      const reference = parseActiveLobbyEventReference(notification.payload);
+      if (reference === null) {
+        fail();
+        return;
+      }
+      const previous = deliveries.get(reference.lobbyId) ?? Promise.resolve();
+      const delivery = previous
+        .then(async () => {
+          if (closed) return;
+          await listener({
+            lobbyId: reference.lobbyId,
+            sequence: reference.sequence,
+            loadEvent: async () => {
+              const event = await this.prisma.activeLobbyEvent.findUnique({
+                where: {
+                  lobbyId_sequence: {
+                    lobbyId: reference.lobbyId,
+                    sequence: reference.sequence,
+                  },
+                },
+              });
+              if (event === null) {
+                throw new Error("Notified active-lobby event is unavailable.");
+              }
+              return {
+                sequence: event.sequence,
+                roundId: event.roundId,
+                eventType: event.eventType,
+                schemaVersion: event.schemaVersion,
+                payload: toJsonObject(event.payload),
+                createdAt: event.createdAt,
+              };
+            },
+          });
+        })
+        .catch(fail)
+        .finally(() => {
+          if (deliveries.get(reference.lobbyId) === delivery) {
+            deliveries.delete(reference.lobbyId);
+          }
+        });
+      deliveries.set(reference.lobbyId, delivery);
+    };
+    const onError = () => {
+      fail();
+    };
+    const onEnd = () => {
+      if (!closing) fail();
+    };
+    client.on("notification", onNotification);
+    client.on("error", onError);
+    client.on("end", onEnd);
+    try {
+      await client.connect();
+      await client.query(`LISTEN ${ACTIVE_LOBBY_EVENT_CHANNEL}`);
+    } catch (error) {
+      client.off("notification", onNotification);
+      client.off("error", onError);
+      client.off("end", onEnd);
+      await client.end().catch(() => {});
+      if (completionSettled) await completion.catch(() => {});
+      throw error;
+    }
+    let closePromise: Promise<void> | null = null;
+    const closeSubscription = () => {
+      closePromise ??= (async () => {
+        closing = true;
+        closed = true;
+        client.off("notification", onNotification);
+        client.off("error", onError);
+        client.off("end", onEnd);
+        await Promise.all([...deliveries.values()].map((delivery) => delivery.catch(() => {})));
+        this.closeSubscriptions.delete(closeSubscription);
+        try {
+          await client.end();
+          if (!completionSettled) {
+            completionSettled = true;
+            resolveCompletion();
+          }
+        } catch (error) {
+          if (!completionSettled) {
+            completionSettled = true;
+            rejectCompletion(new Error("Active-lobby event subscription failed."));
+          }
+          throw error;
+        }
+      })();
+      return closePromise;
+    };
+    this.closeSubscriptions.add(closeSubscription);
+
+    return {
+      completion,
+      close: closeSubscription,
+    };
+  }
+
+  async close(): Promise<void> {
+    const subscriptions = [...this.closeSubscriptions];
+    await Promise.all(subscriptions.map((close) => close()));
+  }
+}
+
 export async function connectDatabase(
   connectionString: string,
   options: DatabaseConnectionOptions = {},
@@ -2926,6 +3152,7 @@ export async function connectDatabase(
   const adapter = new PrismaPg({ connectionString });
   const prisma = new PrismaClient({ adapter });
   await prisma.$connect();
+  const activeLobbyEvents = new PostgresActiveLobbyEventSubscriber(connectionString, prisma);
 
   return {
     lobbyStates: new PrismaLobbyStateRepository(
@@ -2942,7 +3169,9 @@ export async function connectDatabase(
       options.transactionRetry ?? {},
       options.roundCommands,
     ),
+    activeLobbyEvents,
     async disconnect() {
+      await activeLobbyEvents.close();
       await prisma.$disconnect();
     },
   };

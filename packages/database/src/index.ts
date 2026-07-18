@@ -1,6 +1,9 @@
 export {
   CommandReplayMismatchError,
   connectDatabase,
+  type ActiveLobbyEventNotification,
+  type ActiveLobbyEventSubscriber,
+  type ActiveLobbyEventSubscription,
   type CallMode,
   type CreateLobbyWithHostInput,
   type CommandTransactionRepositories,

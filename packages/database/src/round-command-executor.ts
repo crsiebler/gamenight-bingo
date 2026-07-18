@@ -1,7 +1,11 @@
 import {
+  ActiveLobbyEventSchema,
   CONTRACT_SCHEMA_VERSION,
+  ParticipantPrivateEventSchema,
   RoundStateSchema,
+  type ActiveLobbyEvent,
   type MutationCommand,
+  type ParticipantPrivateEvent,
 } from "@gamenight-bingo/contracts";
 import {
   FREE_BINGO_CELL,
@@ -21,6 +25,10 @@ import {
   type PrismaClient as GeneratedPrismaClient,
   type RoundStage as DatabaseRoundStage,
 } from "../generated/prisma/client.js";
+import {
+  ACTIVE_LOBBY_EVENT_CHANNEL,
+  encodeActiveLobbyEventReference,
+} from "./active-lobby-events.js";
 import { expireDueParticipantSessions } from "./participant-session-expiry.js";
 import { runTransactionWithRetry, type TransactionRetryOptions } from "./transaction-retry.js";
 
@@ -45,7 +53,12 @@ export interface RoundCommandAcknowledgement {
 }
 
 export type RoundCommandExecutionResult =
-  | { readonly ok: true; readonly acknowledgement: RoundCommandAcknowledgement }
+  | {
+      readonly ok: true;
+      readonly acknowledgement: RoundCommandAcknowledgement;
+      readonly activeLobbyEvent: ActiveLobbyEvent | null;
+      readonly participantPrivateEvent: ParticipantPrivateEvent | null;
+    }
   | {
       readonly ok: false;
       readonly error: {
@@ -59,16 +72,28 @@ export interface RoundCommandExecutor {
     readonly sessionTokenHash: Uint8Array;
     readonly command: MutationCommand;
   }): Promise<RoundCommandExecutionResult>;
+  executeAuthenticated(input: {
+    readonly lobbyId: string;
+    readonly participantId: string;
+    readonly participantSessionId: string;
+    readonly command: MutationCommand;
+  }): Promise<RoundCommandExecutionResult>;
 }
 
-interface PendingCommand {
-  readonly roundId: string;
-  readonly scope: "active-lobby" | "participant-private";
-  readonly event: {
-    readonly type: "stage" | "call" | "round-end";
-    readonly payload: Prisma.InputJsonObject;
-  } | null;
-}
+type PendingCommand =
+  | {
+      readonly roundId: string;
+      readonly scope: "active-lobby";
+      readonly event: {
+        readonly type: "stage" | "call" | "round-end";
+        readonly payload: Prisma.InputJsonObject;
+      };
+    }
+  | {
+      readonly roundId: string;
+      readonly scope: "participant-private";
+      readonly event: ParticipantPrivateEvent;
+    };
 
 interface CurrentRound {
   readonly id: string;
@@ -381,10 +406,12 @@ async function executeMutation(
         where: { roundId: current.id },
         data: { roundId: null },
       });
-      await transaction.commandResult.updateMany({
-        where: { roundId: current.id },
-        data: { roundId: null },
-      });
+      await transaction.$executeRaw`
+        UPDATE "command_results"
+           SET "round_id" = NULL,
+               "result" = "result" - 'participantPrivateEvent'
+         WHERE "round_id" = ${current.id}
+      `;
       await transaction.round.delete({ where: { id: current.id } });
     }
     await transaction.participant.updateMany({
@@ -642,10 +669,11 @@ async function executeMutation(
     if (called === null) return null;
     const priorMark = await transaction.mark.findUnique({
       where: { cardId_ball: { cardId: card.id, ball: command.ball } },
-      select: { id: true },
+      select: { id: true, markedAt: true },
     });
-    if (priorMark === null) {
-      await transaction.mark.create({
+    const mark =
+      priorMark ??
+      (await transaction.mark.create({
         data: {
           id: options.nextId("mark"),
           roundId: current.id,
@@ -653,9 +681,24 @@ async function executeMutation(
           ball: command.ball,
           markedAt: now,
         },
-      });
-    }
-    return { roundId: current.id, scope: "participant-private", event: null };
+        select: { id: true, markedAt: true },
+      }));
+    return {
+      roundId: current.id,
+      scope: "participant-private",
+      event: ParticipantPrivateEventSchema.parse({
+        schemaVersion: CONTRACT_SCHEMA_VERSION,
+        type: "mark-result",
+        commandId: command.commandId,
+        occurredAt: now.toISOString(),
+        mark: {
+          id: mark.id,
+          cardId: card.id,
+          ball: command.ball,
+          markedAt: mark.markedAt.toISOString(),
+        },
+      }),
+    };
   }
 
   return null;
@@ -676,6 +719,32 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
     if (input.sessionTokenHash.length !== 32) {
       throw new RangeError("Participant session token hashes must contain exactly 32 bytes.");
     }
+    return this.executeForActor(input);
+  }
+
+  executeAuthenticated(input: {
+    readonly lobbyId: string;
+    readonly participantId: string;
+    readonly participantSessionId: string;
+    readonly command: MutationCommand;
+  }): Promise<RoundCommandExecutionResult> {
+    return this.executeForActor(input);
+  }
+
+  private executeForActor(
+    input:
+      | {
+          readonly lobbyId: string;
+          readonly sessionTokenHash: Uint8Array;
+          readonly command: MutationCommand;
+        }
+      | {
+          readonly lobbyId: string;
+          readonly participantId: string;
+          readonly participantSessionId: string;
+          readonly command: MutationCommand;
+        },
+  ): Promise<RoundCommandExecutionResult> {
     if (this.options === undefined) {
       throw new Error("Round command runtime dependencies were not configured.");
     }
@@ -697,7 +766,12 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
             const session = await transaction.participantSession.findFirst({
               where: {
                 lobbyId: input.lobbyId,
-                tokenHash: new Uint8Array(input.sessionTokenHash),
+                ...("sessionTokenHash" in input
+                  ? { tokenHash: new Uint8Array(input.sessionTokenHash) }
+                  : {
+                      id: input.participantSessionId,
+                      participantId: input.participantId,
+                    }),
                 status: "ACTIVE",
                 participant: { departedAt: null },
               },
@@ -731,6 +805,10 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
                 existing.deliveryScope === "ACTIVE_LOBBY"
                   ? ("active-lobby" as const)
                   : ("participant-private" as const);
+              const participantPrivateEvent =
+                scope === "participant-private" && result["participantPrivateEvent"] !== undefined
+                  ? ParticipantPrivateEventSchema.parse(result["participantPrivateEvent"])
+                  : null;
               return {
                 ok: true,
                 acknowledgement: {
@@ -740,6 +818,8 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
                   occurredAt: existing.createdAt,
                   idempotentReplay: true,
                 },
+                activeLobbyEvent: null,
+                participantPrivateEvent,
               } as const;
             }
             if (
@@ -756,9 +836,9 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
             if (pending === null) return invalidCommand();
 
             let eventSequence: bigint | null = null;
+            let activeLobbyEvent: ActiveLobbyEvent | null = null;
+            let participantPrivateEvent: ParticipantPrivateEvent | null = null;
             if (pending.scope === "active-lobby") {
-              if (pending.event === null)
-                throw new Error("Lobby-visible commands require an event.");
               const rows = await transaction.$queryRaw<readonly { sequence: bigint }[]>`
                 UPDATE "lobbies"
                    SET "last_event_sequence" = "last_event_sequence" + 1,
@@ -768,6 +848,13 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
               `;
               eventSequence = rows[0]?.sequence ?? null;
               if (eventSequence === null) throw new Error("Unable to allocate an event sequence.");
+              activeLobbyEvent = ActiveLobbyEventSchema.parse({
+                schemaVersion: CONTRACT_SCHEMA_VERSION,
+                type: pending.event.type,
+                eventSequence: toSafeSequence(eventSequence),
+                occurredAt: now.toISOString(),
+                ...pending.event.payload,
+              });
               await transaction.activeLobbyEvent.create({
                 data: {
                   lobbyId: input.lobbyId,
@@ -779,7 +866,14 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
                   createdAt: now,
                 },
               });
+              await transaction.$executeRaw`
+                SELECT pg_notify(
+                  ${ACTIVE_LOBBY_EVENT_CHANNEL},
+                  ${encodeActiveLobbyEventReference(input.lobbyId, eventSequence)}
+                )
+              `;
             } else {
+              participantPrivateEvent = pending.event;
               await transaction.$executeRaw`
                 UPDATE "lobbies"
                    SET "last_activity_at" = GREATEST("last_activity_at", ${now})
@@ -796,7 +890,16 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
                 deliveryScope:
                   pending.scope === "active-lobby" ? "ACTIVE_LOBBY" : "PARTICIPANT_PRIVATE",
                 eventSequence,
-                result: { intent: commandIntent(input.command) },
+                result: {
+                  intent: commandIntent(input.command),
+                  ...(participantPrivateEvent === null
+                    ? {}
+                    : {
+                        participantPrivateEvent: JSON.parse(
+                          JSON.stringify(participantPrivateEvent),
+                        ) as Prisma.InputJsonObject,
+                      }),
+                },
                 createdAt: now,
               },
             });
@@ -809,6 +912,8 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
                 occurredAt: now,
                 idempotentReplay: false,
               },
+              activeLobbyEvent,
+              participantPrivateEvent,
             } as const;
           },
           {

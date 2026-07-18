@@ -22,6 +22,7 @@ import {
   ParticipantSummarySchema,
   PresenceSchema,
   RealtimeCommandSchema,
+  RealtimeHandshakeAuthSchema,
   RoundIdSchema,
   RoundStateSchema,
   SnapshotSchema,
@@ -168,6 +169,21 @@ const snapshot = {
 } as const;
 
 describe("v1 contract primitives", () => {
+  it("accepts only a versioned ticket in realtime handshake authentication", () => {
+    const ticket = Buffer.alloc(32, 4).toString("base64url");
+    expect(
+      RealtimeHandshakeAuthSchema.parse({ schemaVersion: CONTRACT_SCHEMA_VERSION, ticket }),
+    ).toEqual({ schemaVersion: CONTRACT_SCHEMA_VERSION, ticket });
+    expect(
+      RealtimeHandshakeAuthSchema.safeParse({
+        schemaVersion: CONTRACT_SCHEMA_VERSION,
+        ticket,
+        participantId: "participant_attacker",
+      }).success,
+    ).toBe(false);
+    expect(RealtimeHandshakeAuthSchema.safeParse({ schemaVersion: 2, ticket }).success).toBe(false);
+  });
+
   it("brands identifier outputs independently", () => {
     const lobbyId = LobbyIdSchema.parse("lobby_alpha");
     const roundId = RoundIdSchema.parse("round_one");

@@ -4,6 +4,7 @@ import { Pool } from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 
 import {
+  ActiveLobbyEventSchema,
   CallNextCommandSchema,
   ConfigureCommandSchema,
   ContinueRoundCommandSchema,
@@ -11,6 +12,7 @@ import {
   EndRoundCommandSchema,
   MarkCardCommandSchema,
   PauseRoundCommandSchema,
+  ParticipantPrivateEventSchema,
   ResumeRoundCommandSchema,
   SnapshotSchema,
   StartRoundCommandSchema,
@@ -19,6 +21,7 @@ import {
 import {
   CommandReplayMismatchError,
   connectDatabase,
+  type ActiveLobbyEventNotification,
   type CommandTransactionRepositories,
   type CommandTransactionRequest,
   type ConsumedRealtimeTicket,
@@ -31,6 +34,10 @@ import {
   type ReserveParticipantResult,
   type TransactionRetryEvent,
 } from "./index.js";
+import {
+  ACTIVE_LOBBY_EVENT_CHANNEL,
+  encodeActiveLobbyEventReference,
+} from "./active-lobby-events.js";
 
 const testDatabaseUrl = process.env["TEST_DATABASE_URL"];
 const describeDatabase = testDatabaseUrl === undefined ? describe.skip : describe;
@@ -39,6 +46,35 @@ const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 function randomLobbyCode(): string {
   return Array.from(randomBytes(6), (byte) => ALPHABET[byte % ALPHABET.length]).join("");
+}
+
+function deferredSignal() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return {
+    promise,
+    resolve,
+    wait(label: string): Promise<void> {
+      return new Promise((waitResolve, reject) => {
+        const timeout = setTimeout(
+          () => reject(new Error(`Timed out waiting for ${label}.`)),
+          2_000,
+        );
+        promise.then(
+          () => {
+            clearTimeout(timeout);
+            waitResolve();
+          },
+          (error: unknown) => {
+            clearTimeout(timeout);
+            reject(error);
+          },
+        );
+      });
+    },
+  };
 }
 
 function createCardCells(offset: number): readonly number[] {
@@ -1322,13 +1358,84 @@ describeDatabase("PostgreSQL durable game state", () => {
     expect(JSON.stringify(result)).not.toContain("commandResults");
     expect(JSON.stringify(result)).not.toContain(state.round!.cards[1]!.id);
 
+    const realtimeResult = await connection.lobbyStates.findAuthorizedSnapshotByIdentity({
+      lobbyId: state.lobby.id,
+      participantId: participant.id,
+      participantSessionId: session.id,
+    });
+    expect(realtimeResult).toEqual(result);
+    await expect(
+      connection.lobbyStates.isParticipantSessionIdentityActive({
+        lobbyId: state.lobby.id,
+        participantId: participant.id,
+        participantSessionId: session.id,
+      }),
+    ).resolves.toBe(true);
+
     await expect(
       connection.lobbyStates.findAuthorizedSnapshot({
         lobbyId: state.lobby.id,
         tokenHash: new Uint8Array(randomBytes(32)),
       }),
     ).resolves.toBeNull();
+    await expect(
+      connection.lobbyStates.findAuthorizedSnapshotByIdentity({
+        lobbyId: state.lobby.id,
+        participantId: state.participants[1]!.id,
+        participantSessionId: session.id,
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      connection.lobbyStates.isParticipantSessionIdentityActive({
+        lobbyId: state.lobby.id,
+        participantId: state.participants[1]!.id,
+        participantSessionId: session.id,
+      }),
+    ).resolves.toBe(false);
   });
+
+  test.each(["inactive session", "departed participant", "completed lobby"] as const)(
+    "rejects realtime identity authorization for an %s",
+    async (lifecycleState) => {
+      const now = new Date("2026-07-17T12:00:00.000Z");
+      const connection = await connectWithLifecycleClock(() => now);
+      const state = createLobbyState();
+      const session = state.sessions[0]!;
+      const participant = state.participants[0]!;
+      await createPersistedLobby(connection, state);
+
+      if (lifecycleState === "inactive session") {
+        await pool.query(
+          `UPDATE participant_sessions
+              SET status = 'DISCONNECTED', disconnected_at = $1, rejoin_until = $2
+            WHERE id = $3`,
+          [now, new Date(now.getTime() + 120_000), session.id],
+        );
+      } else if (lifecycleState === "departed participant") {
+        await pool.query(`UPDATE participants SET departed_at = $1 WHERE id = $2`, [
+          now,
+          participant.id,
+        ]);
+      } else {
+        await pool.query(`UPDATE lobbies SET status = 'COMPLETED', ended_at = $1 WHERE id = $2`, [
+          now,
+          state.lobby.id,
+        ]);
+      }
+
+      const identity = {
+        lobbyId: state.lobby.id,
+        participantId: participant.id,
+        participantSessionId: session.id,
+      };
+      await expect(
+        connection.lobbyStates.isParticipantSessionIdentityActive(identity),
+      ).resolves.toBe(false);
+      await expect(
+        connection.lobbyStates.findAuthorizedSnapshotByIdentity(identity),
+      ).resolves.toBeNull();
+    },
+  );
 
   test("returns a co-winner-window snapshot before the result settles", async () => {
     const connection = await connect();
@@ -2922,16 +3029,17 @@ describeDatabase("PostgreSQL durable game state", () => {
     await createPersistedLobby(connection, state);
 
     const execute = () =>
-      connection.roundCommands.execute({
+      connection.roundCommands.executeAuthenticated({
         lobbyId: state.lobby.id,
-        sessionTokenHash: state.sessions[0]!.tokenHash,
+        participantId: state.participants[0]!.id,
+        participantSessionId: state.sessions[0]!.id,
         command,
       });
     const committed = await execute();
     const replayed = await execute();
     const restored = await connection.lobbyStates.findById(state.lobby.id);
 
-    expect(committed).toEqual({
+    expect(committed).toMatchObject({
       ok: true,
       acknowledgement: {
         commandId: command.commandId,
@@ -2940,6 +3048,14 @@ describeDatabase("PostgreSQL durable game state", () => {
         occurredAt,
         idempotentReplay: false,
       },
+      participantPrivateEvent: null,
+    });
+    if (!committed.ok) throw new Error("Expected the realtime command to commit.");
+    expect(ActiveLobbyEventSchema.safeParse(committed.activeLobbyEvent).success).toBe(true);
+    expect(committed.activeLobbyEvent).toMatchObject({
+      type: "round-end",
+      eventSequence: 2,
+      occurredAt: occurredAt.toISOString(),
     });
     expect(replayed).toEqual({
       ok: true,
@@ -2950,6 +3066,8 @@ describeDatabase("PostgreSQL durable game state", () => {
         occurredAt,
         idempotentReplay: true,
       },
+      activeLobbyEvent: null,
+      participantPrivateEvent: null,
     });
     expect(restored?.round?.stage).toBe("ended");
     expect(restored?.lobby.status).toBe("waiting");
@@ -2957,6 +3075,211 @@ describeDatabase("PostgreSQL durable game state", () => {
     expect(JSON.stringify(restored?.events.at(-1)?.payload)).not.toMatch(
       /drawOrder|drawPositions|cards|cells/,
     );
+  });
+
+  test("notifies realtime subscribers after an HTTP fallback command commits", async () => {
+    const occurredAt = new Date("2026-07-17T09:06:30.000Z");
+    const publisher = await connectWithRoundCommands(() => occurredAt);
+    const subscriber = await connectWithRoundCommands(() => occurredAt);
+    const state = createLobbyState();
+    const command = EndRoundCommandSchema.parse({
+      schemaVersion: 1,
+      type: "end-round",
+      commandId: `http-fallback-end-${randomUUID()}`,
+    });
+    await createPersistedLobby(publisher, state);
+    let resolveNotification!: (notification: ActiveLobbyEventNotification) => void;
+    const notification = new Promise<ActiveLobbyEventNotification>((resolve) => {
+      resolveNotification = resolve;
+    });
+    const subscription = await subscriber.activeLobbyEvents.subscribe(resolveNotification);
+
+    try {
+      await expect(
+        publisher.roundCommands.execute({
+          lobbyId: state.lobby.id,
+          sessionTokenHash: state.sessions[0]!.tokenHash,
+          command,
+        }),
+      ).resolves.toMatchObject({ ok: true });
+      const observed = await Promise.race([
+        notification,
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error("Timed out waiting for the committed event.")), 2_000);
+        }),
+      ]);
+
+      expect({ ...observed, event: await observed.loadEvent() }).toMatchObject({
+        lobbyId: state.lobby.id,
+        sequence: 2n,
+        event: {
+          sequence: 2n,
+          eventType: "round-end",
+          schemaVersion: 1,
+          createdAt: occurredAt,
+        },
+      });
+    } finally {
+      await subscription.close();
+    }
+  });
+
+  test("reports active-lobby event listener failures to the subscriber", async () => {
+    const occurredAt = new Date("2026-07-17T09:06:45.000Z");
+    const publisher = await connectWithRoundCommands(() => occurredAt);
+    const subscriber = await connectWithRoundCommands(() => occurredAt);
+    const state = createLobbyState();
+    const command = EndRoundCommandSchema.parse({
+      schemaVersion: 1,
+      type: "end-round",
+      commandId: `listener-failure-end-${randomUUID()}`,
+    });
+    await createPersistedLobby(publisher, state);
+    const subscription = await subscriber.activeLobbyEvents.subscribe(async () => {
+      throw new Error("private listener detail");
+    });
+    const observedFailure = subscription.completion.then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    try {
+      await expect(
+        publisher.roundCommands.execute({
+          lobbyId: state.lobby.id,
+          sessionTokenHash: state.sessions[0]!.tokenHash,
+          command,
+        }),
+      ).resolves.toMatchObject({ ok: true });
+      const failure = await new Promise<unknown>((resolve, reject) => {
+        const timeout = setTimeout(
+          () => reject(new Error("Timed out waiting for subscription failure.")),
+          2_000,
+        );
+        observedFailure.then(
+          (error) => {
+            clearTimeout(timeout);
+            resolve(error);
+          },
+          (error: unknown) => {
+            clearTimeout(timeout);
+            reject(error);
+          },
+        );
+      });
+
+      expect(failure).toEqual(new Error("Active-lobby event subscription failed."));
+    } finally {
+      await subscription.close();
+    }
+  });
+
+  test("fails the subscription when a notified durable event is missing", async () => {
+    const subscriber = await connectWithRoundCommands(() => new Date());
+    const subscription = await subscriber.activeLobbyEvents.subscribe(async ({ loadEvent }) => {
+      await loadEvent();
+    });
+    const observedFailure = subscription.completion.then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    try {
+      await pool.query("SELECT pg_notify($1, $2)", [
+        ACTIVE_LOBBY_EVENT_CHANNEL,
+        encodeActiveLobbyEventReference(`missing-lobby-${randomUUID()}`, 1n),
+      ]);
+      const failure = await new Promise<unknown>((resolve, reject) => {
+        const timeout = setTimeout(
+          () => reject(new Error("Timed out waiting for missing-event failure.")),
+          2_000,
+        );
+        observedFailure.then(
+          (error) => {
+            clearTimeout(timeout);
+            resolve(error);
+          },
+          (error: unknown) => {
+            clearTimeout(timeout);
+            reject(error);
+          },
+        );
+      });
+
+      expect(failure).toEqual(new Error("Active-lobby event subscription failed."));
+    } finally {
+      await subscription.close();
+    }
+  });
+
+  test.each(["", "not-json"])(
+    "fails the subscription when the active-event notification payload is malformed: %j",
+    async (payload) => {
+      const subscriber = await connectWithRoundCommands(() => new Date());
+      const subscription = await subscriber.activeLobbyEvents.subscribe(async () => {});
+      const observedFailure = subscription.completion.then(
+        () => null,
+        (error: unknown) => error,
+      );
+
+      try {
+        await pool.query("SELECT pg_notify($1, $2)", [ACTIVE_LOBBY_EVENT_CHANNEL, payload]);
+        const failure = await new Promise<unknown>((resolve, reject) => {
+          const timeout = setTimeout(
+            () => reject(new Error("Timed out waiting for malformed notification failure.")),
+            2_000,
+          );
+          observedFailure.then(
+            (error) => {
+              clearTimeout(timeout);
+              resolve(error);
+            },
+            (error: unknown) => {
+              clearTimeout(timeout);
+              reject(error);
+            },
+          );
+        });
+
+        expect(failure).toEqual(new Error("Active-lobby event subscription failed."));
+      } finally {
+        await subscription.close();
+      }
+    },
+  );
+
+  test("does not block one lobby's notifications behind another lobby", async () => {
+    const subscriber = await connectWithRoundCommands(() => new Date());
+    const first = createLobbyState();
+    const second = createLobbyState();
+    await createPersistedLobby(subscriber, first);
+    await createPersistedLobby(subscriber, second);
+    const firstStarted = deferredSignal();
+    const releaseFirst = deferredSignal();
+    const secondObserved = deferredSignal();
+    const subscription = await subscriber.activeLobbyEvents.subscribe(async ({ lobbyId }) => {
+      if (lobbyId === first.lobby.id) {
+        firstStarted.resolve();
+        await releaseFirst.promise;
+      }
+      if (lobbyId === second.lobby.id) secondObserved.resolve();
+    });
+
+    try {
+      await pool.query("SELECT pg_notify($1, $2)", [
+        ACTIVE_LOBBY_EVENT_CHANNEL,
+        encodeActiveLobbyEventReference(first.lobby.id, 1n),
+      ]);
+      await firstStarted.wait("first lobby notification");
+      await pool.query("SELECT pg_notify($1, $2)", [
+        ACTIVE_LOBBY_EVENT_CHANNEL,
+        encodeActiveLobbyEventReference(second.lobby.id, 1n),
+      ]);
+      await secondObserved.wait("independent second lobby notification");
+    } finally {
+      releaseFirst.resolve();
+      await subscription.close();
+    }
   });
 
   test("commits create, configure, start, pause, resume, and call-next transitions", async () => {
@@ -3126,6 +3449,12 @@ describeDatabase("PostgreSQL durable game state", () => {
       type: "start-round",
       commandId: `prior-start-${randomUUID()}`,
     });
+    const priorPrivateCommand = MarkCardCommandSchema.parse({
+      schemaVersion: 1,
+      type: "mark-card",
+      commandId: `prior-mark-${randomUUID()}`,
+      ball: 1,
+    });
     const state: DurableLobbyState = {
       ...initial,
       lobby: { ...initial.lobby, status: "waiting" },
@@ -3140,6 +3469,30 @@ describeDatabase("PostgreSQL durable game state", () => {
           deliveryScope: "active-lobby",
           eventSequence: 1n,
           result: { intent: priorCommand },
+          createdAt: initial.round!.startedAt!,
+        },
+        {
+          participantId: initial.participants[0]!.id,
+          commandId: priorPrivateCommand.commandId,
+          roundId: initial.round!.id,
+          commandType: priorPrivateCommand.type,
+          deliveryScope: "participant-private",
+          eventSequence: null,
+          result: {
+            intent: priorPrivateCommand,
+            participantPrivateEvent: {
+              schemaVersion: 1,
+              type: "mark-result",
+              commandId: priorPrivateCommand.commandId,
+              occurredAt: initial.round!.startedAt!.toISOString(),
+              mark: {
+                id: initial.round!.cards[0]!.marks[0]!.id,
+                cardId: initial.round!.cards[0]!.id,
+                ball: 1,
+                markedAt: initial.round!.cards[0]!.marks[0]!.markedAt.toISOString(),
+              },
+            },
+          },
           createdAt: initial.round!.startedAt!,
         },
       ],
@@ -3159,6 +3512,12 @@ describeDatabase("PostgreSQL durable game state", () => {
       lobbyId: state.lobby.id,
       sessionTokenHash: state.sessions[0]!.tokenHash,
       command: priorCommand,
+    });
+    const privateReplay = await connection.roundCommands.executeAuthenticated({
+      lobbyId: state.lobby.id,
+      participantId: state.participants[0]!.id,
+      participantSessionId: state.sessions[0]!.id,
+      command: priorPrivateCommand,
     });
     const restored = await connection.lobbyStates.findById(state.lobby.id);
 
@@ -3193,6 +3552,23 @@ describeDatabase("PostgreSQL durable game state", () => {
       eventSequence: 1n,
       result: { intent: priorCommand },
       createdAt: initial.round!.startedAt,
+    });
+    expect(privateReplay).toMatchObject({
+      ok: true,
+      acknowledgement: {
+        commandId: priorPrivateCommand.commandId,
+        scope: "participant-private",
+        eventSequence: null,
+        idempotentReplay: true,
+      },
+      activeLobbyEvent: null,
+      participantPrivateEvent: null,
+    });
+    expect(
+      restored?.commandResults.find(({ commandId }) => commandId === priorPrivateCommand.commandId),
+    ).toMatchObject({
+      roundId: null,
+      result: { intent: priorPrivateCommand },
     });
   });
 
@@ -3314,6 +3690,14 @@ describeDatabase("PostgreSQL durable game state", () => {
         command,
       }),
     ).resolves.toEqual({ ok: false, error: { code: "UNAUTHORIZED" } });
+    await expect(
+      connection.roundCommands.executeAuthenticated({
+        lobbyId: first.lobby.id,
+        participantId: first.participants[1]!.id,
+        participantSessionId: first.sessions[0]!.id,
+        command,
+      }),
+    ).resolves.toEqual({ ok: false, error: { code: "UNAUTHORIZED" } });
     await connection.lobbyStates.markParticipantSessionDisconnected({
       lobbyId: first.lobby.id,
       sessionId: first.sessions[0]!.id,
@@ -3405,14 +3789,28 @@ describeDatabase("PostgreSQL durable game state", () => {
     });
     await createPersistedLobby(connection, state);
 
-    const committed = await connection.roundCommands.execute({
+    const committed = await connection.roundCommands.executeAuthenticated({
       lobbyId: state.lobby.id,
-      sessionTokenHash: state.sessions[1]!.tokenHash,
+      participantId: state.participants[1]!.id,
+      participantSessionId: state.sessions[1]!.id,
       command,
     });
-    const replayed = await connection.roundCommands.execute({
+    const replayed = await connection.roundCommands.executeAuthenticated({
       lobbyId: state.lobby.id,
-      sessionTokenHash: state.sessions[1]!.tokenHash,
+      participantId: state.participants[1]!.id,
+      participantSessionId: state.sessions[1]!.id,
+      command,
+    });
+    await pool.query(
+      `UPDATE command_results
+          SET result = result - 'participantPrivateEvent'
+        WHERE lobby_id = $1 AND command_id = $2`,
+      [state.lobby.id, command.commandId],
+    );
+    const legacyReplayed = await connection.roundCommands.executeAuthenticated({
+      lobbyId: state.lobby.id,
+      participantId: state.participants[1]!.id,
+      participantSessionId: state.sessions[1]!.id,
       command,
     });
     const restored = await connection.lobbyStates.findById(state.lobby.id);
@@ -3424,11 +3822,38 @@ describeDatabase("PostgreSQL durable game state", () => {
         eventSequence: null,
         idempotentReplay: false,
       },
+      activeLobbyEvent: null,
+      participantPrivateEvent: {
+        type: "mark-result",
+        commandId: command.commandId,
+        occurredAt: occurredAt.toISOString(),
+        mark: {
+          cardId: playerCard.id,
+          ball: 1,
+          markedAt: occurredAt.toISOString(),
+        },
+      },
     });
     expect(replayed).toMatchObject({
       ok: true,
       acknowledgement: { eventSequence: null, idempotentReplay: true },
+      activeLobbyEvent: null,
+      participantPrivateEvent: committed.ok ? committed.participantPrivateEvent : null,
     });
+    expect(legacyReplayed).toMatchObject({
+      ok: true,
+      acknowledgement: {
+        scope: "participant-private",
+        eventSequence: null,
+        idempotentReplay: true,
+      },
+      activeLobbyEvent: null,
+      participantPrivateEvent: null,
+    });
+    if (!committed.ok) throw new Error("Expected the private mark to commit.");
+    expect(ParticipantPrivateEventSchema.safeParse(committed.participantPrivateEvent).success).toBe(
+      true,
+    );
     expect(restored?.lobby.lastEventSequence).toBe(0n);
     expect(restored?.lobby.lastActivityAt).toEqual(new Date("2026-07-17T10:00:00.000Z"));
     expect(restored?.round?.cards[0]?.marks).toHaveLength(1);

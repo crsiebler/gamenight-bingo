@@ -44,6 +44,8 @@ Next story: US-001
 - Framework-routing guarantees require live Next request coverage under an approved migrated `TEST_DATABASE_URL`; dispatcher unit tests and route-source assertions do not prove unsupported methods or catch-all resources retain stable errors and private cache headers.
 - Realtime tickets use 32 random bytes encoded as canonical unpadded base64url, persist only SHA-256 hashes bound to lobby/participant/session scope, and issue under the lobby fence from an active cookie session. Consumption burns the presented row whether valid or not and returns only authoritative identity for a valid unexpired active scope; issuance purges expired abandoned tickets, and session deactivation invalidates outstanding tickets so rejoin cannot revive them.
 - Round-control commands are rate-limited before lobby-fence acquisition, then resolve the active session, actor role, current round, and own card inside one Serializable transaction; command results persist canonical intent so changed-payload command-ID reuse is rejected, active-lobby replays retain their original sequence, and private mark acknowledgements allocate no lobby sequence. Before replacing a round, expire due participant sessions before roster selection and detach prior active-event and command-result round scopes so replay tombstones survive without retaining old gameplay state.
+- Socket.IO accepts only strict versioned handshake auth from the configured exact browser origin, burns any canonical ticket reaching auth even in an invalid envelope, discards handshake plaintext, stores only persistence-returned identity in `socket.data`, and revalidates that identity inside command/snapshot lobby fences and before later room delivery. Engine.IO admission and namespace authentication have separate bounded direct-peer limits; mark a rejected transport terminal before awaiting its bounded ticket burn, close it, cap authenticated sockets globally and per session, and recheck both transport closure and transport-wide rejection after ticket consumption before reserving capacity or calling `next()`. Every command attempt is charged before the one-in-flight guard, and per-lobby delivery queues preserve committed sequence order through asynchronous authorization while authorizing each unique persisted identity once per delivery. Active-lobby commits emit a transaction-scoped PostgreSQL notification; the separate game-server process serially reloads and validates each committed event before sequence-deduplicated publication, so HTTP fallback mutations reach connected clients without pre-commit effects. Validate every successful acknowledgement's command ID against the incoming mutation before any delivery; fresh committed lobby events broadcast before requester acknowledgements, replays do not rebroadcast, eventless replay tombstones can acknowledge either delivery scope, and replayed private results return only to the requesting socket. Disconnect sockets on terminal command-time identity outcomes (`UNAUTHORIZED`, inactive/deleted-lobby `NOT_FOUND`, or `LOBBY_EXPIRED`) so stale clients cannot retain rooms or capacity.
+- Active-event subscription, malformed dedicated-channel notification, durable reload, or relay failure is fatal to the game-server runtime because `LISTEN` recovery cannot prove continuity without a durable cursor. Stop Socket.IO before awaiting subscription/database drain so a stalled delivery cannot keep a continuity-lost authority serving, and settle runtime completion with a safe failure if cleanup fails. Exact direct/notification echoes are idempotent only when their canonical event identity matches bounded recent delivery history; same-sequence conflicts and unknown stale deliveries fail closed.
 
 Append-only iteration log
 -------------------------
@@ -1445,6 +1447,7 @@ Review outcome for US-018 at 2026-07-17 00:37:07 MST:
   - `bun run lint` (pass)
   - `bun run format:check` (fail only because it scanned pre-existing untracked US-018 Lighthouse/DOM artifacts; no intended or tracked file failed)
   - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun run format:check` (fails only on three pre-existing untracked US-018 browser-report files; all tracked files pass)
   - `bun run typecheck` (pass; root and all nine workspaces)
   - `bun run test` (pass; 13 Vitest files and 210 tests)
   - `bun run test:e2e` (pass; 1 Playwright runner smoke test)
@@ -2475,3 +2478,480 @@ Targeted re-review outcome for resumed US-029 at 2026-07-17 13:29:00 MST:
 - `code-reviewer` reviewed the revised complete staged diff and returned an empty actionable finding list with no residual risks.
 - The shared due-session expiry transition now runs inside the round-command lobby fence before roster selection, resolving the only blocking finding without changing the reviewed authorization, replay, or sequencing behavior.
 - No in-scope critical, high, or medium findings remain. US-029 can be marked passing and committed after the final staged/unstaged consistency check.
+
+## 2026-07-17 13:53:24 MST - US-030
+- What was implemented
+  - Added a separate long-lived Socket.IO authority with exact-origin admission, strict versioned handshake auth, atomic single-use ticket consumption, persistence-derived socket identity, bounded payloads, safe contract errors, and clean listener lifecycle.
+  - Routed versioned heartbeat, configure, round-control, mark, and explicit resync commands; fresh committed lobby events broadcast before acknowledgements, replays acknowledge without rebroadcasting, and private results stay in participant rooms without lobby sequences.
+  - Added identity-scoped command and authorized-snapshot repository paths that revalidate the consumed ticket's lobby, participant, and session inside the lobby fence, return validated committed events, and persist private mark results for replay.
+  - Added runtime host/port/origin validation, production database/pattern wiring, executable `bun run dev:game-server`, Socket.IO server/client dependencies, README guidance, and real-client plus PostgreSQL coverage.
+- Files changed: `AGENTS.md`, `README.md`, `apps/game-server/package.json`, `apps/game-server/src/index.ts`, `apps/game-server/src/runtime.test.ts`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/socket-server.test.ts`, `apps/game-server/src/socket-server.ts`, `bun.lock`, `package.json`, `packages/contracts/src/v1/commands.ts`, `packages/database/src/database.integration.test.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/round-command-executor.ts`, `tests/contracts-v1.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-030 - Establish authenticated Socket.IO`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts` (expected fail before implementation with 8 missing authority behaviors; pass after implementation)
+  - `bunx vitest run apps/game-server/src/runtime.test.ts` (expected fail before implementation with 9 missing runtime-configuration behaviors; pass after implementation)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t '<identity snapshot/command/event cases>'` (expected fail before implementation because identity-scoped methods were absent; pass after implementation)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass after review remediation; 25 files and 425 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `DATABASE_URL=<approved local Compose database> GAME_SERVER_PORT=3102 WEB_ORIGIN=http://localhost:3000 bun -e '<start and close runtime>'` (pass; listener bound to `127.0.0.1:3102` and closed cleanly)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `websocket-engineer`, `security-engineer`
+  - Used: `websocket-engineer`, `security-engineer` for event surface, room/ack sequencing, reconnect boundaries, identity revalidation, exact-origin admission, safe errors, threat controls, and focused test guidance
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive `security-engineer`; targeted re-review by the same specialists planned after substantive fixes
+  - Findings: fixed malformed-envelope ticket retention, retained handshake plaintext, private replay rebroadcast, inactive room subscriptions, missing unauthorized disconnect, and unbounded connection/command work before targeted re-review
+- Decisions (why):
+  - Used one versioned command event and contract-discriminated outbound channels instead of per-command Socket.IO event names because the existing strict v1 schemas remain the single transport boundary and do not define chat or event history.
+  - Disabled connection-state recovery for this story because every new connection must consume a newly issued ticket; automatic snapshot/recovery behavior belongs to US-031.
+  - Added identity-scoped repository methods rather than retaining or reconstructing cookie hashes because consumed tickets return authoritative persisted identity and plaintext credentials must be discarded.
+  - Persisted participant-private mark results with command intent so replay returns the original private result while leaving the active-lobby sequence unchanged.
+- **Learnings for future iterations:**
+  - Socket.IO CORS alone does not gate WebSocket upgrades; use `allowRequest` for exact browser-origin admission before ticket consumption.
+  - A consumed realtime ticket authenticates only the connection attempt; every command and snapshot must revalidate the exact persisted session identity under the lobby fence.
+  - Realtime command executors must return the validated committed event directly so adapters never reconstruct or optimistically emit authoritative state.
+- Known issues / follow-ups:
+  - Automatic reconnect snapshots, transport-recovery continuity, and restart restoration remain assigned to US-031.
+  - Presence aggregation, heartbeat persistence, disconnect generations, and pause grace remain assigned to US-032 and US-033; heartbeat is currently a validated transport keepalive only.
+  - The unrelated untracked browser-report artifacts remain untouched and unstaged; tracked files pass Prettier.
+- Next iteration start:
+  - If review passes, implement US-031 authoritative snapshot restoration and brief transport-recovery continuity; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-030 at 2026-07-17 14:08:00 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced four deduplicated blocking root causes: malformed auth envelopes did not burn canonical tickets or discard plaintext, private replay results were rebroadcast to sibling tabs, unauthorized/deactivated sessions remained subscribed, and connection/command work lacked bounded rate and in-flight controls.
+- Added failing real-client regressions before remediation for fresh malformed-envelope ticket reuse, private multi-tab replay, transactional unauthorized disconnect, outbound identity ejection, and connection/command limits; added a failing PostgreSQL identity-activity regression.
+- Canonical tickets now burn even when strict envelope validation fails, handshake auth is cleared after consumption, and participant-private replay results return only to the requesting socket.
+- Added a bounded direct-peer pre-auth limiter, bounded per-session command/resync limiter, one in-flight command per socket, immediate unauthorized disconnect, heartbeat revalidation, and active-session filtering before every lobby/private room delivery.
+- Added a narrow persistence activity check for exact lobby/participant/session identity and wired it into production outbound delivery without loading private snapshots.
+- Post-fix checks: focused Socket.IO and PostgreSQL regressions pass; the PostgreSQL-enabled root suite passes typecheck and 425 tests; lint, tracked-tree Prettier, Playwright, frozen install, listener start/close, and whitespace checks pass.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` because the substantive fixes affected every original specialist area.
+
+Targeted re-review outcome for US-030 at 2026-07-17 14:13:34 MST:
+- `qa-expert` confirmed the original transactional disconnect, malformed-envelope burn, handshake discard, private replay scope, and outbound identity-ejection fixes with no blocking findings; it recorded two low follow-ups for direct one-in-flight coverage and cancelling the losing connection-test waiter.
+- `code-reviewer` identified two remaining medium blockers: concurrent asynchronous room authorization can deliver a higher lobby event sequence before a lower one, and a full 10,000-key limiter scans every active bucket for each rejected unseen key.
+- `security-engineer` identified one remaining medium blocker: the connection limiter charges only Engine.IO admission, so repeated namespace CONNECT authentication on one transport can still reach ticket persistence, while overlapping command packets are rejected before charging the command bucket.
+- These findings remain in scope because they weaken ordered live delivery and the bounded realtime resource controls required by the repository conventions and staged implementation claims.
+- Per the one-targeted-re-review limit, no further substantive implementation changes or commit are permitted in this iteration. `US-030` remains `passes: false`, and `prd.json` remains unchanged.
+- Next iteration start: add failing regressions for concurrent sequence delivery, full-bucket constant-time overflow, repeated namespace authentication on one transport, and charged overlapping commands; serialize per-lobby delivery, replace full-map request-time scans, close rejected transports, charge before the in-flight check, rerun all US-030 checks, and restart the complete staged review loop.
+
+## 2026-07-17 14:26:20 MST - US-030
+- What was implemented
+  - Resumed the authenticated Socket.IO story and fixed all four blockers from the prior targeted review.
+  - Serialized asynchronous room authorization and broadcast work per lobby so concurrent committed events retain delivery sequence.
+  - Reworked limiter overflow to reject from the oldest active bucket without scanning the full active map, added a separate namespace-authentication budget, and closed rejected underlying transports.
+  - Charged every command packet before the one-in-flight check so overlapping attempts cannot bypass the authenticated command budget.
+- Files changed: `AGENTS.md`, `README.md`, `apps/game-server/package.json`, `apps/game-server/src/index.ts`, `apps/game-server/src/runtime.test.ts`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/socket-server.test.ts`, `apps/game-server/src/socket-server.ts`, `bun.lock`, `package.json`, `packages/contracts/src/v1/commands.ts`, `packages/database/src/database.integration.test.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/round-command-executor.ts`, `tests/contracts-v1.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-030 - Establish authenticated Socket.IO`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts` (expected fail with 4 focused regressions before resumed remediation and 2 behavioral regressions during review remediation; pass with 17 tests after implementation)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass; typecheck, 25 files, and 431 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `DATABASE_URL=<approved local Compose database> GAME_SERVER_PORT=3102 WEB_ORIGIN=http://localhost:3000 bun -e '<start and close runtime>'` (pass; listener bound to `127.0.0.1:3102` and closed cleanly)
+  - `git diff --check && git diff --cached --check` (pass)
+- Implementation agents:
+  - Recommended: `websocket-engineer`, `security-engineer`
+  - Used: `websocket-engineer`, `security-engineer` for resumed delivery-order, namespace-authentication, limiter, command-attempt, and residual-risk guidance
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive `security-engineer` planned for the complete restaged high-risk diff
+  - Findings: fixed the namespace-auth concurrency test gap, unbounded authenticated socket population, duplicate sibling-socket authorization fan-out, and delayed negative-listener cleanup before targeted re-review
+- Decisions (why):
+  - Queued complete per-lobby authorization and emission work rather than only socket writes because asynchronous identity checks were the source of sequence inversion.
+  - Preserved per-key fixed windows and used insertion order to inspect the oldest bucket first because a full map whose oldest bucket is active cannot contain an expired newer bucket; active overflow is therefore rejected without a full scan.
+  - Used a separate namespace-authentication limiter instead of sharing Engine.IO admission capacity because one legitimate connection must pass both layers while repeated namespace CONNECT packets must not repeatedly reach persistence.
+  - Closed rejected Engine.IO transports after returning the stable Socket.IO error so a malicious client cannot retain one admitted transport as an authentication oracle.
+- **Learnings for future iterations:**
+  - Socket.IO namespace middleware can run repeatedly over one admitted Engine.IO connection, so transport admission alone does not bound ticket-consumption work.
+  - One-in-flight guards do not replace attempt rate limits; charge the limiter before returning the overlapping-command error.
+  - Room-member identity checks are asynchronous delivery work and must be included in the per-lobby ordering boundary, not run concurrently for adjacent sequences.
+- Known issues / follow-ups:
+  - Automatic reconnect snapshots, transport-recovery continuity, and restart restoration remain assigned to US-031.
+  - Presence aggregation, heartbeat persistence, disconnect generations, and pause grace remain assigned to US-032 and US-033.
+  - The unrelated untracked browser-report artifacts remain untouched and unstaged; tracked files pass Prettier.
+- Next iteration start:
+  - If review passes, implement US-031 authoritative snapshot restoration; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for resumed US-030 at 2026-07-17 18:04:06 MST:
+- The complete staged `code-reviewer`, `qa-expert`, and `security-engineer` pass produced two deduplicated medium blockers: malformed payloads on the dedicated active-event channel were ignored instead of failing continuity, and graceful resource-close failure exposed private detail while leaving runtime completion pending. Security review returned no actionable findings.
+- Added failing PostgreSQL regressions for empty and invalid-JSON relay payloads before making malformed dedicated-channel notifications fail the subscription and trigger supervised authority shutdown.
+- Added a failing runtime regression before settling both `close()` and `completion` with the stable secret-free shutdown error, preserving cleanup of server, subscription, and database resources, and observing signal-triggered close rejection.
+- The low fixed-window test timing finding remains non-blocking; existing positive event/acknowledgement barriers cover the paired paths, and broad test timing refactoring is outside this focused remediation.
+- Post-fix checks: the focused runtime and PostgreSQL regressions pass; `TEST_DATABASE_URL=<approved local Compose database> bun run test` passes typecheck, 25 files, and 468 tests; lint, tracked-tree Prettier, whitespace checks, and live game-server start/close pass.
+- Targeted re-review: pending `code-reviewer` and `qa-expert` because their findings received substantive persistence, runtime, signal-handling, and test fixes; `security-engineer` is not repeated because its initial finding list was empty.
+
+Targeted re-review outcome for resumed US-030 at 2026-07-17 18:06:03 MST:
+- `code-reviewer` and `qa-expert` reviewed the revised complete staged diff and returned empty actionable finding lists.
+- The reviewers confirmed malformed dedicated-channel payloads now fail continuity and graceful cleanup failures settle both `close()` and runtime completion safely without exposing private resource detail.
+- The fixed 75 ms negative-event observation remains a non-blocking low residual risk; no in-scope critical, high, or medium findings remain.
+- US-030 can be marked passing and committed after the final staged/unstaged consistency check.
+
+Review remediation for resumed US-030 at 2026-07-17 14:34:56 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced two blocking medium root causes: the namespace regression did not race concurrent CONNECT packets, and authenticated sockets plus per-socket authorization fan-out remained unbounded. Code review returned no findings.
+- Strengthened the namespace test to defer the first ticket consumer, send a second CONNECT over the same Engine.IO transport, assert only one persistence call, require a RATE_LIMITED namespace error, and observe transport closure.
+- Added failing real-client regressions before implementing global and per-session concurrent socket caps with disconnect cleanup, plus one persistence authorization per unique identity for sibling-socket room delivery.
+- Fixed the QA review's low delayed-negative-listener issue by removing listeners when the no-event observation window completes.
+- Post-fix checks: focused Socket.IO suite passes with 17 tests; the database-enabled root suite passes typecheck, 25 files, and 431 tests; lint, tracked-tree Prettier, frozen install, Playwright, live listener start/close, and whitespace checks pass.
+- Targeted re-review: pending `qa-expert` and `security-engineer` review because their findings received substantive test, resource-control, and delivery-authorization fixes; `code-reviewer` is not repeated because its initial findings list was empty.
+
+Targeted re-review outcome for resumed US-030 at 2026-07-17 14:41:54 MST:
+- `qa-expert` and `security-engineer` confirmed the concurrent namespace-authentication coverage, no-event listener cleanup, concurrent socket caps, and one-authorization-per-identity delivery fixes, but identified one deduplicated medium connection-accounting race.
+- A transport can close while valid ticket consumption is pending; after consumption resolves, the current code can reserve global and per-session capacity after the close event has already passed, leaving the slot permanently occupied until restart.
+- The finding is in scope because repeated closed transports can exhaust the newly required authenticated connection caps without any live sockets.
+- Per the one-targeted-re-review limit, no further substantive implementation changes or commit are permitted in this iteration. `US-030` remains `passes: false`, and `prd.json` remains unchanged.
+- The Playwright dev server regenerated `apps/web/next-env.d.ts` to reference `.next/dev/types/routes.d.ts`; that unrelated unstaged side effect is excluded from the staged US-030 candidate.
+- Next iteration start: add a failing real-client regression where delayed ticket consumption returns a valid identity after a concurrent CONNECT closes the transport, track Engine closure before awaiting persistence, reserve capacity only while the transport remains open, rerun all US-030 checks, and restart the complete staged review loop.
+
+## 2026-07-17 14:47:57 MST - US-030
+- What was implemented
+  - Resumed the authenticated Socket.IO story and closed the remaining connection-accounting race from the prior targeted review.
+  - Tracked Engine.IO closure before awaiting ticket persistence, skipped capacity reservation for an already-closed transport, and reused the close observer to release capacity when closure races a completed reservation.
+  - Added a real-client regression that abandons a transport during delayed valid ticket consumption and proves a replacement connection can still claim the sole authenticated-socket slot.
+- Files changed: `AGENTS.md`, `README.md`, `apps/game-server/package.json`, `apps/game-server/src/index.ts`, `apps/game-server/src/runtime.test.ts`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/socket-server.test.ts`, `apps/game-server/src/socket-server.ts`, `bun.lock`, `package.json`, `packages/contracts/src/v1/commands.ts`, `packages/database/src/database.integration.test.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/round-command-executor.ts`, `tests/contracts-v1.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-030 - Establish authenticated Socket.IO`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts -t "does not reserve capacity after a transport closes during ticket consumption"` (passed before the explicit guard because Socket.IO emitted a late namespace disconnect; pass after implementation)
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts` (pass after review remediation; 25 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass after review remediation; typecheck, 25 files, and 439 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `DATABASE_URL=<approved local Compose database> bun run --cwd apps/web build` (pass; all versioned API routes compiled)
+  - `DATABASE_URL=<approved local Compose database> GAME_SERVER_PORT=3102 WEB_ORIGIN=http://localhost:3000 bun -e '<start and close runtime>'` (pass; listener bound to `127.0.0.1:3102` and closed cleanly)
+  - `git diff --check && git diff --cached --check` (pass)
+- Implementation agents:
+  - Recommended: `websocket-engineer`, `security-engineer`
+  - Used: skipped additional agents because both recommended specialists already advised US-030 and this resumed iteration addressed one concrete prior-review finding
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive `security-engineer`; targeted re-review by the same specialists planned after substantive fixes
+  - Findings: fixed incomplete success-metadata checks, the transport-capacity testability gap, missing outbound event-variant coverage, and invocation-order lobby delivery before targeted re-review
+- Decisions (why):
+  - Observed Engine.IO closure before the asynchronous ticket consumer because attaching accounting cleanup only after persistence returns can miss an already-fired close event.
+  - Kept the close observer as the reservation cleanup path after successful authentication so closure before and after reservation share one idempotent lifecycle without a listener-replacement gap.
+  - Retained the real-client regression even though Socket.IO's current late namespace disconnect made it pass before the guard, because the authority should enforce its own capacity invariant rather than depend on undocumented cleanup timing.
+- **Learnings for future iterations:**
+  - Any resource reservation performed after asynchronous authentication must observe transport cancellation before the await and recheck liveness immediately before reserving capacity.
+  - A mutable idempotent release callback lets one early close observer cover both pre-reservation cancellation and post-reservation cleanup without missing a close between listener replacement steps.
+- Known issues / follow-ups:
+  - Automatic reconnect snapshots, transport-recovery continuity, and restart restoration remain assigned to US-031.
+  - Presence aggregation, heartbeat persistence, disconnect generations, and pause grace remain assigned to US-032 and US-033.
+  - The unrelated `apps/web/next-env.d.ts` side effect and untracked browser-report artifacts remain untouched and unstaged.
+- Next iteration start:
+  - If review passes, implement US-031 authoritative snapshot restoration; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for resumed US-030 at 2026-07-17 15:01:07 MST:
+- The complete staged `code-reviewer`, `qa-expert`, and `security-engineer` pass produced four deduplicated medium blockers: incomplete success-result metadata validation, a transport-close regression that passed without the guard, missing direct transport coverage for required event variants, and lobby delivery ordered by invocation rather than committed sequence.
+- Added failing regressions before remediation for fresh acknowledgements without events, mismatched private command IDs, reverse-arriving committed sequences, and stale lower sequences during and after queue drain; all failed for the reported behavior before implementation.
+- Extracted authenticated connection capacity into a directly testable authority component while retaining the real-client abandoned-transport regression, so a closed transport is now proven not to consume a slot independently of Socket.IO's late disconnect behavior.
+- Exhaustively validated fresh lobby events, active-lobby replays, and private event command scope before any event or acknowledgement emission.
+- Replaced invocation-order promise chaining with per-lobby sequence-priority batches, retained asynchronous authorization inside the delivery boundary, rejected late stale sequences, and bounded remembered last-sequence state to 10,000 lobbies.
+- Added real-client coverage for presence, call, co-winner-window, co-winner-result, stage, round-end, mark-result, and near-win variants in addition to existing room-isolation tests.
+- Post-fix checks: focused Socket.IO suite passes with 25 tests; the PostgreSQL-enabled root suite passes typecheck, 25 files, and 439 tests; lint, tracked-tree Prettier, and whitespace checks pass.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` because substantive fixes addressed findings from all three specialists.
+
+Targeted re-review outcome for resumed US-030 at 2026-07-17 15:01:07 MST:
+- `code-reviewer`, `qa-expert`, and `security-engineer` confirmed the original success-shape, capacity-testability, outbound-variant, and sequence-order findings were addressed, but identified two remaining deduplicated medium blockers.
+- Success handling compares a mark-result command ID with its acknowledgement but never compares `acknowledgement.commandId` with the incoming mutation, so a mutually consistent acknowledgement/event pair for the wrong command can still be emitted.
+- Eventless idempotent replay is accepted only for active-lobby scope, but participant-private command rows persisted before US-030 have no stored private event and must still return their original acknowledgement rather than `INTERNAL_ERROR`.
+- QA also recorded a non-blocking low follow-up to replace fixed 25 ms propagation waits in sequence tests with event-driven client synchronization.
+- Per the one-targeted-re-review limit, no further substantive implementation changes or commit are permitted in this iteration. `US-030` remains `passes: false`, and `prd.json` remains unchanged.
+- Next iteration start: add failing regressions for a wrong acknowledgement command ID across fresh/replay lobby and private results plus a legacy eventless participant-private replay; validate every acknowledgement against the incoming command before delivery, permit eventless idempotent replay for either scope, replace the affected fixed sleeps, rerun all US-030 checks, and restart the complete staged review loop.
+
+## 2026-07-17 15:11:47 MST - US-030
+- What was implemented
+  - Resumed the authenticated Socket.IO story and closed both remaining acknowledgement/replay blockers from the prior targeted review.
+  - Bound every successful acknowledgement to the incoming mutation command ID before any lobby event, private event, or acknowledgement can be emitted.
+  - Allowed legacy eventless participant-private replay tombstones to return their original acknowledgement while still rejecting every fresh result without its committed event.
+  - Replaced fixed propagation sleeps in the sequence-order tests with event-driven completion signals.
+- Files changed: `AGENTS.md`, `README.md`, `apps/game-server/package.json`, `apps/game-server/src/index.ts`, `apps/game-server/src/runtime.test.ts`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/socket-server.test.ts`, `apps/game-server/src/socket-server.ts`, `bun.lock`, `package.json`, `packages/contracts/src/v1/commands.ts`, `packages/database/src/database.integration.test.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/round-command-executor.ts`, `tests/contracts-v1.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-030 - Establish authenticated Socket.IO`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts` (expected fail before implementation: 5 acknowledgement/replay regressions failed; pass after implementation with 30 tests)
+  - `bunx vitest run apps/game-server/src/realtime-ticket.test.ts apps/game-server/src/socket-server.test.ts apps/game-server/src/runtime.test.ts tests/contracts-v1.test.ts` (pass; 4 files and 132 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass; typecheck, 25 files, and 444 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `DATABASE_URL=<approved local Compose database> bun run --cwd apps/web build` (pass; all versioned API routes compiled)
+  - `DATABASE_URL=<approved local Compose database> GAME_SERVER_PORT=3102 WEB_ORIGIN=http://localhost:3000 bun -e '<start and close runtime>'` (pass; listener started and closed cleanly)
+  - `git diff --check && git diff --cached --check` (pass)
+- Implementation agents:
+  - Recommended: `websocket-engineer`, `security-engineer`
+  - Used: `websocket-engineer`, `security-engineer` for the resumed acknowledgement binding, replay compatibility, delivery-order test, and security-risk guidance
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive `security-engineer` planned for the complete restaged high-risk diff
+  - Findings: pending staged-diff review
+- Decisions (why):
+  - Validated the acknowledgement command ID once immediately after schema parsing because every success path depends on that invariant and no event may be emitted before it is established.
+  - Accepted eventless idempotent replay for both acknowledgement scopes because persisted participant-private command rows created before private event persistence are concrete durable compatibility data, while `idempotentReplay: false` still requires an event.
+  - Used client event promises instead of elapsed-time sleeps because server publisher completion does not itself prove the Socket.IO client has observed each event.
+- **Learnings for future iterations:**
+  - A valid acknowledgement/event pair can still belong to the wrong command; transport adapters must bind success metadata to the incoming mutation before delivery.
+  - Replay compatibility must account for durable tombstones created before later result-persistence features, without weakening fresh-commit event requirements.
+- Known issues / follow-ups:
+  - Automatic reconnect snapshots, transport-recovery continuity, and restart restoration remain assigned to US-031.
+  - Presence aggregation, heartbeat persistence, disconnect generations, and pause grace remain assigned to US-032 and US-033.
+  - The unrelated untracked browser-report artifacts remain untouched and unstaged.
+- Next iteration start:
+  - If review passes, implement US-031 authoritative snapshot restoration; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for resumed US-030 at 2026-07-17 15:23:55 MST:
+- The complete staged `code-reviewer`, `qa-expert`, and `security-engineer` pass produced one deduplicated authentication blocker, five QA test/reliability gaps, one disputed sequence-delivery finding, and one non-blocking low timing-window follow-up.
+- Added a failing concurrent namespace regression proving a distinct canonical ticket rejected by the authentication limiter was not consumed before remediation.
+- Added a bounded one-burn-per-Engine-transport path so the first canonical ticket rejected by namespace limits is atomically consumed without allowing repeated CONNECT packets to create unbounded persistence work.
+- Added PostgreSQL lifecycle coverage for inactive sessions, departed participants, and completed lobbies; added a durable legacy private replay fixture with no persisted private event; and added heartbeat/resync unauthorized, disconnect, persistence-failure, and redaction coverage.
+- Replaced unbounded deferred test waits with explicit two-second synchronization failures and `finally` release paths for blocked authentication, transport, delivery, and command work.
+- Discarded the handshake-clear test-seam request because server handshake state is not a public behavior and exposing Socket.IO internals solely for a test would weaken the production boundary; strict auth, persistence-derived command identity, secret-free errors, ticket hashing, and the explicit `finally` cleanup remain covered.
+- Discarded the late-lower-sequence finding because the queue intentionally rejects a stale delivery rather than emitting an inversion; the higher sequence exposes a continuity gap that requires the existing authoritative resync command, so durable state is not lost or reconstructed from live event history.
+- The low 75 ms negative-event observation remains non-blocking; positive server completion and acknowledgement assertions cover the corresponding delivery paths, and changing all negative timing tests is outside this focused remediation.
+- Post-fix checks: focused Socket.IO suite passes with 32 tests; focused PostgreSQL lifecycle/private replay cases pass; `bun run typecheck`, lint, and whitespace checks pass; tracked formatting passed after formatting two remediated files; the PostgreSQL-enabled root suite passes typecheck, 25 files, and 449 tests.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` because the fixes affected authentication behavior, persistence integration coverage, and realtime test synchronization.
+
+Targeted re-review outcome for resumed US-030 at 2026-07-17 15:30:59 MST:
+- `security-engineer` returned an empty actionable finding list and confirmed the bounded rate-limited ticket burn, acknowledgement binding, replay compatibility, and security controls.
+- `code-reviewer` and `qa-expert` identified one deduplicated medium blocker: when a lobby completes or is deleted after connection, `executeAuthenticated` returns `NOT_FOUND`, but the realtime adapter disconnects only on `UNAUTHORIZED`; the stale socket therefore remains subscribed, reserves capacity, and can continue database work.
+- The remaining 75 ms negative-event timing observation is a non-blocking low residual risk.
+- Per the one-targeted-re-review limit, no further substantive implementation changes or commit are permitted in this iteration. `US-030` remains `passes: false`, and `prd.json` remains unchanged.
+- Next iteration start: add a failing real-client regression for a connected identity whose lobby becomes inactive before a command, disconnect terminal `NOT_FOUND`/`LOBBY_EXPIRED` command failures (or consistently map the inactive identity to `UNAUTHORIZED`), rerun all US-030 checks, and restart the complete staged review loop.
+
+## 2026-07-17 15:34:50 MST - US-030
+- What was implemented
+  - Resumed the authenticated Socket.IO story and closed the remaining stale-socket blocker from the prior targeted review.
+  - Treated command-time `NOT_FOUND` and `LOBBY_EXPIRED` results as terminal identity outcomes alongside `UNAUTHORIZED`, disconnecting the client after its safe error so it releases rooms and authenticated capacity.
+  - Added real Socket.IO client regressions proving both terminal outcomes disconnect and cannot receive later lobby events.
+- Files changed: `AGENTS.md`, `README.md`, `apps/game-server/package.json`, `apps/game-server/src/index.ts`, `apps/game-server/src/runtime.test.ts`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/socket-server.test.ts`, `apps/game-server/src/socket-server.ts`, `bun.lock`, `package.json`, `packages/contracts/src/v1/commands.ts`, `packages/database/src/database.integration.test.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/round-command-executor.ts`, `tests/contracts-v1.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-030 - Establish authenticated Socket.IO`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts -t "disconnects when transactional revalidation returns terminal"` (expected fail before implementation: both cases timed out waiting for disconnect; pass after implementation with 2 tests)
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts` (pass; 34 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass; typecheck, 25 files, and 451 tests)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun run format:check` (fails only on three pre-existing untracked browser-report files; all tracked files pass)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `DATABASE_URL=<approved local Compose database> bun run --cwd apps/web build` (pass; all versioned API routes compiled)
+  - `DATABASE_URL=<approved local Compose database> GAME_SERVER_PORT=3102 WEB_ORIGIN=http://localhost:3000 bun -e '<start and close runtime>'` (pass; listener bound to `127.0.0.1:3102` and closed cleanly)
+  - `git diff --check && git diff --cached --check` (pass)
+- Implementation agents:
+  - Recommended: `websocket-engineer`, `security-engineer`
+  - Used: skipped additional agents because both recommended specialists already advised US-030 and this resumed iteration addressed one concrete prior-review finding
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive `security-engineer` planned for the complete restaged high-risk diff
+  - Findings: pending staged-diff review
+- Decisions (why):
+  - Preserved distinct safe `NOT_FOUND` and `LOBBY_EXPIRED` client errors while applying the same terminal transport lifecycle as `UNAUTHORIZED`, because the error contract and socket cleanup serve separate concerns.
+  - Did not disconnect on `FORBIDDEN` or `INVALID_COMMAND` because those reject an action without invalidating the authenticated participant identity.
+  - Reused the existing real-client command and post-disconnect delivery assertions instead of adding a test seam because transport cleanup is observable public behavior.
+- **Learnings for future iterations:**
+  - A command-time missing or expired lobby is an identity-lifecycle failure for an already connected socket, not merely a recoverable command error; disconnect it to release subscriptions and capacity.
+- Known issues / follow-ups:
+  - Automatic reconnect snapshots, transport-recovery continuity, and restart restoration remain assigned to US-031.
+  - Presence aggregation, heartbeat persistence, disconnect generations, and pause grace remain assigned to US-032 and US-033.
+  - The unrelated untracked browser-report artifacts remain untouched and unstaged.
+- Next iteration start:
+  - If review passes, implement US-031 authoritative snapshot restoration; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for resumed US-030 at 2026-07-17 15:43:44 MST:
+- The complete staged `code-reviewer`, `qa-expert`, and `security-engineer` pass produced one new blocking authentication finding, one repeated sequence-delivery finding, and one non-blocking low test-timing follow-up; security review returned no actionable findings.
+- Accepted the authentication finding: after one namespace CONNECT reached the rate limit, the server deferred transport rejection until its bounded ticket burn completed, so a later CONNECT could cross a new limiter window and authenticate on the already rejected transport.
+- Added a failing real-transport regression that blocks the first command consumption and rate-limited burn, advances the namespace limiter window, presents a third valid ticket, and proves the terminal transport closes without consuming or accepting that later envelope.
+- Marked each rate-limited Engine.IO transport terminal before awaiting its one bounded canonical-ticket burn, emitted the stable rate-limit rejection immediately, and rejected later namespace middleware invocations without additional persistence work.
+- Discarded the repeated late-lower-sequence finding because emitting a lower sequence after a higher sequence was delivered would violate ordering; intentionally rejecting that stale delivery exposes a continuity gap for authoritative resync, matching the documented sequence contract and the prior adjudication of the same finding.
+- Deferred the low fixed negative-observation timing follow-up because positive completion/acknowledgement signals cover the corresponding paths and it does not violate this story's acceptance criteria.
+- Post-fix checks: focused Socket.IO suite passes with 34 tests; the PostgreSQL-enabled root suite passes typecheck, 25 files, and 451 tests; typecheck, lint, tracked-tree Prettier, and whitespace checks pass.
+- Targeted re-review: pending `code-reviewer` because its authentication finding received the substantive transport-state fix; `qa-expert` and `security-engineer` are not repeated because no accepted blocking finding remained in their areas.
+
+Targeted re-review outcome for resumed US-030 at 2026-07-17 15:48:02 MST:
+- `code-reviewer` confirmed later namespace middleware invocations cannot authenticate after the terminal transport mark, but identified one remaining medium race in the original in-flight CONNECT.
+- If that original ticket consumption resolves after the second CONNECT marks the transport terminal but before the scheduled Engine.IO close, the original path can still reserve authenticated capacity and call `next()` because it does not recheck terminal transport state after the await.
+- The next iteration must add a failing race regression that resolves the original consumption while close is pending, recheck the rejected-transport mark and Engine.IO liveness immediately after successful ticket consumption and before capacity reservation, then restart the complete staged review loop.
+- Per the one-targeted-re-review limit, no further substantive implementation changes or commit are permitted in this iteration. `US-030` remains `passes: false`, and `prd.json` remains unchanged.
+
+## 2026-07-17 15:55:00 MST - US-030
+- What was implemented
+  - Resumed the authenticated Socket.IO story and closed the remaining in-flight namespace-authentication race from the prior targeted review.
+  - Rechecked transport closure and the shared terminal-rejection marker immediately after ticket consumption and before capacity reservation, identity assignment, or `next()`.
+  - Added a deterministic real-transport regression proving a valid original middleware continuation cannot authenticate after a concurrent CONNECT makes the Engine.IO transport terminal.
+- Files changed: `AGENTS.md`, `README.md`, `apps/game-server/package.json`, `apps/game-server/src/index.ts`, `apps/game-server/src/runtime.test.ts`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/socket-server.test.ts`, `apps/game-server/src/socket-server.ts`, `bun.lock`, `package.json`, `packages/contracts/src/v1/commands.ts`, `packages/database/src/active-lobby-events.ts`, `packages/database/src/database.integration.test.ts`, `packages/database/src/index.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/round-command-executor.ts`, `tests/contracts-v1.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-030 - Establish authenticated Socket.IO`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts -t "does not authenticate in-flight middleware after its transport becomes terminal"` (expected fail before implementation because a successful CONNECT followed the rate-limit error; pass after implementation)
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts` (pass; 35 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass; typecheck, 25 files, and 452 tests)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `DATABASE_URL=<approved local Compose database> bun run --cwd apps/web build` (pass; all versioned API routes compiled)
+  - `DATABASE_URL=<approved local Compose database> GAME_SERVER_PORT=3102 WEB_ORIGIN=http://localhost:3000 bun -e '<start and close runtime>'` (pass; listener started and closed cleanly)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `websocket-engineer`, `security-engineer`
+  - Used: `websocket-engineer`, `security-engineer` for the deterministic race test, post-await terminal-state guard, Socket.IO lifecycle, and fail-closed security guidance
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive `security-engineer` planned for the complete restaged high-risk diff
+  - Findings: fixed cross-process HTTP fallback event propagation and prior-round private replay payload retention; targeted re-review pending
+- Decisions (why):
+  - Used one shared terminal predicate for the transport close signal, Engine.IO ready state, and transport-wide rejection marker because each represents a distinct way an older async middleware continuation becomes ineligible to authenticate.
+  - Preserved ticket consumption before the terminal recheck because the presented single-use credential must remain burned even when a concurrent namespace attempt rejects the transport.
+  - Suppressed a second internal authentication error after terminal rejection because the transport has already received its stable failure and is closing.
+- **Learnings for future iterations:**
+  - Namespace middleware cancellation is cooperative: a concurrent rejection does not cancel older asynchronous middleware, so every continuation must recheck transport-wide terminal state after its await and before `next()`.
+  - Engine.IO `readyState` alone is insufficient while rejection-triggered closure is scheduled; retain an explicit shared terminal marker for the transport.
+- Known issues / follow-ups:
+  - Automatic reconnect snapshots, transport-recovery continuity, and restart restoration remain assigned to US-031.
+  - Presence aggregation, heartbeat persistence, disconnect generations, and pause grace remain assigned to US-032 and US-033.
+  - The unrelated untracked browser-report artifacts remain untouched and unstaged.
+- Next iteration start:
+  - If review passes, implement US-031 authoritative snapshot restoration; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for resumed US-030 at 2026-07-17 16:11:00 MST:
+- The complete staged `code-reviewer`, `qa-expert`, and `security-engineer` pass produced two blocking medium findings: HTTP fallback command commits had no cross-process delivery path to connected Socket.IO clients, and detached private replay results retained prior-round mark/card payloads. QA also recorded one non-blocking low fixed-timing follow-up; security returned no actionable findings.
+- Added a failing PostgreSQL regression before implementing transaction-scoped `LISTEN`/`NOTIFY` references for committed active-lobby events and a serial subscriber that reloads each durable event after commit.
+- Added a failing runtime relay test before wiring validated notified events through the existing sequence-deduplicated Socket.IO publisher, preserving direct socket-command broadcast-before-ack behavior while deduplicating notification echoes.
+- Added a failing replacement-round regression before stripping `participantPrivateEvent` from detached command results; intent, scope, timestamp, and acknowledgement replay survive without retaining prior-round card/mark data.
+- Updated root guidance and Codebase Patterns with the reusable cross-process post-commit relay contract.
+- Post-fix checks: focused database and runtime regressions pass; `TEST_DATABASE_URL=<approved local Compose database> bun run test` passes typecheck, 25 files, and 454 tests; lint, tracked-tree Prettier, Playwright, web build, live game-server start/close, and whitespace checks pass.
+- Targeted re-review: pending `code-reviewer` and `qa-expert` because their findings received substantive persistence, runtime, and test fixes; `security-engineer` is not repeated because its initial findings list was empty.
+
+Targeted re-review outcome for resumed US-030 at 2026-07-17 16:18:00 MST:
+- `code-reviewer` confirmed the private replay payload stripping but identified one remaining medium relay-lifecycle blocker: a PostgreSQL listener error only marks the subscription closed, so the game server continues serving while later HTTP fallback notifications are silently missed.
+- `qa-expert` identified one remaining medium delivery race: a PostgreSQL notification echo can publish a fresh socket command's sequence before the direct broadcast path; the direct duplicate is currently rejected as stale, causing the command handler to emit `INTERNAL_ERROR` instead of the committed acknowledgement.
+- The findings are in scope because they can leave connected clients stale or misreport a successfully committed realtime command.
+- Per the one-targeted-re-review limit, no further substantive implementation changes or commit are permitted in this iteration. `US-030` remains `passes: false`, and `prd.json` remains unchanged.
+- The non-blocking residual risks remain the fixed negative-event timing windows and the absence of one live HTTP-to-Socket.IO integration journey.
+- Next iteration start: add failing regressions for listener failure propagation and exact duplicate-sequence publication; fail the game-server runtime for supervisor restart (or implement bounded listener recovery with continuity restoration), make exact notification echoes idempotent while retaining stale lower-sequence rejection, rerun all US-030 checks, and restart the complete staged review loop.
+
+## 2026-07-17 16:33:08 MST - US-030
+- What was implemented
+  - Resumed the authenticated Socket.IO story and made active-event subscription, durable reload, and relay failures fatal to the game-server runtime so a supervisor can restore continuity.
+  - Added idempotent shutdown across the PostgreSQL listener, Socket.IO authority, and database connection, with a secret-free runtime completion failure and graceful signal completion.
+  - Made direct/notification event echoes idempotent only for bounded canonical identity matches, while retaining fail-closed rejection for same-sequence conflicts and unknown stale deliveries.
+  - Added deterministic command-race, delayed-echo, sequence-conflict, runtime-supervision, and real PostgreSQL listener-failure regressions.
+- Files changed: `AGENTS.md`, `README.md`, `apps/game-server/package.json`, `apps/game-server/src/index.ts`, `apps/game-server/src/runtime.test.ts`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/socket-server.test.ts`, `apps/game-server/src/socket-server.ts`, `bun.lock`, `package.json`, `packages/contracts/src/v1/commands.ts`, `packages/database/src/active-lobby-events.ts`, `packages/database/src/database.integration.test.ts`, `packages/database/src/index.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/round-command-executor.ts`, `tests/contracts-v1.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-030 - Establish authenticated Socket.IO`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts -t "acknowledges a fresh command when its notification echo publishes first"` (expected fail before implementation because the acknowledgement timed out; pass after implementation)
+  - `bunx vitest run apps/game-server/src/runtime.test.ts -t "fails the runtime and closes every resource when event continuity is lost"` (expected fail before implementation because runtime supervision was absent; pass after implementation)
+  - Focused conflicting-sequence, delayed-echo, and PostgreSQL listener-failure regressions (expected fail before their safeguards; pass after implementation)
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts` (pass; 38 tests)
+  - `bunx vitest run apps/game-server/src/runtime.test.ts` (pass; 11 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass; typecheck, 25 files, and 459 tests)
+  - `bun run lint` (pass after correcting one test-only `prefer-const` issue)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun run format:check` (fails only on three pre-existing untracked browser-report files)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `DATABASE_URL=<approved local Compose database> bun run --cwd apps/web build` (pass; all versioned API routes compiled)
+  - Live game-server listener start/close on `127.0.0.1:3102` (pass; runtime completion resolved after graceful close)
+  - `git diff --check && git diff --cached --check` (pass)
+- Implementation agents:
+  - Recommended: `websocket-engineer`, `security-engineer`
+  - Used: `websocket-engineer`, `security-engineer` for fail-closed listener lifecycle, exact-duplicate identity, conflict handling, bounded history, shutdown races, and focused tests
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive `security-engineer` planned for the complete restaged high-risk diff
+  - Findings: pending staged-diff review
+- Decisions (why):
+  - Chose supervisor restart over in-process `LISTEN` reconnection because PostgreSQL notifications provide no durable cursor that could prove no event was missed during recovery.
+  - Stored a globally bounded recent canonical event fingerprint history in addition to each lobby's sequence watermark because delayed exact echoes can arrive after newer direct deliveries, while sequence-only deduplication could conceal conflicting durable content.
+  - Rejected unknown lower sequences instead of guessing they are duplicates because bounded-history eviction must degrade to resynchronization, not unverified delivery acceptance.
+  - Kept runtime errors generic and discarded underlying listener details so database or event data cannot leak through process failures.
+- **Learnings for future iterations:**
+  - A PostgreSQL `LISTEN` subscription is an authority continuity dependency; listener, reload, or publication failure must terminate serving unless recovery can prove a durable catch-up point.
+  - Notification echoes can lag behind multiple direct Socket.IO broadcasts, so exact-duplicate identity needs bounded recent history rather than only the latest per-lobby fingerprint.
+  - Runtime shutdown needs one idempotent resource promise shared by signal handling and fatal subscription monitoring to avoid double close or partial cleanup.
+- Known issues / follow-ups:
+  - Root `bun run format:check` still scans three unrelated untracked browser-report files; every tracked file passes Prettier and the artifacts remain untouched and unstaged.
+  - Automatic reconnect snapshots, transport-recovery continuity, and restart restoration remain assigned to US-031.
+  - Presence aggregation, heartbeat persistence, disconnect generations, and pause grace remain assigned to US-032 and US-033.
+- Next iteration start:
+  - If review passes, implement US-031 authoritative snapshot restoration; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for resumed US-030 at 2026-07-17 16:48:28 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced four deduplicated blocking root causes: missing notified rows did not fail continuity, unresolved lower-sequence relays could be overtaken while reloading, every authentication rejection did not immediately make the shared transport terminal, and one global subscriber chain caused cross-lobby head-of-line blocking.
+- Added failing regressions first for a missing durable notification target, a blocked first-lobby listener, a relayed sequence whose durable load is pending, and concurrent invalid/valid namespace middleware on one Engine.IO transport.
+- Changed active-event notifications to reserve a sequence in the Socket.IO per-lobby queue before loading the durable event; exact source sequence validation, canonical deduplication, and ordered authorization/emission now run inside that reservation.
+- Replaced the global PostgreSQL delivery chain with self-removing per-lobby chains, and made missing durable events reject the fatal subscription completion signal.
+- Marked every authentication rejection terminal before its deferred transport close so older or sibling async namespace middleware cannot authenticate afterward.
+- Post-fix checks: focused Socket.IO, runtime, and PostgreSQL regressions pass; the approved-local-PostgreSQL root suite passes typecheck, 25 files, and 463 tests; lint passes after one `prefer-const` cleanup; tracked-tree Prettier and whitespace checks pass.
+- The non-blocking low fixed negative-observation windows remain unchanged because the affected positive paths have explicit event-driven completion and replacing all legacy negative waits exceeds this focused remediation. Signal-close rejection hardening also remains a low follow-up; fatal listener shutdown itself is supervised and secret-free.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` because the substantive fixes affect each specialist's findings and the shared realtime/persistence boundary.
+
+Targeted re-review outcome for resumed US-030 at 2026-07-17 17:48:15 MST:
+- `code-reviewer`, `qa-expert`, and `security-engineer` reviewed the revised complete staged diff and identified two deduplicated in-scope medium blockers.
+- A malformed strict auth envelope with a canonical ticket awaits ticket consumption before marking the shared Engine.IO transport terminal, so a concurrent valid namespace CONNECT can authenticate during that burn. The next iteration must add a failing concurrent malformed-envelope regression, mark the transport terminal as soon as rejection is known, retain the bounded ticket burn, and recheck terminal state after every asynchronous consumption.
+- Fatal subscription handling currently awaits `eventSubscription.close()` before closing Socket.IO, while subscription close waits for in-flight per-lobby deliveries. A stalled delivery can therefore leave the authority accepting commands after continuity is lost. The next iteration must add a failing non-resolving-delivery regression and stop serving before awaiting subscription/database drain.
+- The QA request for a production test seam exposing the private per-lobby delivery-map size was discarded because the staged `finally` cleanup is directly reviewable, the cross-lobby concurrency behavior is covered, and adding test-only production observability would not prove additional public behavior.
+- Residual non-blocking risks remain the fixed negative-event observation windows and the absence of one live HTTP-fallback-through-PostgreSQL-to-Socket.IO journey; the existing layers are covered compositionally.
+- Per the one-targeted-re-review limit, no further substantive implementation changes or commit are permitted in this iteration. `US-030` remains `passes: false`, and `prd.json` remains unchanged.
+- Next iteration start: fix the malformed-envelope terminal-mark race and fatal-shutdown serving order with failing regressions first, rerun all US-030 checks, and restart the complete staged review loop.
+
+## 2026-07-17 17:54:39 MST - US-030
+- What was implemented
+  - Resumed the authenticated Socket.IO story and fixed the two remaining blockers from the prior targeted review.
+  - Marked malformed strict-auth transports terminal and emitted their safe rejection before awaiting the required canonical-ticket burn, preventing a concurrent valid namespace CONNECT from authenticating on the rejected Engine.IO transport.
+  - Reordered fatal runtime cleanup so Socket.IO stops accepting commands before subscription drain, while preserving idempotent subscription and database cleanup.
+  - Added deterministic real-transport and stalled-drain regressions for both lifecycle races.
+- Files changed: `AGENTS.md`, `README.md`, `apps/game-server/package.json`, `apps/game-server/src/index.ts`, `apps/game-server/src/runtime.test.ts`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/socket-server.test.ts`, `apps/game-server/src/socket-server.ts`, `bun.lock`, `package.json`, `packages/contracts/src/v1/commands.ts`, `packages/database/src/active-lobby-events.ts`, `packages/database/src/database.integration.test.ts`, `packages/database/src/index.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/round-command-executor.ts`, `tests/contracts-v1.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-030 - Establish authenticated Socket.IO`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts -t "makes a malformed canonical-ticket envelope terminal before burning its ticket"` (expected fail before implementation because the transport remained open while the burn was blocked; pass after implementation)
+  - `bunx vitest run apps/game-server/src/runtime.test.ts -t "stops accepting Socket.IO work before waiting for a stalled subscription drain"` (expected fail before implementation because subscription close blocked server close; pass after implementation)
+  - `bunx vitest run apps/game-server/src/realtime-ticket.test.ts apps/game-server/src/socket-server.test.ts apps/game-server/src/runtime.test.ts tests/contracts-v1.test.ts` (pass; 4 files and 146 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass; typecheck, 25 files, and 465 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `DATABASE_URL=<approved local Compose database> bun run --cwd apps/web build` (pass; all versioned API routes compiled)
+  - Live game-server listener start/close on `127.0.0.1:3102` (pass; runtime completion resolved after graceful close)
+  - `git diff --check && git diff --cached --check` (pass)
+- Implementation agents:
+  - Recommended: `websocket-engineer`, `security-engineer`
+  - Used: skipped additional agents because both recommended specialists already advised US-030 and this resumed iteration directly addressed two concrete prior-review findings
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive `security-engineer` planned for the complete restaged high-risk diff
+  - Findings: pending staged-diff review
+- Decisions (why):
+  - Rejected and scheduled transport closure before awaiting malformed-envelope ticket consumption because the credential still must burn, but persistence latency must not leave a known-invalid shared transport eligible to authenticate.
+  - Stopped Socket.IO before subscription drain rather than recovering the listener in process because the runtime still cannot prove notification continuity without a durable cursor.
+  - Kept cleanup idempotent and failure-safe with nested `finally` blocks so subscription and database resources close even if server shutdown fails.
+- **Learnings for future iterations:**
+  - A known authentication rejection must become transport-wide terminal state before any asynchronous cleanup or credential burn, not after it returns.
+  - Fatal continuity shutdown must stop externally reachable command handling before waiting on the delivery operation that may itself be stalled.
+- Known issues / follow-ups:
+  - Fixed 75 ms negative-event observation windows and the absence of one live HTTP-fallback-to-Socket.IO journey remain non-blocking residual test risks from prior review.
+  - Automatic reconnect snapshots, transport-recovery continuity, and restart restoration remain assigned to US-031; presence and pause behavior remain assigned to US-032 and US-033.
+  - The unrelated untracked browser-report artifacts remain untouched and unstaged.
+- Next iteration start:
+  - If review passes, implement US-031 authoritative snapshot restoration; otherwise resume any recorded blocking finding.
+---

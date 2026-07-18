@@ -76,8 +76,8 @@ gh auth status
 ## Setup
 
 Configuration and dependency changes require maintainer confirmation. Local
-infrastructure and workspace checks are available now; application runtimes
-become available in later stories:
+infrastructure, workspace checks, the web API, and the authenticated Socket.IO
+authority are available now; browser UI stories land later:
 
 1. Clone the repository and enter its root directory.
 2. Confirm the prerequisites above, including `gh auth status`.
@@ -116,10 +116,10 @@ bun run dev:web
 bun run dev:game-server
 ```
 
-`bun run dev:web` is executable and starts the Next.js HTTP API after validating
-runtime configuration and connecting through `DATABASE_URL`. The game-server
-command becomes executable when its application runtime story lands. Both
-processes run locally through Bun, not in the default Compose stack.
+`bun run dev:web` starts the Next.js HTTP API. `bun run dev:game-server` starts
+the separate long-lived Socket.IO authority on `127.0.0.1:3001` by default.
+Both validate runtime configuration and connect through `DATABASE_URL` before
+serving. They run locally through Bun, not in the default Compose stack.
 
 ## Environment
 
@@ -166,10 +166,22 @@ lobby retention. Values must be unsigned decimal integers; invalid errors name
 the setting and constraint without including its supplied value.
 
 `DATABASE_URL` selects the PostgreSQL database used by Prisma migration commands
-and the web API; it has no usable repository default and is required before the
-web process starts. It must target an explicitly approved local or test database
-during development. `TEST_DATABASE_URL` enables the isolated PostgreSQL
-integration suite. The web rate limiter treats the rightmost
+and both application processes; it has no usable repository default and is
+required before either process starts. It must target an explicitly approved
+local or test database during development. `TEST_DATABASE_URL` enables the
+isolated PostgreSQL integration suite.
+
+The game-server listener settings are:
+
+| Variable           | Default                 | Purpose                                       |
+| ------------------ | ----------------------- | --------------------------------------------- |
+| `GAME_SERVER_HOST` | `127.0.0.1`             | Socket.IO listener address                    |
+| `GAME_SERVER_PORT` | `3001`                  | Socket.IO listener port, from 1 through 65535 |
+| `WEB_ORIGIN`       | `http://localhost:3000` | Exact browser origin allowed to connect       |
+
+`WEB_ORIGIN` must be one HTTP or HTTPS origin without credentials, path, query,
+or fragment. Hosted ingress terminates TLS and forwards WebSocket upgrades to
+the configured game-server listener. The web rate limiter treats the rightmost
 `X-Forwarded-For` address as requester identity only when the terminating proxy
 also supplies `X-Gamenight-Trusted-Proxy` with the configured
 `TRUSTED_PROXY_SECRET`. The optional secret must contain at least 32 characters;
@@ -246,6 +258,29 @@ The same-device cookie can offer `Rejoin as <username>` for 120 seconds after
 disconnect. Clearing or losing the cookie removes that proof of identity; the
 person must join as a new participant and waits for the next round if one is
 active. Reconnect never automatically resumes paused calls.
+
+Socket.IO clients connect with strict handshake auth containing only
+`{ schemaVersion: 1, ticket }`. The authority validates the exact browser origin,
+atomically consumes the ticket, discards it, and trusts only the lobby,
+participant, and session identity returned by persistence. Client commands use
+the `v1:command` event. Server messages use `v1:snapshot`, `v1:lobby-event`,
+`v1:private-event`, `v1:ack`, and `v1:error`; chat and event-history commands are
+not defined. A consumed ticket cannot reconnect, so the client must obtain a new
+ticket from the HTTP flow for every new Socket.IO connection.
+Committed lobby events also emit a transaction-scoped PostgreSQL notification.
+The separate game-server process reloads and validates the durable event before
+publishing it, so HTTP fallback commands reach connected clients only after the
+mutation commits. Exact notification echoes are deduplicated against bounded
+canonical event identities. A lost listener or failed relay shuts down the game
+server so its supervisor can restart it rather than serving with uncertain event
+continuity.
+Engine.IO admission and Socket.IO namespace authentication are separately
+bounded by direct peer address. The authority permits at most 10,000 concurrent
+authenticated sockets and eight per participant session. Authenticated commands
+and resyncs are independently bounded per session, and each socket may have only
+one command in flight. If a command, heartbeat, resync, or outbound delivery
+finds that the persisted session is no longer active, the authority disconnects
+that socket before it can remain subscribed to private rooms.
 
 ## Privacy And Security
 
@@ -361,7 +396,8 @@ reference repositories. Retry `gh auth status` before any authenticated fetch.
 ### Socket.IO Does Not Connect
 
 Confirm both development processes are running and the browser uses the correct
-game-server origin/port. Check origin/CORS settings, HTTPS versus HTTP, proxy
+game-server origin/port. Confirm `WEB_ORIGIN` exactly matches the browser origin,
+then check HTTPS versus HTTP, proxy
 WebSocket support, cookie availability, and browser network errors. A ticket is
 single-use and expires after 60 seconds, so reload/reconnect through the normal
 HTTP ticket flow rather than reusing a captured ticket. After server restart,
