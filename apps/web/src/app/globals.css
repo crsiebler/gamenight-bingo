@@ -112,6 +112,18 @@ h2 {
   text-decoration: none;
 }
 
+.hero-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.hero-jump-secondary {
+  background: transparent;
+  color: var(--bingo-ink);
+}
+
 .bingo-board {
   align-self: center;
   background: var(--bingo-ink);
@@ -167,6 +179,43 @@ h2 {
   margin: 0 auto;
   max-width: 82rem;
   padding: 4rem 1.25rem 5rem;
+}
+
+.join-shell {
+  background: var(--bingo-ink);
+  padding: 4.5rem 1.25rem;
+}
+
+.join-form {
+  background: #ffffff;
+  border: 0.2rem solid var(--bingo-gold);
+  border-radius: 1.5rem;
+  box-shadow: 0 1.5rem 4rem rgb(0 0 0 / 24%);
+  color: var(--bingo-ink);
+  display: grid;
+  gap: 1.25rem;
+  margin: 0 auto;
+  max-width: 42rem;
+  padding: clamp(1.25rem, 5vw, 2.5rem);
+}
+
+.join-form > * {
+  min-width: 0;
+}
+
+.join-form button,
+.join-form .form-status {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.join-form #lobby-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
 }
 
 .how-to {
@@ -275,6 +324,10 @@ h2 {
     padding: 5rem 2.5rem 6rem;
   }
 
+  .join-shell {
+    padding: 6rem 2.5rem;
+  }
+
   .landing-grid {
     grid-template-columns: minmax(18rem, 0.8fr) minmax(24rem, 1.2fr);
     padding: 5.5rem 2.5rem 7rem;
@@ -295,6 +348,7 @@ h2 {
 @media (forced-colors: active) {
   .bingo-board,
   .create-form,
+  .join-form,
   .lobby-ready,
   .privacy-note {
     border: 0.125rem solid CanvasText;

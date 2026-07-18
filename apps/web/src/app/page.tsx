@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 
+import { LobbyCodeSchema } from "@gamenight-bingo/contracts";
+import { normalizeLobbyCodeEntry } from "@gamenight-bingo/domain";
 import { patternCatalog } from "@gamenight-bingo/patterns";
 
 import { PublicLandingPage } from "@/templates";
@@ -12,6 +14,15 @@ export const metadata: Metadata = {
 
 const patternOptions = patternCatalog.map(({ category, id, name }) => ({ category, id, name }));
 
-export default function HomePage() {
-  return <PublicLandingPage patterns={patternOptions} />;
+type HomePageProps = {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default async function HomePage({ searchParams = Promise.resolve({}) }: HomePageProps) {
+  const codeParameter = (await searchParams)["code"];
+  const normalizedCode =
+    typeof codeParameter === "string" ? normalizeLobbyCodeEntry(codeParameter) : "";
+  const initialLobbyCode = LobbyCodeSchema.safeParse(normalizedCode).success ? normalizedCode : "";
+
+  return <PublicLandingPage initialLobbyCode={initialLobbyCode} patterns={patternOptions} />;
 }

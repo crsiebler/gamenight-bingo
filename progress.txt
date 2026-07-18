@@ -60,6 +60,7 @@ Next story: US-001
 - After removing a temporary App Router browser harness, run the final production Next build before typecheck so generated `.next/types` no longer reference deleted preview pages, then restore any unrelated `next-env.d.ts` working-tree side effect without staging it.
 - Multi-step browser entry flows allocate one stable command ID per persisted step, prevent duplicate submission, retain completed-step state after partial failure, and retry only the unfinished command; public landing metadata and pattern choices derive from the same visible/canonical source rather than duplicate browser data.
 - Browser mutation clients treat non-success responses as definitive only when a strict error contract correlates to the outgoing command ID; malformed, missing-ID, and mismatched-ID responses remain ambiguous and replay through the original command session.
+- Status-driven forms may move focus into newly revealed controls only when focus remains within the form or was removed with the prior control; asynchronous refreshes must preserve focus that the user moved to another workflow.
 
 Append-only iteration log
 -------------------------
@@ -4448,3 +4449,121 @@ Targeted re-review outcome for US-045 at 2026-07-18 06:45:20 MST:
 - Next iteration start:
   - If review passes, implement US-046 typed/pasted code entry and same-device rejoin flows; otherwise resume any recorded blocking finding.
 ---
+
+## 2026-07-18 07:27:48 MST - US-046
+- What was implemented
+  - Added a responsive join panel to the public landing page with typed/pasted case-insensitive lobby-code normalization, accessible focused validation, and locator-only invite query prefilling.
+  - Added strict same-device status lookup plus stable-command join/rejoin flow sessions that parse versioned contracts, correlate mutation results, preserve ambiguous requests for replay, and never claim participant identity from the URL or browser-readable cookie data.
+  - Presented server-authoritative new-participant, active-session, rejoin-before-deadline, playing, and waiting states; normalized usernames through the domain rule and refreshed status at the exact rejoin deadline before offering new join.
+  - Added flow, form, timer, privacy, waiting-state, invite-parameter, and accessibility-focused tests plus responsive browser verification against an isolated migrated local database.
+- Files changed: `apps/web/src/app/globals.css`, `apps/web/src/app/page.tsx`, `apps/web/src/components/organisms/index.ts`, `apps/web/src/components/organisms/join-lobby-form.tsx`, `apps/web/src/components/organisms/join-lobby-form.test.tsx`, `apps/web/src/components/templates/public-landing-page.tsx`, `apps/web/src/components/templates/public-landing-page.test.tsx`, `apps/web/src/lib/index.ts`, `apps/web/src/lib/lobby-entry-flow.ts`, `apps/web/src/lib/lobby-entry-flow.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-046 - Build join and same-device rejoin flows`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/components/templates/public-landing-page.test.tsx` (expected fail before implementation because the join form and invite prefill were absent; pass after implementation)
+  - `bunx vitest run apps/web/src/components/organisms/join-lobby-form.test.tsx` (expected fail before implementation for lookup, validation, normalized join, deadline, and active-session behavior; pass after implementation)
+  - `bunx vitest run apps/web/src/lib/lobby-entry-flow.test.ts` (expected fail before implementation because the flow module was absent; pass after implementation with 6 tests)
+  - Focused join/rejoin suite (pass after review remediation; 3 files and 19 tests)
+  - `bun run test` (pass after review remediation; typecheck, 30 files passed, 1 database file skipped, 500 tests passed, and 135 database-backed tests skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - Focused Prettier check for all intended story files (pass)
+  - `bun run format:check` (fails only on unrelated pre-existing untracked Lighthouse/DOM/browser artifacts; every intended story file passes)
+  - `DATABASE_URL=<isolated approved local database> bun run --cwd apps/web build` (pass; dynamic invite page and all versioned API routes compiled)
+  - `bun run test:e2e` (pass; Playwright smoke passed and the database-gated live route test skipped without `TEST_DATABASE_URL`)
+  - `git diff --check` (pass)
+  - Manual dev-browser verification at 375px mobile and 1440px desktop (pass; invite prefill, lowercase normalization, focused/announced invalid code, new join, whitespace-normalized username, active-round waiting result, scoped active-session result, responsive layout, and clean final console)
+  - Mobile Lighthouse snapshot (pass; accessibility 100, best practices 100, SEO 100, and agentic browsing 100)
+- Implementation agents:
+  - Recommended: none
+  - Used: `frontend-developer` for minimal component/flow boundaries, deadline and stale-response risks, accessibility states, and focused browser/test guidance because this was a complex frontend entry flow
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, security-triggered `security-engineer`, and UI/UX-triggered `ui-designer`/`ux-researcher` planned for the complete staged diff
+  - Findings: fixed replayed-join credential verification, ambiguous-rejoin expiry unlock, revealed-state focus, and lobby-specific lookup recovery copy; targeted re-review pending
+- Decisions (why):
+  - Required an explicit `Find lobby` action after invite prefill because a lobby code is only a locator and loading a URL must not silently authenticate or expose same-device identity.
+  - Reused the server's strict session-status and lobby-entry projections instead of inferring active rounds, waiting eligibility, cookie state, or rejoin validity in the browser.
+  - Kept one stable command session per join/rejoin attempt and treated malformed or mismatched mutation responses as ambiguous because HTTP status alone cannot prove whether a durable entry mutation committed.
+  - Used the persisted `rejoinUntil` only to remove the stale action and trigger a fresh authoritative status query; the browser does not extend or reclaim the participant slot itself.
+  - Added the join panel to the existing public page rather than creating the private lobby route owned by US-047.
+- **Learnings for future iterations:**
+  - Invite query handling should accept only a scalar validated lobby locator, pass no participant fields, and require an explicit status lookup before rendering identity-scoped actions.
+  - Same-device UI must treat the HttpOnly cookie as opaque: render only strict server status, remove rejoin at the exclusive deadline, and refresh authority rather than deriving lifecycle state locally.
+  - Entry success text should preserve the server-provided `roundEligibility`; active-round new participants need an explicit waiting-for-next-round message rather than a browser-derived game state.
+- Known issues / follow-ups:
+  - The isolated `gamenight_bingo_us046_browser` local browser database remains in the existing PostgreSQL volume; no existing local data was deleted.
+  - US-047 owns navigation from successful entry into the private sharing/lobby page, so this story intentionally stops at the authoritative joined/active status.
+  - Root `bun run format:check` remains blocked by unrelated pre-existing untracked browser-report artifacts; all intended story files pass Prettier.
+- Next iteration start:
+  - If review passes, implement US-047 private sharing and lobby pages; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-046 at 2026-07-18 07:46:31 MST:
+- The initial `code-reviewer`, `qa-expert`, `security-engineer`, `ui-designer`, and `ux-researcher` pass produced three deduplicated blocking root causes plus one specific low-severity recovery-copy improvement; security review returned no blocking findings.
+- Added failing regressions proving an idempotent join replay must verify the cookie-scoped active participant before reporting success, an ambiguous rejoin must unlock new join after its authoritative deadline refresh, and focus must move into newly revealed player-name/rejoin controls.
+- Replayed joins now query strict same-device status through the same requester and accept immutable metadata only when the scoped cookie resolves to the exact active player; missing credentials produce a terminal private-session error instead of an inaccessible success state.
+- Deadline refresh now retires the ambiguous rejoin runner/lock when authority no longer offers rejoin, and controlled focus follows new-participant/rejoin status only after pending controls become enabled.
+- Mapped status `NOT_FOUND` to actionable lobby-specific copy while preserving the stable contract code internally.
+- Post-fix checks: focused suite passes 19 tests, root suite passes typecheck with 30 files and 500 tests, lint and intended formatting pass, production Next build passes, and staged/unstaged whitespace checks pass.
+- Targeted re-review: `code-reviewer` and `qa-expert` for replay/lock correctness and tests, plus `ui-designer` for focus remediation; security is not repeated because its initial findings list was empty and the fix adds credential verification, while UX is not repeated because its only low finding received a copy-only fix.
+
+Targeted re-review outcome for US-046 at 2026-07-18 07:49:00 MST:
+- `code-reviewer` and `qa-expert` confirmed replayed-join credential verification is resolved but identified one deduplicated medium recovery blocker: if the automatic deadline status refresh fails, a later successful manual lookup can reveal new join without clearing the retained ambiguous rejoin runner/lock, leaving the username disabled.
+- `ui-designer` identified one medium focus blocker during live verification: the status-driven focus effect can pull focus back into the join form when the user has already moved to the separate host form, including when a rejoin deadline refresh settles.
+- Both findings are in scope because they can trap the required post-deadline new-join path or disrupt keyboard/screen-reader task completion.
+- Per the one-targeted-re-review limit, no further substantive fixes or specialist review are permitted in this iteration. `US-046` remains `passes: false`, `prd.json` remains unchanged, and no commit was created.
+- Next iteration start: centralize authoritative status application so every transition away from rejoin clears the stale runner/lock, add the failed-deadline-refresh then manual-recovery regression, and gate focus transfer to focus that remains within or was removed from the join form; add external-focus preservation coverage, rerun checks/browser verification, and restart the complete staged review loop.
+
+## 2026-07-18 08:02:15 MST - US-046
+- What was implemented
+  - Resumed the blocked join/rejoin story and centralized authoritative session-status application so every transition away from rejoin retires a stale ambiguous runner and unlocks new-participant entry.
+  - Gated status-driven focus transfer to interactions that remain inside the join form or whose focused control was removed, preserving focus after the user moves to the separate host workflow.
+  - Added regressions for failed automatic deadline refresh followed by successful manual recovery and for external-focus preservation across a deadline transition.
+- Files changed: `apps/web/src/app/globals.css`, `apps/web/src/app/page.tsx`, `apps/web/src/components/organisms/index.ts`, `apps/web/src/components/organisms/join-lobby-form.tsx`, `apps/web/src/components/organisms/join-lobby-form.test.tsx`, `apps/web/src/components/templates/public-landing-page.tsx`, `apps/web/src/components/templates/public-landing-page.test.tsx`, `apps/web/src/lib/index.ts`, `apps/web/src/lib/lobby-entry-flow.ts`, `apps/web/src/lib/lobby-entry-flow.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-046 - Build join and same-device rejoin flows`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/components/organisms/join-lobby-form.test.tsx` (expected fail before implementation: 2 blocker regressions failed; pass after implementation with 8 tests)
+  - Focused join/rejoin suite (pass after review remediation; 3 files and 28 tests)
+  - `bun run test` (pass after review remediation; typecheck, 30 files passed, 1 database file skipped, 509 tests passed, and 135 database-backed tests skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - Focused Prettier check for all intended story files (pass)
+  - `bun run format:check` (fails only on three unrelated pre-existing untracked Lighthouse/DOM artifacts; every intended story file passes)
+  - `DATABASE_URL=<approved local database> bun run --cwd apps/web build` (pass; dynamic invite page and all versioned API routes compiled)
+  - `bun run test:e2e` (pass; Playwright smoke passed and the database-gated live route test skipped without `TEST_DATABASE_URL`)
+  - `git diff --check && git diff --cached --check` (pass)
+  - Manual dev-browser blocker verification (pass; external and cleared body focus survived deadline refresh, failed refresh/manual recovery and correlated unauthorized rejoin exposed an enabled and focused player-name field, a 128-character username stayed within the 500px viewport, and console remained clean)
+- Implementation agents:
+  - Recommended: none
+  - Used: skipped in this resumed iteration because `frontend-developer` already advised US-046 and the remaining work followed two concrete targeted-review findings
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and UI-triggered `ui-designer`; targeted re-review planned for all three after substantive fixes
+  - Findings: fixed deadline-refresh/mutation serialization, expired-cookie focus, strict error-correlation and concurrent-run coverage, maximum-username overflow, and overly broad body-focus transfer before targeted re-review
+- Decisions (why):
+  - Applied every strict authoritative status through one transition helper because manual lookup and automatic deadline refresh must retire ambiguous rejoin state identically.
+  - Tracked whether focus transfer originated in the join form rather than focusing solely from rendered status because asynchronous resolution must not interrupt a different task the user has already entered.
+  - Did not rerun security review because the resumed changes only retire stale client state and constrain focus; the prior complete security pass had no blocking findings and no trust boundary changed.
+- **Learnings for future iterations:**
+  - Asynchronous conditional forms need an explicit focus-origin guard; rendered status alone is not enough to distinguish helpful reveal focus from disruptive focus theft.
+  - All authoritative status entry points must share retirement behavior for command sessions retained after ambiguous mutations, including recovery after a failed automatic refresh.
+- Known issues / follow-ups:
+  - US-047 owns navigation from successful entry into the private sharing/lobby page, so this story intentionally stops at the authoritative joined/active status.
+  - Root `bun run format:check` remains blocked by unrelated pre-existing untracked browser-report artifacts; all intended story files pass Prettier.
+- Next iteration start:
+  - If review passes, implement US-047 private sharing and lobby pages; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-046 at 2026-07-18 08:19:55 MST:
+- The fresh initial `code-reviewer`, `qa-expert`, and `ui-designer` pass produced six deduplicated medium findings: an in-flight rejoin/deadline race, missing expired-cookie focus, strict error-correlation and concurrent-run test gaps, maximum-username overflow, and overly broad body-focus permission.
+- Added failing fake-timer and focus regressions before deferring deadline refresh while an entry mutation is pending, preserving new-player focus after correlated `UNAUTHORIZED`, and restricting automatic focus transfer to focus actually owned by the join form.
+- Added transport regressions for null/mismatched/strictly correlated error command IDs and concurrent `run()` deduplication; these passed against the existing stable-command implementation.
+- Constrained join-form children, buttons, and status text so maximum-length unbroken usernames wrap within the card at narrow viewports.
+- Post-fix checks: focused suite passes 28 tests, root suite passes typecheck with 509 tests and 135 database-backed skips, lint passes, production Next build passes, intended formatting passes after formatting the changed component, and whitespace checks pass.
+- Post-fix dev-browser verification confirmed a 128-character rejoin username keeps document width equal to the 500px viewport, cleared body focus remains on the body through deadline refresh, correlated unauthorized rejoin focuses the enabled player-name field, and the console remains clean.
+- Targeted re-review: `code-reviewer`, `qa-expert`, and `ui-designer` because the substantive fixes address correctness, test, focus/accessibility, and responsive-layout findings from all three specialists.
+
+Targeted re-review outcome for US-046 at 2026-07-18 08:27:50 MST:
+- `code-reviewer`, `qa-expert`, and `ui-designer` returned empty actionable finding lists; all six initial review root causes are resolved.
+- Residual risk is limited to the 135 database-backed tests and database-gated live Playwright route test skipped without `TEST_DATABASE_URL`; focused client/component coverage and live browser verification cover the remediated paths.
+- US-046 has no unresolved in-scope critical, high, or medium findings.

@@ -3,7 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { metadata } from "../../app/page.js";
+import HomePage, { metadata } from "../../app/page.js";
 import { PublicLandingPage } from "./public-landing-page.js";
 
 const patterns = [{ id: "standard-one-line", name: "One Line", category: "standard" }] as const;
@@ -14,8 +14,29 @@ describe("PublicLandingPage", () => {
 
     expect(screen.getByRole("heading", { level: 1, name: /bingo night/i })).toBeVisible();
     expect(screen.getByRole("form", { name: /create a private lobby/i })).toBeVisible();
+    expect(screen.getByRole("form", { name: /join a private lobby/i })).toBeVisible();
     expect(metadata.title).toBe("GameNight Bingo | Create a private bingo lobby");
     expect(metadata.description).toMatch(/private 75-ball bingo/i);
+  });
+
+  it("prefills an invite code without treating it as participant identity", () => {
+    render(<PublicLandingPage initialLobbyCode="abc234" patterns={patterns} />);
+
+    expect(screen.getByRole("textbox", { name: /lobby code/i })).toHaveValue("ABC234");
+    expect(screen.getByRole("button", { name: /find lobby/i })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /rejoin as/i })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: /player name/i })).toBeNull();
+  });
+
+  it("accepts only the scalar invite locator from page search parameters", async () => {
+    render(
+      await HomePage({
+        searchParams: Promise.resolve({ code: "abc234", username: "must-not-prefill" }),
+      }),
+    );
+
+    expect(screen.getByRole("textbox", { name: /lobby code/i })).toHaveValue("ABC234");
+    expect(screen.queryByDisplayValue("must-not-prefill")).toBeNull();
   });
 
   it("keeps public JSON-LD in parity with the visible HowTo steps", () => {

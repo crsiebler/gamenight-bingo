@@ -1,5 +1,5 @@
 import { JsonLd } from "@/atoms";
-import { CreateLobbyForm } from "@/organisms";
+import { CreateLobbyForm, JoinLobbyForm } from "@/organisms";
 
 type PatternOption = {
   category: "standard" | "shape" | "letter" | "number" | "christmas";
@@ -8,6 +8,7 @@ type PatternOption = {
 };
 
 type PublicLandingPageProps = {
+  initialLobbyCode?: string;
   patterns: readonly PatternOption[];
 };
 
@@ -45,7 +46,7 @@ const publicSchema = {
   ],
 } as const;
 
-export function PublicLandingPage({ patterns }: PublicLandingPageProps) {
+export function PublicLandingPage({ initialLobbyCode, patterns }: PublicLandingPageProps) {
   return (
     <main>
       <JsonLd schema={publicSchema} />
@@ -57,9 +58,14 @@ export function PublicLandingPage({ patterns }: PublicLandingPageProps) {
             Host a lively, account-free game for your favorite people. You set the pattern and pace;
             GameNight Bingo keeps the round together.
           </p>
-          <a className="hero-jump" href="#create-lobby">
-            Start a lobby
-          </a>
+          <div className="hero-actions">
+            <a className="hero-jump" href="#create-lobby">
+              Start a lobby
+            </a>
+            <a className="hero-jump hero-jump-secondary" href="#join-lobby">
+              Join with a code
+            </a>
+          </div>
         </div>
         <div aria-hidden="true" className="bingo-board">
           <span className="board-label">B</span>
@@ -76,6 +82,10 @@ export function PublicLandingPage({ patterns }: PublicLandingPageProps) {
             </span>
           ))}
         </div>
+      </section>
+
+      <section className="join-shell" id="join-lobby">
+        <JoinLobbyForm initialLobbyCode={initialLobbyCode ?? ""} />
       </section>
 
       <section className="landing-grid">
