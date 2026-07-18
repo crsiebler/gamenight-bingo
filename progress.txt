@@ -4091,3 +4091,57 @@ Targeted re-review outcome for US-041 at 2026-07-18 03:18:28 MST:
 - `code-reviewer`, `qa-expert`, and `postgres-pro` reviewed the revised complete staged diff and returned empty actionable finding lists.
 - Latest-ball completion carry-forward, normal and exhausted automatic scheduling, full two-stage state preservation, and the corrected persisted timeline resolve every initial finding.
 - No in-scope critical, high, or medium findings remain; US-041 can be marked passing and committed after the final consistency check.
+
+## 2026-07-18 03:44:17 MST - US-042
+- What was implemented
+  - Added one acceptance-level PostgreSQL regression that drives a settled result through end and replacement-round commands while retaining the existing participants and promoting a waiting participant.
+  - Proved the replacement has a new round and card identities, a complete private 75-ball draw order, no calls, marks, winners, timers, or prior result fields, and only fresh-round state in the waiting participant's authorized snapshot.
+  - Verified the prior round, cards, marks, calls, draw positions, and co-winners are physically cascade-deleted rather than retained as browsable result history.
+- Files changed: `packages/database/src/database.integration.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-042 - Start another round without result history`
+- Auto approval: `enabled`
+- Checks:
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "replaces an ended result with a fresh round"` (pass; the acceptance behavior already existed from prior dependency stories)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (initial pass with typecheck, 25 files, and 581 tests; post-format reruns hit the known database-backed Socket.IO restart timeout/fake-timer cascade and one cross-file concurrency hang)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run apps/game-server/src/socket-server.test.ts -t "recovers one persisted automatic call after authority restart"` (pass; isolated the initiating flaky test)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run apps/game-server/src/socket-server.test.ts` (pass; 102 tests after isolation)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test:database` (pass; 126 tests)
+  - `bun run test` (pass; typecheck, 24 files passed, 1 database file skipped, 452 tests passed, and 129 database-backed tests skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `bun run format:check` (fails only on three pre-existing untracked Lighthouse/DOM artifacts)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: none
+  - Used: `postgres-pro` for focused guidance on the smallest acceptance-test gap, replacement transaction ordering, cascade assertions, and replay-tombstone risks because this is a persistence/data-integrity story
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`; targeted re-review by `qa-expert` after the substantive snapshot-coverage fix
+  - Findings: fixed incomplete snapshot privacy/stale-state assertions; discarded a low staged-file-list comment because `prd.json` is intentionally added only after review passes
+- Decisions (why):
+  - Added a single end-to-end database test instead of changing production code because the create-round transaction already implemented every US-042 behavior through earlier round-control, waiting-player, expiry, and replay-integrity stories.
+  - Asserted physical deletion of prior gameplay tables separately from active event and command-result tombstones because replay identity is retained intentionally while prior cards, calls, marks, draw order, winners, and result state must not survive.
+  - Testing decision: this iteration adds acceptance coverage for existing behavior rather than changing behavior, so a red production test was not applicable; the new test passed immediately and no speculative implementation change was made.
+- **Learnings for future iterations:**
+  - Dependency-ordered stories can pre-land production behavior required by a later acceptance story; when focused acceptance coverage passes immediately, preserve the working transaction and add only the missing proof.
+  - Fresh-round assertions should distinguish current gameplay state, which is replaced and cascade-deleted, from intent-only replay tombstones and active sequence records, which remain private and non-browsable until lobby deletion.
+- Known issues / follow-ups:
+  - Root `bun run format:check` remains blocked by unrelated untracked Lighthouse/DOM artifacts; every tracked file passes Prettier.
+  - The unrelated `apps/web/next-env.d.ts` side effect and untracked browser-report artifacts remain untouched and will not be staged.
+- Next iteration start:
+  - If review passes, implement US-043 inactive-lobby expiry; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-042 at 2026-07-18 03:58:18 MST:
+- The initial `code-reviewer` and `qa-expert` pass produced one medium test-coverage finding and one low bookkeeping comment.
+- Strengthened the replacement snapshot regression to validate the full v1 contract and reject the old round ID, every prior card ID, every fresh foreign card ID, private draw-order/event/command-history fields, and stale result/winner fields.
+- The low `prd.json` staged-file-list comment was not applied because Ralph requires the intended final metadata file to be recorded before it is added only after the specialist review passes.
+- Post-fix checks: the focused replacement test, all 126 database integration tests, typecheck, lint, tracked formatting, and diff checks pass.
+- Targeted re-review: pending `qa-expert` because the substantive finding was limited to test coverage.
+
+Targeted re-review outcome for US-042 at 2026-07-18 03:58:18 MST:
+- `qa-expert` reviewed the revised complete staged diff and returned an empty actionable finding list with no residual risks.
+- Strict snapshot parsing plus explicit old-round, old/foreign-card, private-order/history, and stale-result exclusions resolve the initial medium finding.
+- No in-scope critical, high, or medium findings remain; US-042 can be marked passing and committed after the final consistency check.

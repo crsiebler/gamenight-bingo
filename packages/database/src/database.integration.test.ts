@@ -5668,6 +5668,152 @@ describeDatabase("PostgreSQL durable game state", () => {
     });
   });
 
+  test("replaces an ended result with a fresh round for every eligible participant", async () => {
+    const occurredAt = new Date("2026-07-17T09:17:00.000Z");
+    const connection = await connectWithRoundCommands(() => occurredAt);
+    const state = createLobbyState();
+    await createPersistedLobby(connection, state);
+    const suffix = randomUUID();
+    const waitingTokenHash = new Uint8Array(randomBytes(32));
+    const waiting = await connection.lobbyStates.joinLobbyWithSession({
+      lobbyId: state.lobby.id,
+      lobbyCode: state.lobby.code,
+      participantId: `participant-next-round-${suffix}`,
+      sessionId: `session-next-round-${suffix}`,
+      commandId: `join-next-round-${suffix}`,
+      username: "Next Round Player",
+      tokenHash: waitingTokenHash,
+      issuedAt: occurredAt,
+      maxPlayersPerLobby: 3,
+    });
+    if (!waiting.ok) throw new Error(waiting.error.message);
+    expect(waiting.entry.roundEligibility).toBe("waiting");
+
+    await expect(
+      connection.roundCommands.execute({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: state.sessions[0]!.tokenHash,
+        command: EndRoundCommandSchema.parse({
+          schemaVersion: 1,
+          type: "end-round",
+          commandId: `end-before-replacement-${suffix}`,
+        }),
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    const replacement = await connection.roundCommands.execute({
+      lobbyId: state.lobby.id,
+      sessionTokenHash: state.sessions[0]!.tokenHash,
+      command: CreateRoundCommandSchema.parse({
+        schemaVersion: 1,
+        type: "create-round",
+        commandId: `create-replacement-${suffix}`,
+      }),
+    });
+    expect(replacement).toMatchObject({
+      ok: true,
+      activeLobbyEvent: {
+        type: "stage",
+        round: { stage: "waiting", patternId: "standard-one-line" },
+      },
+    });
+
+    const restored = await connection.lobbyStates.findById(state.lobby.id);
+    const replacementRound = restored?.round;
+    expect(replacementRound).toMatchObject({
+      stage: "waiting",
+      initialPatternId: "standard-one-line",
+      currentPatternId: "standard-one-line",
+      callMode: "manual",
+      callIntervalSeconds: null,
+      startedAt: null,
+      activeAt: null,
+      pausedAt: null,
+      pauseReason: null,
+      nextCallAt: null,
+      coWinnerTriggeringCallId: null,
+      coWinnerOpenedAt: null,
+      coWinnerClosesAt: null,
+      resultSettledAt: null,
+      endedAt: null,
+      calls: [],
+      coWinners: [],
+    });
+    expect(replacementRound?.id).not.toBe(state.round!.id);
+    expect(replacementRound?.drawOrder).toHaveLength(75);
+    expect(new Set(replacementRound?.drawOrder.map(({ ball }) => ball))).toEqual(
+      new Set(Array.from({ length: 75 }, (_, index) => index + 1)),
+    );
+    expect(replacementRound?.cards).toHaveLength(3);
+    expect(replacementRound?.cards.map(({ participantId }) => participantId).sort()).toEqual(
+      [...state.participants.map(({ id }) => id), waiting.entry.participantId].sort(),
+    );
+    expect(replacementRound?.cards.every(({ marks }) => marks.length === 0)).toBe(true);
+    expect(
+      replacementRound?.cards.every(
+        ({ id }) => !state.round!.cards.some((priorCard) => priorCard.id === id),
+      ),
+    ).toBe(true);
+    const eligibleParticipants = restored?.participants.filter(
+      ({ departedAt }) => departedAt === null,
+    );
+    expect(eligibleParticipants?.map(({ id }) => id).sort()).toEqual(
+      [...state.participants.map(({ id }) => id), waiting.entry.participantId].sort(),
+    );
+    expect(
+      eligibleParticipants?.every(({ roundEligibility }) => roundEligibility === "playing"),
+    ).toBe(true);
+
+    const priorRows = await pool.query<{
+      rounds: number;
+      draw_positions: number;
+      cards: number;
+      calls: number;
+      marks: number;
+      co_winners: number;
+    }>(
+      `SELECT (SELECT COUNT(*)::int FROM rounds WHERE id = $1) AS rounds,
+              (SELECT COUNT(*)::int FROM draw_positions WHERE round_id = $1) AS draw_positions,
+              (SELECT COUNT(*)::int FROM cards WHERE round_id = $1) AS cards,
+              (SELECT COUNT(*)::int FROM calls WHERE round_id = $1) AS calls,
+              (SELECT COUNT(*)::int FROM marks WHERE round_id = $1) AS marks,
+              (SELECT COUNT(*)::int FROM co_winners WHERE round_id = $1) AS co_winners`,
+      [state.round!.id],
+    );
+    expect(priorRows.rows[0]).toEqual({
+      rounds: 0,
+      draw_positions: 0,
+      cards: 0,
+      calls: 0,
+      marks: 0,
+      co_winners: 0,
+    });
+    const snapshot = await connection.lobbyStates.findAuthorizedSnapshot({
+      lobbyId: state.lobby.id,
+      tokenHash: waitingTokenHash,
+    });
+    expect(SnapshotSchema.safeParse(snapshot).success).toBe(true);
+    expect(snapshot).toMatchObject({
+      round: { id: replacementRound?.id, stage: "waiting" },
+      self: { id: waiting.entry.participantId, roundEligibility: "playing" },
+      ownCard: { participantId: waiting.entry.participantId },
+      ownMarks: [],
+      calls: [],
+    });
+    const serializedSnapshot = JSON.stringify(snapshot);
+    expect(serializedSnapshot).not.toContain(state.round!.id);
+    for (const privateCardId of [
+      ...state.round!.cards.map(({ id }) => id),
+      ...(replacementRound?.cards
+        .filter(({ participantId }) => participantId !== waiting.entry.participantId)
+        .map(({ id }) => id) ?? []),
+    ]) {
+      expect(serializedSnapshot).not.toContain(privateCardId);
+    }
+    expect(serializedSnapshot).not.toMatch(
+      /"(?:drawOrder|drawPositions|events|commandResults|result|winnerParticipantIds)"/,
+    );
+  });
+
   test("preserves command replay intent when an ended round is replaced", async () => {
     const occurredAt = new Date("2026-07-17T09:17:00.000Z");
     const connection = await connectWithRoundCommands(() => occurredAt);
