@@ -5861,6 +5861,181 @@ describeDatabase("PostgreSQL durable game state", () => {
     ]);
   });
 
+  test("rejects uncalled and foreign-card marks without changing durable state", async () => {
+    const occurredAt = new Date("2026-07-17T09:07:30.000Z");
+    const connection = await connectWithRoundCommands(() => occurredAt);
+    const base = createLobbyState();
+    const state: DurableLobbyState = {
+      ...base,
+      lobby: {
+        ...base.lobby,
+        lastEventSequence: 0n,
+        lastActivityAt: new Date("2026-07-17T08:03:00.000Z"),
+      },
+      round: {
+        ...base.round!,
+        stage: "active",
+        coWinnerTriggeringCallId: null,
+        coWinnerOpenedAt: null,
+        coWinnerClosesAt: null,
+        resultSettledAt: null,
+        coWinners: [],
+      },
+      events: [],
+      commandResults: [],
+    };
+    await createPersistedLobby(connection, state);
+    const executeMark = (commandId: string, ball: number) =>
+      connection.roundCommands.executeAuthenticated({
+        lobbyId: state.lobby.id,
+        participantId: state.participants[1]!.id,
+        participantSessionId: state.sessions[1]!.id,
+        command: MarkCardCommandSchema.parse({
+          schemaVersion: 1,
+          type: "mark-card",
+          commandId,
+          ball,
+        }),
+      });
+
+    await expect(executeMark(`mark-uncalled-${randomUUID()}`, 6)).resolves.toEqual({
+      ok: false,
+      error: { code: "INVALID_COMMAND" },
+    });
+    await expect(executeMark(`mark-foreign-card-${randomUUID()}`, 1)).resolves.toEqual({
+      ok: false,
+      error: { code: "INVALID_COMMAND" },
+    });
+
+    const restored = await connection.lobbyStates.findById(state.lobby.id);
+    expect(restored?.lobby).toMatchObject({
+      lastEventSequence: 0n,
+      lastActivityAt: state.lobby.lastActivityAt,
+    });
+    expect(
+      restored?.round?.cards.find(
+        ({ participantId }) => participantId === state.participants[1]!.id,
+      )?.marks,
+    ).toEqual([]);
+    expect(restored?.events).toEqual([]);
+    expect(restored?.commandResults).toEqual([]);
+  });
+
+  test("deduplicates repeated marks across command IDs and repository instances", async () => {
+    let now = new Date("2026-07-17T09:07:45.000Z");
+    const markId = `mark-idempotent-${randomUUID()}`;
+    const connection = await connectWithRoundCommands(() => now, {
+      nextId: (prefix) => (prefix === "mark" ? markId : `${prefix}-${randomUUID()}`),
+    });
+    const base = createLobbyState();
+    const playerCard = base.round!.cards[1]!;
+    const state: DurableLobbyState = {
+      ...base,
+      lobby: { ...base.lobby, lastEventSequence: 0n },
+      round: {
+        ...base.round!,
+        stage: "active",
+        coWinnerTriggeringCallId: null,
+        coWinnerOpenedAt: null,
+        coWinnerClosesAt: null,
+        resultSettledAt: null,
+        coWinners: [],
+        cards: [
+          base.round!.cards[0]!,
+          { ...playerCard, cells: [1, ...playerCard.cells.slice(1)], marks: [] },
+        ],
+      },
+      events: [],
+      commandResults: [],
+    };
+    await createPersistedLobby(connection, state);
+    const executeMark = (commandId: string) =>
+      connection.roundCommands.executeAuthenticated({
+        lobbyId: state.lobby.id,
+        participantId: state.participants[1]!.id,
+        participantSessionId: state.sessions[1]!.id,
+        command: MarkCardCommandSchema.parse({
+          schemaVersion: 1,
+          type: "mark-card",
+          commandId,
+          ball: 1,
+        }),
+      });
+
+    const first = await executeMark(`mark-first-${randomUUID()}`);
+    now = new Date("2026-07-17T09:07:46.000Z");
+    const repeated = await executeMark(`mark-repeated-${randomUUID()}`);
+    const restoredConnection = await connect();
+    const restored = await restoredConnection.lobbyStates.findById(state.lobby.id);
+    const restoredSnapshot = await restoredConnection.lobbyStates.findAuthorizedSnapshot({
+      lobbyId: state.lobby.id,
+      tokenHash: state.sessions[1]!.tokenHash,
+    });
+
+    expect(first).toMatchObject({
+      ok: true,
+      acknowledgement: {
+        scope: "participant-private",
+        eventSequence: null,
+        idempotentReplay: false,
+      },
+      activeLobbyEvent: null,
+      participantPrivateEvent: {
+        type: "mark-result",
+        mark: {
+          id: markId,
+          cardId: playerCard.id,
+          ball: 1,
+          markedAt: "2026-07-17T09:07:45.000Z",
+        },
+      },
+    });
+    expect(repeated).toMatchObject({
+      ok: true,
+      acknowledgement: {
+        scope: "participant-private",
+        eventSequence: null,
+        idempotentReplay: false,
+      },
+      activeLobbyEvent: null,
+      participantPrivateEvent: {
+        type: "mark-result",
+        occurredAt: "2026-07-17T09:07:46.000Z",
+        mark: {
+          id: markId,
+          cardId: playerCard.id,
+          ball: 1,
+          markedAt: "2026-07-17T09:07:45.000Z",
+        },
+      },
+    });
+    expect(restored?.lobby.lastEventSequence).toBe(0n);
+    expect(
+      restored?.round?.cards.find(
+        ({ participantId }) => participantId === state.participants[1]!.id,
+      )?.marks,
+    ).toEqual([
+      {
+        id: markId,
+        ball: 1,
+        markedAt: new Date("2026-07-17T09:07:45.000Z"),
+      },
+    ]);
+    expect(restored?.events).toEqual([]);
+    expect(restored?.commandResults).toHaveLength(2);
+    expect(restoredSnapshot).toMatchObject({
+      ownCard: { id: playerCard.id },
+      ownMarks: [
+        {
+          id: markId,
+          cardId: playerCard.id,
+          ball: 1,
+          markedAt: "2026-07-17T09:07:45.000Z",
+        },
+      ],
+    });
+  });
+
   test("rejects a player host-control command before any mutation is persisted", async () => {
     const connection = await connectWithRoundCommands(() => new Date("2026-07-17T09:08:00.000Z"));
     const state = createLobbyState();

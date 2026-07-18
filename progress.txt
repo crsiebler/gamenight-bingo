@@ -3684,3 +3684,55 @@ Targeted re-review outcome for resumed US-037 at 2026-07-18 00:07:12 MST:
 - The startup recovery shutdown fence, direct runtime disconnect-promise wiring, final-disconnect failure ordering, manual host-only advance, and exhausted host-call coverage are resolved.
 - Residual risk is limited to compositionally testing the full runtime disconnect race and using the shared closed/terminal bind guard for both explicit close and authority failure; no in-scope critical, high, or medium finding remains.
 - US-037 can be marked passing and committed after the final consistency check.
+
+## 2026-07-18 00:18:50 MST - US-038
+- What was implemented
+  - Confirmed the existing Serializable round-command executor already validates daubs against the authenticated participant's current card and committed calls, persists one mark before returning a participant-private result, and replays command IDs without repeating effects.
+  - Added PostgreSQL acceptance coverage proving uncalled and foreign-card balls return stable `INVALID_COMMAND` results without changing marks, activity, sequences, events, or command results.
+  - Added durable idempotency coverage proving distinct commands for the same valid ball reuse one original mark and timestamp, allocate no lobby sequence/event, return private results, and restore through a fresh repository instance.
+- Files changed: `packages/database/src/database.integration.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-038 - Validate and persist daubs`
+- Auto approval: `enabled`
+- Checks:
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t 'authorizes a private mark|rejects uncalled and foreign-card marks|deduplicates repeated marks'` (pass; 3 focused tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test:database` (initial run exposed a retained-fixture collision from a fixed test mark ID; pass after using a per-test unique ID with 118 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `bun run format:check` (fails only on three pre-existing untracked browser-report artifacts)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (first run hit a known unrelated Socket.IO restart timeout that cascaded through fake timers; isolated Socket.IO rerun passed 88 tests, then root rerun passed typecheck, 25 files, and 556 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: none
+  - Used: skipped because dependency stories already implemented the focused persistence path and this iteration required only acceptance coverage
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and targeted re-review by `code-reviewer` planned after its substantive test fix
+  - Findings: fixed the authorized reconnect-projection coverage gap; discarded the expected pre-review `prd.json` status observation because Ralph requires that update only after review passes
+- Decisions (why):
+  - Kept production code unchanged because the authenticated-card lookup, called-ball check, unique `(cardId, ball)` mark, participant-private event, command-result replay, and atomic transaction already satisfy the story; duplicating these rules would create drift.
+  - Tested distinct command IDs separately from same-command replay because effect idempotency must prevent duplicate marks even when a client retries the action with a new command ID.
+  - Used a fresh repository instance without deleting retained test data because persistence restoration is the relevant behavior and destructive cleanup was neither needed nor approved.
+  - Testing decision: this iteration completed missing regression coverage for previously implemented behavior, so no new behavioral production code required a red-green cycle; the focused tests passed immediately, while the full suite caught and drove a test-isolation correction.
+- **Learnings for future iterations:**
+  - Daub acceptance spans one existing transaction: actor/session revalidation, current-card ownership, called-ball validation, unique mark persistence, private result persistence, and acknowledgement must remain atomic.
+  - Integration fixture IDs must be unique across runs because the approved test database intentionally retains randomly identified lobbies between tests and invocations.
+- Known issues / follow-ups:
+  - Root `bun run format:check` remains blocked by unrelated untracked Lighthouse/browser artifacts; every tracked file passes Prettier.
+  - The unrelated `apps/web/next-env.d.ts` side effect and untracked browser-report artifacts remain untouched and unstaged.
+- Next iteration start:
+  - If review passes, implement US-039 authoritative pattern progress and private near-win feedback; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-038 at 2026-07-18 00:23:34 MST:
+- The initial `code-reviewer` and `qa-expert` pass produced one deduplicated medium acceptance-coverage gap: the fresh repository assertion proved aggregate persistence but did not exercise the actor-authorized snapshot used after reconnect.
+- Added an exact `findAuthorizedSnapshot` assertion for the authenticated participant's own card and restored mark ID, card ID, ball, and original timestamp.
+- Discarded both reviewers' `prd.json` status finding because Ralph explicitly requires the passing flag only after the final review succeeds; the staged progress file correctly lists the intended post-review metadata file.
+- Post-fix checks: the focused reconnect restoration test passes, the database suite passes 118 tests, typecheck and lint pass, and the complete tracked tree passes Prettier.
+- Targeted re-review: pending `code-reviewer` because only its substantive reconnect-coverage finding changed; QA is not repeated because its only finding was the deferred bookkeeping sequence.
+
+Targeted re-review outcome for US-038 at 2026-07-18 00:23:34 MST:
+- `code-reviewer` reviewed the revised complete staged diff and returned an empty actionable finding list.
+- The actor-authorized reconnect snapshot now directly proves the persisted mark survives through the production projection with its original identity and timestamp.
+- QA's initial bookkeeping-only observation is resolved by staging the required post-review `passes: true` update now.
+- No in-scope critical, high, or medium findings remain; US-038 can be marked passing and committed after the final consistency check.
