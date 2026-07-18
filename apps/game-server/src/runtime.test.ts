@@ -8,11 +8,110 @@ import type {
 import {
   GameServerConfigurationError,
   parseGameServerConfiguration,
+  startGameServerRuntime,
   subscribeGameServerToActiveLobbyEvents,
   superviseGameServerResources,
 } from "./runtime.js";
+import type { GameServer, GameServerOptions } from "./socket-server.js";
 
 describe("game-server runtime configuration", () => {
+  test("loads persisted grace leases into the authority during runtime startup", async () => {
+    const grace = {
+      lobbyId: "lobby_alpha",
+      participantId: "participant_player",
+      presenceGeneration: 3,
+      graceEndsAt: new Date("2026-07-17T20:00:10.000Z"),
+    };
+    let serverOptions: GameServerOptions | undefined;
+    let databaseDisconnected = false;
+    const eventSubscription = {
+      completion: new Promise<void>(() => {}),
+      close: async () => {},
+    };
+    const database = {
+      lobbyStates: {
+        findRealtimePresenceGracePeriods: async () => [grace],
+      },
+      roundCommands: {},
+      activeLobbyEvents: {
+        subscribe: async () => eventSubscription,
+      },
+      disconnect: async () => {
+        databaseDisconnected = true;
+      },
+    };
+    const server: GameServer = {
+      failure: new Promise<never>(() => {}),
+      listen: async ({ host, port }) => ({ host, port }),
+      close: async () => {},
+      publishLobbyEvent: async () => {},
+      publishLobbyEventFromSource: async () => {},
+      publishParticipantEvent: async () => {},
+    };
+    const startWithDependencies = startGameServerRuntime as unknown as (
+      environment: Readonly<Record<string, string | undefined>>,
+      dependencies: {
+        connectDatabase: () => Promise<typeof database>;
+        createGameServer: (options: GameServerOptions) => GameServer;
+      },
+    ) => ReturnType<typeof startGameServerRuntime>;
+
+    const running = await startWithDependencies(
+      {
+        DATABASE_URL: "postgresql://127.0.0.1:1/bingo",
+        GAME_SERVER_PORT: "4101",
+      },
+      {
+        connectDatabase: async () => database,
+        createGameServer: (options) => {
+          serverOptions = options;
+          return server;
+        },
+      },
+    );
+
+    expect(serverOptions?.initialPresenceGracePeriods).toEqual([grace]);
+    await running.close();
+    expect(databaseDisconnected).toBe(true);
+  });
+
+  test("disconnects the database when persisted grace recovery fails during startup", async () => {
+    let databaseDisconnected = false;
+    const database = {
+      lobbyStates: {
+        findRealtimePresenceGracePeriods: async () => {
+          throw new Error("private recovery detail");
+        },
+      },
+      disconnect: async () => {
+        databaseDisconnected = true;
+      },
+    };
+    const startWithDependencies = startGameServerRuntime as unknown as (
+      environment: Readonly<Record<string, string | undefined>>,
+      dependencies: {
+        connectDatabase: () => Promise<typeof database>;
+        createGameServer: (options: GameServerOptions) => GameServer;
+      },
+    ) => ReturnType<typeof startGameServerRuntime>;
+
+    await expect(
+      startWithDependencies(
+        {
+          DATABASE_URL: "postgresql://127.0.0.1:1/bingo",
+          GAME_SERVER_PORT: "4102",
+        },
+        {
+          connectDatabase: async () => database,
+          createGameServer: () => {
+            throw new Error("authority must not be created");
+          },
+        },
+      ),
+    ).rejects.toThrow();
+    expect(databaseDisconnected).toBe(true);
+  });
+
   test("fails the runtime and closes every resource when event continuity is lost", async () => {
     let rejectSubscription!: (reason?: unknown) => void;
     const subscriptionCompletion = new Promise<void>((_resolve, reject) => {

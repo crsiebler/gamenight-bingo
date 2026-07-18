@@ -458,6 +458,27 @@ async function executeMutation(
 
   if (current === null) return null;
 
+  if (
+    command.type === "start-round" ||
+    command.type === "resume-round" ||
+    command.type === "call-next" ||
+    command.type === "continue-round"
+  ) {
+    const blockingPresence = await transaction.presenceGeneration.findFirst({
+      where: {
+        lobbyId,
+        endedAt: null,
+        participant: { departedAt: null },
+        OR: [
+          { status: "ABSENT", overridden: false },
+          { status: "GRACE", graceEndsAt: { lte: now } },
+        ],
+      },
+      select: { participantId: true },
+    });
+    if (blockingPresence !== null) return null;
+  }
+
   if (command.type === "configure") {
     const patternMode = resolveRoundPatternMode(options.patterns, command.patternId);
     if (current.stage !== "WAITING" || patternMode === null) return null;

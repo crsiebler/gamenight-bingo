@@ -35,6 +35,8 @@ import {
 import { expireDueParticipantSessions } from "./participant-session-expiry.js";
 import { runTransactionWithRetry, type TransactionRetryOptions } from "./transaction-retry.js";
 
+const MAXIMUM_RECOVERABLE_PRESENCE_GRACE_PERIODS = 2_500;
+
 export type JsonPrimitive = boolean | number | string | null;
 export type JsonValue = JsonPrimitive | JsonObject | readonly JsonValue[];
 export type JsonObject = { readonly [key: string]: JsonValue };
@@ -274,7 +276,17 @@ export interface RealtimePresenceIdentity {
 export interface RealtimePresenceDisconnectInput extends RealtimePresenceIdentity {
   readonly presenceGeneration: number;
   readonly reconnectWindowSeconds: number;
+  readonly disconnectPauseGraceSeconds: number;
 }
+
+export interface RealtimePresenceGracePeriod {
+  readonly lobbyId: string;
+  readonly participantId: string;
+  readonly presenceGeneration: number;
+  readonly graceEndsAt: Date;
+}
+
+export type RealtimePresenceGraceExpiryResult = "expired" | "stale" | "too-early";
 
 export interface ReserveParticipantOptions {
   readonly maxPlayersPerLobby: number;
@@ -422,7 +434,15 @@ export interface LobbyStateRepository {
   }): Promise<boolean>;
   registerRealtimeConnection(input: RealtimePresenceIdentity): Promise<number | null>;
   recordRealtimeHeartbeat(input: RealtimePresenceIdentity): Promise<boolean>;
-  unregisterRealtimeConnection(input: RealtimePresenceDisconnectInput): Promise<boolean>;
+  unregisterRealtimeConnection(
+    input: RealtimePresenceDisconnectInput,
+  ): Promise<RealtimePresenceGracePeriod | null>;
+  findRealtimePresenceGracePeriods(
+    maximum?: number,
+  ): Promise<readonly RealtimePresenceGracePeriod[]>;
+  expireRealtimePresenceGrace(
+    input: RealtimePresenceGracePeriod,
+  ): Promise<RealtimePresenceGraceExpiryResult>;
   resolveParticipantSessionByTokenHash(input: {
     readonly lobbyId: string;
     readonly tokenHash: Uint8Array;
@@ -782,8 +802,9 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
       readonly lobbyId: string;
       readonly participantId: string;
       readonly generation: bigint;
-      readonly status: "connected" | "absent";
+      readonly status: "connected" | "grace" | "absent";
       readonly changedAt: Date;
+      readonly graceEndsAt?: Date;
     },
   ): Promise<void> {
     const generation = Number(input.generation);
@@ -808,14 +829,22 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
             status: "connected" as const,
             changedAt: input.changedAt.toISOString(),
           }
-        : {
-            participantId: input.participantId,
-            generation,
-            status: "absent" as const,
-            changedAt: input.changedAt.toISOString(),
-            absentSince: input.changedAt.toISOString(),
-            overridden: false,
-          };
+        : input.status === "grace"
+          ? {
+              participantId: input.participantId,
+              generation,
+              status: "grace" as const,
+              changedAt: input.changedAt.toISOString(),
+              graceEndsAt: input.graceEndsAt!.toISOString(),
+            }
+          : {
+              participantId: input.participantId,
+              generation,
+              status: "absent" as const,
+              changedAt: input.changedAt.toISOString(),
+              absentSince: input.changedAt.toISOString(),
+              overridden: false,
+            };
     await transaction.activeLobbyEvent.create({
       data: {
         lobbyId: input.lobbyId,
@@ -2436,7 +2465,9 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
     );
   }
 
-  async unregisterRealtimeConnection(input: RealtimePresenceDisconnectInput): Promise<boolean> {
+  async unregisterRealtimeConnection(
+    input: RealtimePresenceDisconnectInput,
+  ): Promise<RealtimePresenceGracePeriod | null> {
     if (!Number.isSafeInteger(input.presenceGeneration) || input.presenceGeneration < 1) {
       throw new RangeError("The presence generation must be a positive safe integer.");
     }
@@ -2447,6 +2478,15 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
     ) {
       throw new RangeError(
         "The reconnect window must be a safe integer between 1 and 3600 seconds.",
+      );
+    }
+    if (
+      !Number.isSafeInteger(input.disconnectPauseGraceSeconds) ||
+      input.disconnectPauseGraceSeconds < 1 ||
+      input.disconnectPauseGraceSeconds > 300
+    ) {
+      throw new RangeError(
+        "The disconnect pause grace must be a safe integer between 1 and 300 seconds.",
       );
     }
     return runTransactionWithRetry(
@@ -2460,7 +2500,7 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
                  AND "status" IN ('WAITING', 'ACTIVE')
                RETURNING "id"
             `;
-            if (fenced.length !== 1) return false;
+            if (fenced.length !== 1) return null;
             const session = await transaction.participantSession.findFirst({
               where: {
                 id: input.participantSessionId,
@@ -2469,7 +2509,7 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
               },
               select: { id: true },
             });
-            if (session === null) return false;
+            if (session === null) return null;
             const current = await transaction.presenceGeneration.findFirst({
               where: { participantId: input.participantId, endedAt: null },
               orderBy: { generation: "desc" },
@@ -2479,7 +2519,7 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
               current.status !== "CONNECTED" ||
               current.generation !== BigInt(input.presenceGeneration)
             ) {
-              return false;
+              return null;
             }
 
             if (current.connectionCount > 1) {
@@ -2492,7 +2532,7 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
                 },
                 data: { connectionCount: { decrement: 1 } },
               });
-              return true;
+              return null;
             }
 
             const changedAt = this.currentLifecycleTime();
@@ -2520,6 +2560,155 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
                 },
               });
             }
+            const graceEndsAt = new Date(
+              changedAt.getTime() + input.disconnectPauseGraceSeconds * 1_000,
+            );
+            await transaction.presenceGeneration.update({
+              where: {
+                participantId_generation: {
+                  participantId: input.participantId,
+                  generation: current.generation,
+                },
+              },
+              data: {
+                status: "GRACE",
+                connectionCount: 0,
+                changedAt,
+                graceEndsAt,
+                absentSince: null,
+                departedAt: null,
+                overridden: false,
+              },
+            });
+            await this.appendPresenceEvent(transaction, {
+              lobbyId: input.lobbyId,
+              participantId: input.participantId,
+              generation: current.generation,
+              status: "grace",
+              changedAt,
+              graceEndsAt,
+            });
+            return {
+              lobbyId: input.lobbyId,
+              participantId: input.participantId,
+              presenceGeneration: input.presenceGeneration,
+              graceEndsAt,
+            };
+          },
+          {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+            maxWait: 5_000,
+            timeout: 10_000,
+          },
+        ),
+      this.retryOptions,
+    );
+  }
+
+  async findRealtimePresenceGracePeriods(
+    maximum = MAXIMUM_RECOVERABLE_PRESENCE_GRACE_PERIODS,
+  ): Promise<readonly RealtimePresenceGracePeriod[]> {
+    if (
+      !Number.isSafeInteger(maximum) ||
+      maximum < 1 ||
+      maximum > MAXIMUM_RECOVERABLE_PRESENCE_GRACE_PERIODS
+    ) {
+      throw new RangeError(
+        "The realtime presence grace recovery limit must be between 1 and 2500.",
+      );
+    }
+    const rows = await this.prisma.presenceGeneration.findMany({
+      where: {
+        status: "GRACE",
+        endedAt: null,
+        graceEndsAt: { not: null },
+        participant: { departedAt: null },
+        lobby: { status: { in: ["WAITING", "ACTIVE"] } },
+      },
+      select: {
+        lobbyId: true,
+        participantId: true,
+        generation: true,
+        graceEndsAt: true,
+      },
+      orderBy: [
+        { graceEndsAt: "asc" },
+        { lobbyId: "asc" },
+        { participantId: "asc" },
+        { generation: "asc" },
+      ],
+      take: maximum + 1,
+    });
+    if (rows.length > maximum) {
+      throw new Error("The realtime presence grace recovery limit was exceeded.");
+    }
+    return rows.map((row) => {
+      const presenceGeneration = Number(row.generation);
+      if (!Number.isSafeInteger(presenceGeneration) || presenceGeneration < 1) {
+        throw new Error("Presence generations must fit in a positive safe integer.");
+      }
+      if (row.graceEndsAt === null) {
+        throw new Error("Grace presence requires a deadline.");
+      }
+      return {
+        lobbyId: row.lobbyId,
+        participantId: row.participantId,
+        presenceGeneration,
+        graceEndsAt: row.graceEndsAt,
+      };
+    });
+  }
+
+  async expireRealtimePresenceGrace(
+    input: RealtimePresenceGracePeriod,
+  ): Promise<RealtimePresenceGraceExpiryResult> {
+    if (!Number.isSafeInteger(input.presenceGeneration) || input.presenceGeneration < 1) {
+      throw new RangeError("The presence generation must be a positive safe integer.");
+    }
+    assertValidDate(input.graceEndsAt, "The disconnect pause grace deadline");
+    return runTransactionWithRetry(
+      async () =>
+        this.prisma.$transaction(
+          async (transaction) => {
+            const fenced = await transaction.$queryRaw<readonly { id: string }[]>`
+              UPDATE "lobbies"
+                 SET "last_event_sequence" = "last_event_sequence"
+               WHERE "id" = ${input.lobbyId}
+                 AND "status" IN ('WAITING', 'ACTIVE')
+               RETURNING "id"
+            `;
+            if (fenced.length !== 1) return "stale";
+            const changedAt = this.currentLifecycleTime();
+            const current = await transaction.presenceGeneration.findFirst({
+              where: {
+                lobbyId: input.lobbyId,
+                participantId: input.participantId,
+                generation: BigInt(input.presenceGeneration),
+                status: "GRACE",
+                connectionCount: 0,
+                endedAt: null,
+                participant: { departedAt: null },
+              },
+              select: { generation: true, graceEndsAt: true },
+            });
+            if (
+              current?.graceEndsAt === null ||
+              current?.graceEndsAt === undefined ||
+              current.graceEndsAt.getTime() !== input.graceEndsAt.getTime()
+            ) {
+              return "stale";
+            }
+            if (changedAt.getTime() < current.graceEndsAt.getTime()) return "too-early";
+            const participant = await transaction.participant.findFirst({
+              where: {
+                id: input.participantId,
+                lobbyId: input.lobbyId,
+                departedAt: null,
+              },
+              select: { role: true },
+            });
+            if (participant === null) return "stale";
+
             await transaction.presenceGeneration.update({
               where: {
                 participantId_generation: {
@@ -2529,11 +2718,9 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
               },
               data: {
                 status: "ABSENT",
-                connectionCount: 0,
                 changedAt,
                 graceEndsAt: null,
                 absentSince: changedAt,
-                departedAt: null,
                 overridden: false,
               },
             });
@@ -2544,7 +2731,100 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
               status: "absent",
               changedAt,
             });
-            return true;
+
+            const currentRound = await transaction.round.findUnique({
+              where: { lobbyId: input.lobbyId },
+              select: {
+                id: true,
+                currentPatternId: true,
+                stage: true,
+                callMode: true,
+                callIntervalSeconds: true,
+                createdAt: true,
+                startedAt: true,
+                pausedAt: true,
+                pauseReason: true,
+              },
+            });
+            const pauseReason = participant.role === "HOST" ? "HOST_ABSENT" : "PARTICIPANT_ABSENT";
+            const shouldPause = currentRound?.stage === "ACTIVE";
+            const shouldPromoteHostPause =
+              participant.role === "HOST" &&
+              currentRound?.stage === "PAUSED" &&
+              currentRound.pauseReason !== "HOST_ABSENT";
+            if (currentRound !== null && (shouldPause || shouldPromoteHostPause)) {
+              const updatedRound = await transaction.round.update({
+                where: { id: currentRound.id },
+                data: {
+                  stage: "PAUSED",
+                  pausedAt: changedAt,
+                  pauseReason,
+                  nextCallAt: null,
+                },
+                select: {
+                  id: true,
+                  currentPatternId: true,
+                  callMode: true,
+                  callIntervalSeconds: true,
+                  startedAt: true,
+                  pausedAt: true,
+                  pauseReason: true,
+                },
+              });
+              if (
+                updatedRound.startedAt === null ||
+                updatedRound.pausedAt === null ||
+                updatedRound.pauseReason === null
+              ) {
+                throw new Error("An absence-paused round requires pause metadata.");
+              }
+              const sequenceRows = await transaction.$queryRaw<readonly { sequence: bigint }[]>`
+                UPDATE "lobbies"
+                   SET "last_event_sequence" = "last_event_sequence" + 1
+                 WHERE "id" = ${input.lobbyId}
+                 RETURNING "last_event_sequence" AS "sequence"
+              `;
+              const sequence = sequenceRows[0]?.sequence;
+              if (sequence === undefined) {
+                throw new Error("Cannot allocate a stage event sequence for an unknown lobby.");
+              }
+              const callConfiguration =
+                updatedRound.callMode === "AUTOMATIC"
+                  ? {
+                      mode: "automatic" as const,
+                      intervalSeconds: updatedRound.callIntervalSeconds,
+                    }
+                  : { mode: "manual" as const };
+              await transaction.activeLobbyEvent.create({
+                data: {
+                  lobbyId: input.lobbyId,
+                  sequence,
+                  roundId: updatedRound.id,
+                  eventType: "stage",
+                  schemaVersion: CONTRACT_SCHEMA_VERSION,
+                  payload: toInputJson({
+                    round: {
+                      id: updatedRound.id,
+                      lobbyId: input.lobbyId,
+                      patternId: updatedRound.currentPatternId,
+                      callConfiguration,
+                      stage: "paused",
+                      startedAt: updatedRound.startedAt.toISOString(),
+                      pauseReason: pauseReasons.fromDatabase(updatedRound.pauseReason),
+                      pausedAt: updatedRound.pausedAt.toISOString(),
+                    },
+                  }),
+                  createdAt: changedAt,
+                },
+              });
+              await transaction.$executeRaw`
+                SELECT pg_notify(
+                  ${ACTIVE_LOBBY_EVENT_CHANNEL},
+                  ${encodeActiveLobbyEventReference(input.lobbyId, sequence)}
+                )
+              `;
+            }
+            return "expired";
           },
           {
             isolationLevel: Prisma.TransactionIsolationLevel.Serializable,

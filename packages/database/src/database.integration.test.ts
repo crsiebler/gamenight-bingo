@@ -412,6 +412,7 @@ describeDatabase("PostgreSQL durable game state", () => {
 
   async function connectWithRoundCommands(clock: () => Date) {
     const connection = await connectDatabase(testDatabaseUrl!, {
+      lifecycleClock: clock,
       roundCommands: {
         patterns: [
           { id: "standard-one-line", mode: "one-line" },
@@ -612,13 +613,10 @@ describeDatabase("PostgreSQL durable game state", () => {
     const created = createLobbyState();
     const availableCode = randomLobbyCode();
     await createPersistedLobby(connection, existing);
-    const activeCount = await pool.query<{ count: string }>(
-      `SELECT COUNT(*)::text AS count FROM lobbies WHERE status IN ('WAITING', 'ACTIVE')`,
-    );
 
     await expect(
       connection.lobbyStates.createActive(omitLobbyCode(created), {
-        maxActiveLobbies: Number(activeCount.rows[0]!.count) + 1,
+        maxActiveLobbies: Number.MAX_SAFE_INTEGER,
         nextCode: scriptedCodes([existing.lobby.code, availableCode]),
       }),
     ).resolves.toEqual({
@@ -662,10 +660,6 @@ describeDatabase("PostgreSQL durable game state", () => {
     const issuedAt = new Date("2026-07-17T12:00:00.000Z");
     const tokenHash = new Uint8Array(randomBytes(32));
     const code = randomLobbyCode();
-    const activeCount = await pool.query<{ count: number }>(
-      `SELECT COUNT(*)::int AS count FROM lobbies WHERE status IN ('WAITING', 'ACTIVE')`,
-    );
-
     const result = await connection.lobbyStates.createLobbyWithHost({
       lobbyId: `lobby-${suffix}`,
       participantId: `participant-${suffix}`,
@@ -675,7 +669,7 @@ describeDatabase("PostgreSQL durable game state", () => {
       themeId: "classic",
       tokenHash,
       issuedAt,
-      maxActiveLobbies: activeCount.rows[0]!.count + 1,
+      maxActiveLobbies: Number.MAX_SAFE_INTEGER,
       nextCode: () => code,
     });
 
@@ -734,9 +728,6 @@ describeDatabase("PostgreSQL durable game state", () => {
     const lobbyId = `lobby-presence-${suffix}`;
     const participantId = `participant-presence-${suffix}`;
     const participantSessionId = `session-presence-${suffix}`;
-    const activeCount = await pool.query<{ count: number }>(
-      `SELECT COUNT(*)::int AS count FROM lobbies WHERE status IN ('WAITING', 'ACTIVE')`,
-    );
     const created = await connection.lobbyStates.createLobbyWithHost({
       lobbyId,
       participantId,
@@ -746,7 +737,7 @@ describeDatabase("PostgreSQL durable game state", () => {
       themeId: "classic",
       tokenHash: new Uint8Array(randomBytes(32)),
       issuedAt: new Date("2026-07-17T12:29:00.000Z"),
-      maxActiveLobbies: activeCount.rows[0]!.count + 1,
+      maxActiveLobbies: Number.MAX_SAFE_INTEGER,
       nextCode: randomLobbyCode,
     });
     expect(created.ok).toBe(true);
@@ -810,8 +801,9 @@ describeDatabase("PostgreSQL durable game state", () => {
         ...identity,
         presenceGeneration: 2,
         reconnectWindowSeconds: 120,
+        disconnectPauseGraceSeconds: 10,
       }),
-    ).resolves.toBe(true);
+    ).resolves.toBeNull();
     state = await connection.lobbyStates.findById(lobbyId);
     expect(state?.presenceGenerations.at(-1)).toMatchObject({
       status: "connected",
@@ -831,16 +823,22 @@ describeDatabase("PostgreSQL durable game state", () => {
         ...identity,
         presenceGeneration: 2,
         reconnectWindowSeconds: 120,
+        disconnectPauseGraceSeconds: 10,
       }),
-    ).resolves.toBe(true);
+    ).resolves.toEqual({
+      lobbyId,
+      participantId,
+      presenceGeneration: 2,
+      graceEndsAt: new Date("2026-07-17T12:33:10.000Z"),
+    });
     state = await connection.lobbyStates.findById(lobbyId);
     expect(state?.presenceGenerations.at(-1)).toMatchObject({
       participantId,
       generation: 2n,
-      status: "absent",
+      status: "grace",
       connectionCount: 0,
       changedAt: now,
-      absentSince: now,
+      graceEndsAt: new Date("2026-07-17T12:33:10.000Z"),
       overridden: false,
     });
     expect(state?.sessions[0]).toMatchObject({
@@ -856,17 +854,382 @@ describeDatabase("PostgreSQL durable game state", () => {
         presence: {
           participantId,
           generation: 2,
-          status: "absent",
+          status: "grace",
           changedAt: "2026-07-17T12:33:00.000Z",
-          absentSince: "2026-07-17T12:33:00.000Z",
-          overridden: false,
+          graceEndsAt: "2026-07-17T12:33:10.000Z",
         },
       },
     });
-    await twoNotifications.wait("the committed connected and absent presence notifications");
+    await twoNotifications.wait("the committed connected and grace presence notifications");
     expect(notifiedEvents.map((event) => event.sequence)).toEqual([1n, 2n]);
     await subscription.close();
   });
+
+  test.each([
+    ["host", "host-absent"],
+    ["player", "participant-absent"],
+  ] as const)(
+    "persists the required pause when the %s disconnect grace expires",
+    async (role, expectedPauseReason) => {
+      let now = new Date("2026-07-17T14:00:00.000Z");
+      const connection = await connectWithRoundCommands(() => now);
+      const base = createLobbyState();
+      const state: DurableLobbyState = {
+        ...base,
+        round: {
+          ...base.round!,
+          stage: role === "host" ? "paused" : "active",
+          pausedAt: role === "host" ? new Date("2026-07-17T13:59:00.000Z") : null,
+          pauseReason: role === "host" ? "participant-absent" : null,
+          nextCallAt: role === "host" ? null : new Date("2026-07-17T14:00:30.000Z"),
+          coWinnerTriggeringCallId: null,
+          coWinnerOpenedAt: null,
+          coWinnerClosesAt: null,
+          resultSettledAt: null,
+          endedAt: null,
+          coWinners: [],
+        },
+      };
+      await createPersistedLobby(connection, state);
+      const participant = state.participants.find((candidate) => candidate.role === role)!;
+      const session = state.sessions.find(
+        (candidate) => candidate.participantId === participant.id,
+      )!;
+      const identity = {
+        lobbyId: state.lobby.id,
+        participantId: participant.id,
+        participantSessionId: session.id,
+      };
+
+      const grace = await connection.lobbyStates.unregisterRealtimeConnection({
+        ...identity,
+        presenceGeneration: 1,
+        reconnectWindowSeconds: 120,
+        disconnectPauseGraceSeconds: 10,
+      });
+      expect(grace).toEqual({
+        lobbyId: state.lobby.id,
+        participantId: participant.id,
+        presenceGeneration: 1,
+        graceEndsAt: new Date("2026-07-17T14:00:10.000Z"),
+      });
+      await expect(
+        connection.lobbyStates.findRealtimePresenceGracePeriods(),
+      ).resolves.toContainEqual(grace);
+
+      now = new Date("2026-07-17T14:00:09.999Z");
+      await expect(connection.lobbyStates.expireRealtimePresenceGrace(grace!)).resolves.toBe(
+        "too-early",
+      );
+      expect((await connection.lobbyStates.findById(state.lobby.id))?.round).toMatchObject({
+        stage: role === "host" ? "paused" : "active",
+        pauseReason: role === "host" ? "participant-absent" : null,
+      });
+
+      now = new Date("2026-07-17T14:00:10.000Z");
+      await expect(connection.lobbyStates.expireRealtimePresenceGrace(grace!)).resolves.toBe(
+        "expired",
+      );
+      const expired = await connection.lobbyStates.findById(state.lobby.id);
+      expect(
+        expired?.presenceGenerations
+          .filter(({ participantId }) => participantId === participant.id)
+          .at(-1),
+      ).toMatchObject({
+        generation: 1n,
+        status: "absent",
+        connectionCount: 0,
+        graceEndsAt: null,
+        absentSince: now,
+      });
+      expect(expired?.round).toMatchObject({
+        stage: "paused",
+        pausedAt: now,
+        pauseReason: expectedPauseReason,
+        nextCallAt: null,
+      });
+      expect(expired?.events.slice(-2)).toMatchObject([
+        {
+          eventType: "presence",
+          payload: {
+            presence: {
+              participantId: participant.id,
+              generation: 1,
+              status: "absent",
+              changedAt: now.toISOString(),
+              absentSince: now.toISOString(),
+              overridden: false,
+            },
+          },
+        },
+        {
+          eventType: "stage",
+          payload: {
+            round: { stage: "paused", pauseReason: expectedPauseReason },
+          },
+        },
+      ]);
+      expect(expired?.events.at(-1)?.sequence).toBe(expired!.events.at(-2)!.sequence + 1n);
+      for (const event of expired!.events.slice(-2)) {
+        expect(() =>
+          ActiveLobbyEventSchema.parse({
+            ...event.payload,
+            schemaVersion: event.schemaVersion,
+            type: event.eventType,
+            eventSequence: Number(event.sequence),
+            occurredAt: event.createdAt.toISOString(),
+          }),
+        ).not.toThrow();
+      }
+
+      const host = state.participants.find((candidate) => candidate.role === "host")!;
+      const hostSession = state.sessions.find((candidate) => candidate.participantId === host.id)!;
+      const executeResume = (commandId: string) =>
+        connection.roundCommands.executeAuthenticated({
+          lobbyId: state.lobby.id,
+          participantId: host.id,
+          participantSessionId: hostSession.id,
+          command: ResumeRoundCommandSchema.parse({
+            schemaVersion: 1,
+            type: "resume-round",
+            commandId,
+          }),
+        });
+      if (role === "player") {
+        await expect(executeResume(`resume-while-absent-${randomUUID()}`)).resolves.toMatchObject({
+          ok: false,
+          error: { code: "INVALID_COMMAND" },
+        });
+      }
+
+      now = new Date("2026-07-17T14:00:11.000Z");
+      await expect(connection.lobbyStates.registerRealtimeConnection(identity)).resolves.toBe(2);
+      const reconnected = await connection.lobbyStates.findById(state.lobby.id);
+      expect(
+        reconnected?.presenceGenerations
+          .filter(({ participantId }) => participant.id === participantId)
+          .at(-1),
+      ).toMatchObject({ generation: 2n, status: "connected" });
+      expect(reconnected?.round).toMatchObject({
+        stage: "paused",
+        pauseReason: expectedPauseReason,
+      });
+      await expect(connection.lobbyStates.expireRealtimePresenceGrace(grace!)).resolves.toBe(
+        "stale",
+      );
+      await expect(executeResume(`resume-after-reconnect-${randomUUID()}`)).resolves.toMatchObject({
+        ok: true,
+      });
+      expect((await connection.lobbyStates.findById(state.lobby.id))?.round).toMatchObject({
+        stage: "active",
+        pauseReason: null,
+      });
+    },
+  );
+
+  test("preserves host-absence precedence when a player grace expires later", async () => {
+    let now = new Date("2026-07-17T14:05:00.000Z");
+    const connection = await connectWithRoundCommands(() => now);
+    const base = createLobbyState();
+    const hostPausedAt = new Date("2026-07-17T14:04:00.000Z");
+    const state: DurableLobbyState = {
+      ...base,
+      round: {
+        ...base.round!,
+        stage: "paused",
+        pausedAt: hostPausedAt,
+        pauseReason: "host-absent",
+        nextCallAt: null,
+        coWinnerTriggeringCallId: null,
+        coWinnerOpenedAt: null,
+        coWinnerClosesAt: null,
+        resultSettledAt: null,
+        endedAt: null,
+        coWinners: [],
+      },
+    };
+    await createPersistedLobby(connection, state);
+    const player = state.participants.find(({ role }) => role === "player")!;
+    const playerSession = state.sessions.find(({ participantId }) => participantId === player.id)!;
+    const grace = await connection.lobbyStates.unregisterRealtimeConnection({
+      lobbyId: state.lobby.id,
+      participantId: player.id,
+      participantSessionId: playerSession.id,
+      presenceGeneration: 1,
+      reconnectWindowSeconds: 120,
+      disconnectPauseGraceSeconds: 10,
+    });
+    const eventsBeforeExpiry = (await connection.lobbyStates.findById(state.lobby.id))!.events
+      .length;
+
+    now = grace!.graceEndsAt;
+    await expect(connection.lobbyStates.expireRealtimePresenceGrace(grace!)).resolves.toBe(
+      "expired",
+    );
+
+    const expired = await connection.lobbyStates.findById(state.lobby.id);
+    expect(expired?.round).toMatchObject({
+      stage: "paused",
+      pauseReason: "host-absent",
+      pausedAt: hostPausedAt,
+      nextCallAt: null,
+    });
+    expect(expired?.events.slice(eventsBeforeExpiry)).toMatchObject([
+      {
+        eventType: "presence",
+        payload: {
+          presence: { participantId: player.id, status: "absent" },
+        },
+      },
+    ]);
+  });
+
+  test("blocks resume when grace expires during a manual pause", async () => {
+    let now = new Date("2026-07-17T14:10:00.000Z");
+    const connection = await connectWithRoundCommands(() => now);
+    const base = createLobbyState();
+    const state: DurableLobbyState = {
+      ...base,
+      round: {
+        ...base.round!,
+        stage: "paused",
+        pausedAt: new Date("2026-07-17T14:09:00.000Z"),
+        pauseReason: "host-command",
+        nextCallAt: null,
+        coWinnerTriggeringCallId: null,
+        coWinnerOpenedAt: null,
+        coWinnerClosesAt: null,
+        resultSettledAt: null,
+        endedAt: null,
+        coWinners: [],
+      },
+    };
+    await createPersistedLobby(connection, state);
+    const host = state.participants.find(({ role }) => role === "host")!;
+    const player = state.participants.find(({ role }) => role === "player")!;
+    const hostSession = state.sessions.find(({ participantId }) => participantId === host.id)!;
+    const playerSession = state.sessions.find(({ participantId }) => participantId === player.id)!;
+    const grace = await connection.lobbyStates.unregisterRealtimeConnection({
+      lobbyId: state.lobby.id,
+      participantId: player.id,
+      participantSessionId: playerSession.id,
+      presenceGeneration: 1,
+      reconnectWindowSeconds: 120,
+      disconnectPauseGraceSeconds: 10,
+    });
+    now = new Date("2026-07-17T14:10:10.000Z");
+    await expect(connection.lobbyStates.expireRealtimePresenceGrace(grace!)).resolves.toBe(
+      "expired",
+    );
+
+    await expect(
+      connection.roundCommands.executeAuthenticated({
+        lobbyId: state.lobby.id,
+        participantId: host.id,
+        participantSessionId: hostSession.id,
+        command: ResumeRoundCommandSchema.parse({
+          schemaVersion: 1,
+          type: "resume-round",
+          commandId: `resume-manual-absence-${randomUUID()}`,
+        }),
+      }),
+    ).resolves.toMatchObject({ ok: false, error: { code: "INVALID_COMMAND" } });
+    expect((await connection.lobbyStates.findById(state.lobby.id))?.round).toMatchObject({
+      stage: "paused",
+      pauseReason: "host-command",
+    });
+  });
+
+  test.each(["command-first", "expiry-first"] as const)(
+    "rejects call-next at the grace deadline with %s lock ordering",
+    async (order) => {
+      let now = new Date("2026-07-17T14:20:00.000Z");
+      const setupConnection = await connectWithRoundCommands(() => now);
+      const commandConnection = await connectWithRoundCommands(() => now);
+      const expiryConnection = await connectWithLifecycleClock(() => now);
+      const base = createLobbyState();
+      const state: DurableLobbyState = {
+        ...base,
+        round: {
+          ...base.round!,
+          stage: "active",
+          pausedAt: null,
+          pauseReason: null,
+          nextCallAt: new Date("2026-07-17T14:20:30.000Z"),
+          coWinnerTriggeringCallId: null,
+          coWinnerOpenedAt: null,
+          coWinnerClosesAt: null,
+          resultSettledAt: null,
+          endedAt: null,
+          coWinners: [],
+        },
+      };
+      await createPersistedLobby(setupConnection, state);
+      const host = state.participants.find(({ role }) => role === "host")!;
+      const player = state.participants.find(({ role }) => role === "player")!;
+      const hostSession = state.sessions.find(({ participantId }) => participantId === host.id)!;
+      const playerSession = state.sessions.find(
+        ({ participantId }) => participantId === player.id,
+      )!;
+      const grace = await setupConnection.lobbyStates.unregisterRealtimeConnection({
+        lobbyId: state.lobby.id,
+        participantId: player.id,
+        participantSessionId: playerSession.id,
+        presenceGeneration: 1,
+        reconnectWindowSeconds: 120,
+        disconnectPauseGraceSeconds: 10,
+      });
+      now = grace!.graceEndsAt;
+      const command = () =>
+        commandConnection.roundCommands.executeAuthenticated({
+          lobbyId: state.lobby.id,
+          participantId: host.id,
+          participantSessionId: hostSession.id,
+          command: CallNextCommandSchema.parse({
+            schemaVersion: 1,
+            type: "call-next",
+            commandId: `call-at-grace-${order}-${randomUUID()}`,
+          }),
+        });
+      const expiry = () => expiryConnection.lobbyStates.expireRealtimePresenceGrace(grace!);
+      const blocker = await pool.connect();
+      let transactionOpen = false;
+      const operations: Promise<unknown>[] = [];
+      try {
+        await blocker.query("BEGIN");
+        transactionOpen = true;
+        await blocker.query(`SELECT id FROM lobbies WHERE id = $1 FOR UPDATE`, [state.lobby.id]);
+        operations.push(order === "command-first" ? command() : expiry());
+        await waitForBlockedCommandFences(1);
+        operations.push(order === "command-first" ? expiry() : command());
+        await waitForBlockedCommandFences(2);
+        await blocker.query("ROLLBACK");
+        transactionOpen = false;
+        const results = await Promise.all(operations);
+        expect(results).toEqual(
+          order === "command-first"
+            ? [
+                expect.objectContaining({ ok: false, error: { code: "INVALID_COMMAND" } }),
+                "expired",
+              ]
+            : [
+                "expired",
+                expect.objectContaining({ ok: false, error: { code: "INVALID_COMMAND" } }),
+              ],
+        );
+      } finally {
+        if (transactionOpen) await blocker.query("ROLLBACK").catch(() => undefined);
+        blocker.release();
+        await Promise.allSettled(operations);
+      }
+      const persisted = await setupConnection.lobbyStates.findById(state.lobby.id);
+      expect(persisted?.round).toMatchObject({
+        stage: "paused",
+        pauseReason: "participant-absent",
+      });
+      expect(persisted?.round?.calls).toHaveLength(state.round!.calls.length);
+    },
+  );
 
   test("ignores stale disconnect cleanup after the session reconnects", async () => {
     let now = new Date("2026-07-17T12:50:00.000Z");
@@ -875,9 +1238,6 @@ describeDatabase("PostgreSQL durable game state", () => {
     const lobbyId = `lobby-stale-presence-${suffix}`;
     const participantId = `participant-stale-presence-${suffix}`;
     const participantSessionId = `session-stale-presence-${suffix}`;
-    const activeCount = await pool.query<{ count: number }>(
-      `SELECT COUNT(*)::int AS count FROM lobbies WHERE status IN ('WAITING', 'ACTIVE')`,
-    );
     const created = await connection.lobbyStates.createLobbyWithHost({
       lobbyId,
       participantId,
@@ -887,7 +1247,7 @@ describeDatabase("PostgreSQL durable game state", () => {
       themeId: "classic",
       tokenHash: new Uint8Array(randomBytes(32)),
       issuedAt: new Date("2026-07-17T12:49:00.000Z"),
-      maxActiveLobbies: activeCount.rows[0]!.count + 1,
+      maxActiveLobbies: Number.MAX_SAFE_INTEGER,
       nextCode: randomLobbyCode,
     });
     expect(created.ok).toBe(true);
@@ -898,6 +1258,7 @@ describeDatabase("PostgreSQL durable game state", () => {
       ...identity,
       presenceGeneration: firstGeneration!,
       reconnectWindowSeconds: 120,
+      disconnectPauseGraceSeconds: 10,
     });
 
     now = new Date("2026-07-17T12:51:00.000Z");
@@ -907,8 +1268,9 @@ describeDatabase("PostgreSQL durable game state", () => {
         ...identity,
         presenceGeneration: firstGeneration!,
         reconnectWindowSeconds: 120,
+        disconnectPauseGraceSeconds: 10,
       }),
-    ).resolves.toBe(false);
+    ).resolves.toBeNull();
 
     const restored = await connection.lobbyStates.findById(lobbyId);
     expect(restored?.presenceGenerations.at(-1)).toMatchObject({
@@ -936,9 +1298,6 @@ describeDatabase("PostgreSQL durable game state", () => {
       const participantSessionId = `session-presence-handoff-${suffix}`;
       const sessionTokenHash = new Uint8Array(randomBytes(32));
       const outstandingTicketHash = new Uint8Array(randomBytes(32));
-      const activeCount = await pool.query<{ count: number }>(
-        `SELECT COUNT(*)::int AS count FROM lobbies WHERE status IN ('WAITING', 'ACTIVE')`,
-      );
       const created = await setupConnection.lobbyStates.createLobbyWithHost({
         lobbyId,
         participantId,
@@ -948,7 +1307,7 @@ describeDatabase("PostgreSQL durable game state", () => {
         themeId: "classic",
         tokenHash: sessionTokenHash,
         issuedAt: new Date("2026-07-17T12:54:00.000Z"),
-        maxActiveLobbies: activeCount.rows[0]!.count + 1,
+        maxActiveLobbies: Number.MAX_SAFE_INTEGER,
         nextCode: randomLobbyCode,
       });
       expect(created.ok).toBe(true);
@@ -970,6 +1329,7 @@ describeDatabase("PostgreSQL durable game state", () => {
           ...identity,
           presenceGeneration: 2,
           reconnectWindowSeconds: 120,
+          disconnectPauseGraceSeconds: 10,
         });
       const register = () => registerConnection.lobbyStates.registerRealtimeConnection(identity);
       const blocker = await pool.connect();
@@ -988,7 +1348,17 @@ describeDatabase("PostgreSQL durable game state", () => {
         await blocker.query("ROLLBACK");
         transactionOpen = false;
         await expect(Promise.all(operations)).resolves.toEqual(
-          order === "disconnect-first" ? [true, 3] : [2, true],
+          order === "disconnect-first"
+            ? [
+                {
+                  lobbyId,
+                  participantId,
+                  presenceGeneration: 2,
+                  graceEndsAt: new Date("2026-07-17T12:55:10.000Z"),
+                },
+                3,
+              ]
+            : [2, null],
         );
       } finally {
         if (transactionOpen) await blocker.query("ROLLBACK").catch(() => undefined);
@@ -1011,9 +1381,7 @@ describeDatabase("PostgreSQL durable game state", () => {
         state?.events
           .filter(({ eventType }) => eventType === "presence")
           .map(({ payload }) => (payload["presence"] as { status: string }).status),
-      ).toEqual(
-        order === "disconnect-first" ? ["connected", "absent", "connected"] : ["connected"],
-      );
+      ).toEqual(order === "disconnect-first" ? ["connected", "grace", "connected"] : ["connected"]);
       await expect(
         setupConnection.lobbyStates.consumeRealtimeTicket({ ticketHash: outstandingTicketHash }),
       ).resolves.toEqual(order === "disconnect-first" ? null : identity);
@@ -1032,9 +1400,6 @@ describeDatabase("PostgreSQL durable game state", () => {
       const secondSessionId = `session-sibling-second-${suffix}`;
       const secondTokenHash = new Uint8Array(randomBytes(32));
       const outstandingTicketHash = new Uint8Array(randomBytes(32));
-      const activeCount = await pool.query<{ count: number }>(
-        `SELECT COUNT(*)::int AS count FROM lobbies WHERE status IN ('WAITING', 'ACTIVE')`,
-      );
       const created = await connection.lobbyStates.createLobbyWithHost({
         lobbyId,
         participantId,
@@ -1044,7 +1409,7 @@ describeDatabase("PostgreSQL durable game state", () => {
         themeId: "classic",
         tokenHash: new Uint8Array(randomBytes(32)),
         issuedAt: new Date("2026-07-17T12:59:00.000Z"),
-        maxActiveLobbies: activeCount.rows[0]!.count + 1,
+        maxActiveLobbies: Number.MAX_SAFE_INTEGER,
         nextCode: randomLobbyCode,
       });
       expect(created.ok).toBe(true);
@@ -1104,6 +1469,7 @@ describeDatabase("PostgreSQL durable game state", () => {
         participantSessionId: firstClosingSessionId,
         presenceGeneration: 2,
         reconnectWindowSeconds: 120,
+        disconnectPauseGraceSeconds: 10,
       });
       state = await connection.lobbyStates.findById(lobbyId);
       expect(state?.sessions.find(({ id }) => id === secondSessionId)?.status).toBe("active");
@@ -1119,6 +1485,7 @@ describeDatabase("PostgreSQL durable game state", () => {
         participantSessionId: finalClosingSessionId,
         presenceGeneration: 2,
         reconnectWindowSeconds: 120,
+        disconnectPauseGraceSeconds: 10,
       });
       state = await connection.lobbyStates.findById(lobbyId);
       expect(state?.sessions.find(({ id }) => id === secondSessionId)).toMatchObject({
@@ -1127,9 +1494,9 @@ describeDatabase("PostgreSQL durable game state", () => {
         rejoinUntil: new Date("2026-07-17T13:04:00.000Z"),
       });
       expect(state?.presenceGenerations.at(-1)).toMatchObject({
-        status: "absent",
+        status: "grace",
         connectionCount: 0,
-        absentSince: now,
+        graceEndsAt: new Date("2026-07-17T13:02:10.000Z"),
       });
       await expect(
         connection.lobbyStates.consumeRealtimeTicket({ ticketHash: outstandingTicketHash }),
@@ -1168,9 +1535,6 @@ describeDatabase("PostgreSQL durable game state", () => {
   test("replays lobby creation without creating another lobby or participant", async () => {
     const connection = await connect();
     const suffix = randomUUID();
-    const activeCount = await pool.query<{ count: number }>(
-      `SELECT COUNT(*)::int AS count FROM lobbies WHERE status IN ('WAITING', 'ACTIVE')`,
-    );
     const base = {
       lobbyId: `lobby-${suffix}`,
       participantId: `participant-${suffix}`,
@@ -1180,7 +1544,7 @@ describeDatabase("PostgreSQL durable game state", () => {
       themeId: "classic",
       tokenHash: new Uint8Array(randomBytes(32)),
       issuedAt: new Date("2026-07-17T12:00:00.000Z"),
-      maxActiveLobbies: activeCount.rows[0]!.count + 1,
+      maxActiveLobbies: Number.MAX_SAFE_INTEGER,
       nextCode: () => randomLobbyCode(),
     };
     const first = await connection.lobbyStates.createLobbyWithHost(base);
@@ -2483,6 +2847,69 @@ describeDatabase("PostgreSQL durable game state", () => {
     });
   });
 
+  test("retires a grace generation when its participant rejoin window expires", async () => {
+    let now = new Date("2026-07-17T10:00:00.000Z");
+    const connection = await connectWithLifecycleClock(() => now);
+    const state = createLobbyState();
+    await createPersistedLobby(connection, state);
+    const session = state.sessions[1]!;
+    const grace = await connection.lobbyStates.unregisterRealtimeConnection({
+      lobbyId: state.lobby.id,
+      participantId: session.participantId,
+      participantSessionId: session.id,
+      presenceGeneration: 1,
+      reconnectWindowSeconds: 120,
+      disconnectPauseGraceSeconds: 10,
+    });
+
+    now = new Date("2026-07-17T10:02:00.000Z");
+    await expect(
+      connection.lobbyStates.expireParticipantRejoinWindows(state.lobby.id),
+    ).resolves.toBe(1);
+
+    const restored = await connection.lobbyStates.findById(state.lobby.id);
+    expect(
+      restored?.participants.find(({ id }) => id === session.participantId)?.departedAt,
+    ).toEqual(now);
+    expect(
+      restored?.presenceGenerations
+        .filter(({ participantId }) => participantId === session.participantId)
+        .at(-1),
+    ).toMatchObject({
+      status: "departed",
+      connectionCount: 0,
+      changedAt: now,
+      graceEndsAt: null,
+      absentSince: null,
+      departedAt: now,
+      overridden: false,
+    });
+    await expect(
+      connection.lobbyStates.findRealtimePresenceGracePeriods(),
+    ).resolves.not.toContainEqual(grace);
+    await expect(connection.lobbyStates.expireRealtimePresenceGrace(grace!)).resolves.toBe("stale");
+  });
+
+  test("fails closed instead of truncating bounded grace recovery", async () => {
+    const connection = await connectWithLifecycleClock(() => new Date("2026-07-17T10:00:00.000Z"));
+    for (const state of [createLobbyState(), createLobbyState()]) {
+      await createPersistedLobby(connection, state);
+      const session = state.sessions[1]!;
+      await connection.lobbyStates.unregisterRealtimeConnection({
+        lobbyId: state.lobby.id,
+        participantId: session.participantId,
+        participantSessionId: session.id,
+        presenceGeneration: 1,
+        reconnectWindowSeconds: 120,
+        disconnectPauseGraceSeconds: 10,
+      });
+    }
+
+    await expect(connection.lobbyStates.findRealtimePresenceGracePeriods(1)).rejects.toThrow(
+      "recovery limit",
+    );
+  });
+
   test("samples rejoin expiry after acquiring the lobby fence", async () => {
     let now = new Date("2026-07-17T10:00:00.000Z");
     const connection = await connectWithLifecycleClock(() => now);
@@ -2927,9 +3354,6 @@ describeDatabase("PostgreSQL durable game state", () => {
     const sharedCode = randomLobbyCode();
     const firstFallback = randomLobbyCode();
     const secondFallback = randomLobbyCode();
-    const activeCount = await pool.query<{ count: string }>(
-      `SELECT COUNT(*)::text AS count FROM lobbies WHERE status IN ('WAITING', 'ACTIVE')`,
-    );
     const blocker = await pool.connect();
     let firstCreation: Promise<CreateActiveLobbyResult> | undefined;
     let secondCreation: Promise<CreateActiveLobbyResult> | undefined;
@@ -2938,11 +3362,11 @@ describeDatabase("PostgreSQL durable game state", () => {
       await blocker.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
       await blocker.query("SELECT pg_advisory_xact_lock(17742, 23001)");
       firstCreation = firstConnection.lobbyStates.createActive(omitLobbyCode(first), {
-        maxActiveLobbies: Number(activeCount.rows[0]!.count) + 2,
+        maxActiveLobbies: Number.MAX_SAFE_INTEGER,
         nextCode: scriptedCodes([sharedCode, firstFallback]),
       });
       secondCreation = secondConnection.lobbyStates.createActive(omitLobbyCode(second), {
-        maxActiveLobbies: Number(activeCount.rows[0]!.count) + 2,
+        maxActiveLobbies: Number.MAX_SAFE_INTEGER,
         nextCode: scriptedCodes([sharedCode, secondFallback]),
       });
       await waitForBlockedLobbyAdmissions(2);
@@ -2970,9 +3394,6 @@ describeDatabase("PostgreSQL durable game state", () => {
     const state = createLobbyState();
     const racedCode = randomLobbyCode();
     const fallbackCode = randomLobbyCode();
-    const activeCount = await pool.query<{ count: string }>(
-      `SELECT COUNT(*)::text AS count FROM lobbies WHERE status IN ('WAITING', 'ACTIVE')`,
-    );
     const blocker = await pool.connect();
     let creation: Promise<CreateActiveLobbyResult> | undefined;
 
@@ -2980,7 +3401,7 @@ describeDatabase("PostgreSQL durable game state", () => {
       await blocker.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
       await blocker.query("SELECT pg_advisory_xact_lock(17742, 23001)");
       creation = connection.lobbyStates.createActive(omitLobbyCode(state), {
-        maxActiveLobbies: Number(activeCount.rows[0]!.count) + 2,
+        maxActiveLobbies: Number.MAX_SAFE_INTEGER,
         nextCode: scriptedCodes([racedCode, fallbackCode]),
       });
       await waitForBlockedLobbyAdmissions(1);
@@ -3008,14 +3429,11 @@ describeDatabase("PostgreSQL durable game state", () => {
     const completed = createLobbyState();
     await createPersistedLobby(connection, completed);
     await pool.query(`UPDATE lobbies SET status = 'COMPLETED' WHERE id = $1`, [completed.lobby.id]);
-    const activeCount = await pool.query<{ count: string }>(
-      `SELECT COUNT(*)::text AS count FROM lobbies WHERE status IN ('WAITING', 'ACTIVE')`,
-    );
     const replacement = createLobbyState();
 
     await expect(
       connection.lobbyStates.createActive(omitLobbyCode(replacement), {
-        maxActiveLobbies: Number(activeCount.rows[0]!.count) + 1,
+        maxActiveLobbies: Number.MAX_SAFE_INTEGER,
         nextCode: () => completed.lobby.code,
       }),
     ).resolves.toEqual({

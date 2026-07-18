@@ -47,7 +47,7 @@ Next story: US-001
 - Socket.IO accepts only strict versioned handshake auth from the configured exact browser origin, burns any canonical ticket reaching auth even in an invalid envelope, discards handshake plaintext, stores only persistence-returned identity in `socket.data`, and revalidates that identity inside command/snapshot lobby fences and before later room delivery. Engine.IO admission and namespace authentication have separate bounded direct-peer limits; mark a rejected transport terminal before awaiting its bounded ticket burn, close it, cap authenticated sockets globally and per session, and recheck both transport closure and transport-wide rejection after ticket consumption before reserving capacity or calling `next()`. Every command attempt is charged before the one-in-flight guard, and per-lobby delivery queues preserve committed sequence order through asynchronous authorization while authorizing each unique persisted identity once per delivery. Active-lobby commits emit a transaction-scoped PostgreSQL notification; the separate game-server process serially reloads and validates each committed event before sequence-deduplicated publication, so HTTP fallback mutations reach connected clients without pre-commit effects. Validate every successful acknowledgement's command ID against the incoming mutation before any delivery; fresh committed lobby events broadcast before requester acknowledgements, replays do not rebroadcast, eventless replay tombstones can acknowledge either delivery scope, and replayed private results return only to the requesting socket. Disconnect sockets on terminal command-time identity outcomes (`UNAUTHORIZED`, inactive/deleted-lobby `NOT_FOUND`, or `LOBBY_EXPIRED`) so stale clients cannot retain rooms or capacity.
 - Active-event subscription, malformed dedicated-channel notification, durable reload, or relay failure is fatal to the game-server runtime because `LISTEN` recovery cannot prove continuity without a durable cursor. Stop Socket.IO before awaiting subscription/database drain so a stalled delivery cannot keep a continuity-lost authority serving, and settle runtime completion with a safe failure if cleanup fails. Exact direct/notification echoes are idempotent only when their canonical event identity matches bounded recent delivery history; same-sequence conflicts and unknown stale deliveries fail closed.
 - Authenticated sockets establish an actor-scoped snapshot baseline before live delivery: join authorized rooms first, buffer a bounded combined set of lobby/private events during the query, emit the snapshot, discard buffered lobby sequences at or below its baseline, then release newer events; every ready-state lobby delivery must also suppress sequences at or below that baseline even when it was queued before synchronization but began socket delivery afterward. Explicit resync uses the same boundary and restores the prior safe baseline plus buffered deliveries after transient query failure; failed initialization disconnects and executes no commands.
-- Realtime presence uses the lobby fence and durable participant connection count: the first socket ends the prior absence and creates a connected generation plus sequenced event, extra tabs update only the count, non-final closes decrement only the count, and the final close atomically marks absence, disconnects the participant's canonical active session with its fixed rejoin deadline even when an older departed sibling socket closes last, invalidates outstanding tickets, and commits the next presence event before notification. Registration returns the durable generation as a cleanup lease; stale cleanup is ignored, sibling sessions are invalidated, and an exhausted cleanup failure stops Socket.IO, rejects supervised runtime completion, and drains the subscription/database for restart.
+- Realtime presence uses the lobby fence and durable participant connection count: the first socket ends the prior absence and creates a connected generation plus sequenced event, extra tabs update only the count, and non-final closes decrement only the count. The final close disconnects the canonical active session, fixes its rejoin deadline, invalidates tickets, and commits a configured durable grace lease; the authority restores a fail-closed bounded lease set after restart and limits concurrent expiry transactions. Generation-fenced expiry returns `expired`, `too-early`, or `stale`, retries only the persistence-authoritative early result, and commits absence before any required pause event. Reconnect or participant departure retires old leases without resuming, host absence takes pause-reason precedence, and resume stays blocked while a current non-overridden absence remains. Cleanup or timer persistence failure is fatal to the supervised authority.
 
 Append-only iteration log
 -------------------------
@@ -3189,3 +3189,125 @@ Targeted re-review outcome for resumed US-032 at 2026-07-17 20:28:05 MST:
 - `qa-expert` reviewed the revised complete staged diff and returned an empty actionable finding list.
 - The deterministic PostgreSQL transaction-order barriers, both sibling close orders, direct authority-failure assertion, and supervised resource-drain coverage resolve both initial QA findings.
 - Code and security review had already returned empty finding lists. No in-scope critical, high, or medium findings remain; US-032 can be marked passing and committed after the final consistency check.
+
+## 2026-07-17 20:44:39 MST - US-033
+- What was implemented
+  - Changed final participant disconnect from immediate absence to a persisted, configured disconnect-grace generation while retaining atomic session disconnection, ticket invalidation, and rejoin deadline behavior.
+  - Added authority timers for newly committed and restart-restored grace leases; exact-generation expiry transactionally commits absence, pauses active calling, clears the automatic deadline, and emits ordered presence then stage events.
+  - Persisted role-specific pause reasons with host-absence precedence, kept reconnect from resuming, and rejected resume commands while a current non-overridden absence remains.
+  - Added fake-timer, PostgreSQL role/deadline/ordering, reconnect, restart restoration, resume-gating, and multi-tab relay coverage.
+- Files changed: `AGENTS.md`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/socket-server.ts`, `apps/game-server/src/socket-server.test.ts`, `packages/database/src/index.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/round-command-executor.ts`, `packages/database/src/database.integration.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-033 - Pause after participant absence`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts -t "expires a persisted disconnect grace lease"` (expected fail before implementation; pass after implementation)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "pauses an active round when the"` (expected fail before implementation; pass after implementation)
+  - Restart-restoration fake-timer regression (expected fail before implementation; pass after implementation)
+  - Absence resume-gating and host-precedence PostgreSQL regressions (expected fail before implementation; pass after implementation)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test:database` (pass before review; 89 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass after review remediation; typecheck, 25 files, and 500 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: none
+  - Used: `backend-developer` for transaction boundaries, timer recovery, generation races, host precedence, and test-scenario guidance because this was a complex realtime/persistence story
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and persistence/realtime-triggered `security-engineer`; targeted re-review by the same specialists planned after substantive fixes
+  - Findings: fixed manual-pause resume bypass, exact-deadline command race, and early timer-drop behavior before targeted re-review
+- Decisions (why):
+  - Reused the existing presence status, deadline, pause-reason, snapshot timer, and active-event schemas because the durable model already represented US-033 and required no migration or contract expansion.
+  - Returned a committed grace lease from final-close persistence and scheduled it only after the retryable transaction completed so transaction retries perform no external timer effects.
+  - Kept expiry generation-fenced and idempotent so reconnect, duplicate timers, and restart-restored timers cannot pause a newer connection generation.
+  - Emitted absence before the pause stage because clients must first learn which persisted presence transition caused the authoritative round pause.
+- **Learnings for future iterations:**
+  - Durable deadlines need both newly committed scheduling and startup restoration; an in-memory timer alone cannot preserve grace behavior across authority restart.
+  - Reconnect should invalidate a grace timer through the persisted generation rather than relying on best-effort in-memory cancellation.
+  - Absence-paused rounds must remain paused after reconnect and require an explicit host resume only after every current non-overridden blocking absence is cleared.
+- Known issues / follow-ups:
+  - US-034 will add host-authorized override for a normal player's current absence generation; host absence remains non-overridable.
+  - The unrelated `apps/web/next-env.d.ts` side effect and untracked browser-report artifacts remain untouched and unstaged.
+- Next iteration start:
+  - Implement US-034 current-generation player-absence override without automatically resuming calls.
+---
+
+Review remediation for US-033 at 2026-07-17 20:52:17 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced three deduplicated blocking root causes: manual-pause resume could bypass a current absence, a command could commit at the exact grace deadline before expiry obtained the lobby fence, and an early wall-clock expiry attempt dropped its timer permanently.
+- Added failing regressions before remediation for manual pause followed by player absence, both deterministic command/expiry lobby-lock orders at the exact deadline, and wall-clock rollback requiring timer rescheduling.
+- Gated every calling-activating command (`start-round`, `resume-round`, `call-next`, and `continue-round`) on current non-overridden absence or due grace state inside the command's lobby-fenced transaction.
+- Rescheduled a lease only when expiry reports no transition and the authority clock still precedes its persisted deadline; stale generations at or after the deadline remain safely discarded.
+- Post-fix checks: all focused regressions pass, the PostgreSQL-enabled root suite passes typecheck with 25 files and 500 tests, lint passes, tracked formatting passes, and staged/unstaged whitespace checks pass.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` because the fixes address each original specialist area.
+
+Targeted re-review outcome for US-033 at 2026-07-17 20:56:53 MST:
+- `code-reviewer` and `qa-expert` returned empty blocking finding lists; QA noted only low residual risk from sharing the activation guard across start/continue without dedicated duplicate tests.
+- `security-engineer` identified two remaining medium lifecycle blockers. First, expiry can return an authoritative too-early result before the deadline but complete after it, causing the completion-time clock check to discard the lease instead of retrying. Second, session expiry during authority downtime can depart a participant without retiring its current grace generation; startup recovery then restores stale departed leases without a bound and can create a fatal transaction burst.
+- Both findings are in scope because they can leave durable grace state unprocessed or make restart availability depend on an unbounded stale timer backlog.
+- Per the one-targeted-re-review limit, no further substantive implementation changes or commit are permitted in this iteration. `US-033` remains `passes: false`, and `prd.json` remains unchanged.
+- Next iteration start: return a discriminated grace-expiry result (`expired`, `too-early`, or `stale`) so only authoritative `too-early` outcomes reschedule; retire or exclude departed grace generations during session expiry/recovery; bound startup grace recovery; add regressions; rerun all US-033 checks; and restart the complete staged review loop.
+
+## 2026-07-17 21:11:42 MST - US-033
+- What was implemented
+  - Resumed the blocked participant-absence story and replaced boolean grace expiry with persistence-authoritative `expired`, `too-early`, and `stale` outcomes.
+  - Retired the current presence generation when the last participant session departs, excluded departed participants from recovery, and made recovery fail closed above its bounded deterministic query.
+  - Limited restart-restored expiry to eight concurrent persistence operations and stopped queued/timed work after the first fatal expiry failure.
+  - Added deterministic regressions for a too-early result completing after its deadline, bounded/fail-closed restart processing, and session-expiry retirement.
+- Files changed: `AGENTS.md`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/runtime.test.ts`, `apps/game-server/src/socket-server.ts`, `apps/game-server/src/socket-server.test.ts`, `packages/database/src/index.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/participant-session-expiry.ts`, `packages/database/src/round-command-executor.ts`, `packages/database/src/database.integration.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-033 - Pause after participant absence`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts -t "reschedules an authoritative early expiry|bounds concurrent expiry"` (expected fail before implementation; pass after implementation)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "retires a grace generation|fails closed instead of truncating bounded grace recovery"` (expected fail before implementation; pass after implementation)
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts -t "does not start queued grace expiry"` (expected fail before implementation; pass after implementation)
+  - `bunx vitest run apps/game-server/src/runtime.test.ts apps/game-server/src/socket-server.test.ts` (pass; 74 tests and 2 PostgreSQL-gated tests skipped before the final fail-closed queue regression; the final focused queue regression also passed)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test:database` (pass; 94 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (initial final runs exposed shared-database capacity races in unrelated non-capacity tests; pass after isolating those tests with typecheck, 25 files, and 508 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "retries active-code collisions"` (pass after test-isolation correction)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `git diff --check && git diff --cached --check` (pass)
+- Implementation agents:
+  - Recommended: none
+  - Used: `backend-developer` for expiry-result semantics, session-departure retirement, recovery bounds, concurrency control, and regression guidance because this resumed complex realtime/persistence story had two concrete lifecycle blockers
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and persistence/realtime-triggered `security-engineer` planned for the complete restaged high-risk diff
+  - Findings: code and security returned none; fixed queue-drain assertions, combined multi-client active-round pause relay, inverse host precedence, and runtime recovery wiring before targeted QA re-review
+- Decisions (why):
+  - Used the database transaction's sampled lifecycle time to classify `too-early` because the authority clock at promise completion cannot reconstruct the result of the fenced persistence decision.
+  - Failed startup recovery above the durable maximum instead of truncating because omitted grace leases could leave an active round unpaused.
+  - Retired presence with the participant inside the existing lobby-fenced session-expiry transaction so recovery cannot revive a departed generation.
+  - Added a fixed-concurrency expiry queue because even a bounded valid recovery set must not open every overdue transaction simultaneously.
+  - Removed a one-slot capacity assumption from the collision-only integration test because database-backed test files share the approved database and can create active lobbies concurrently; the dedicated limit test still owns capacity behavior.
+  - Extended that isolation rule to every non-capacity integration test after the combined Socket.IO/PostgreSQL journey exposed the same cross-file race; only dedicated admission-limit coverage derives a tight active-lobby bound.
+- **Learnings for future iterations:**
+  - Asynchronous deadline results must carry the persistence decision that was true under the transaction fence; completion-time wall clocks cannot safely infer whether a retry is required.
+  - Recovery bounds need both a fail-closed query cap and bounded processing concurrency; filtering stale rows alone does not control a valid overdue backlog.
+  - Participant departure and its current presence generation must transition atomically or restart recovery can resurrect lifecycle work for an identity that no longer exists.
+- Known issues / follow-ups:
+  - US-034 will add host-authorized override for a normal player's current absence generation; host absence remains non-overridable.
+  - The unrelated `apps/web/next-env.d.ts` side effect and untracked browser-report artifacts remain untouched and unstaged.
+- Next iteration start:
+  - If review passes, implement US-034 current-generation player-absence override without automatically resuming calls; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for resumed US-033 at 2026-07-17 21:32:13 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass returned no code/security findings and four deduplicated medium QA coverage gaps; the low request for direct start/continue guard duplication remains non-blocking because the shared guard and its call/resume transaction coverage exercise the same query path.
+- Strengthened restart-backlog coverage to prove all nine leases execute exactly once while no more than eight expiry transactions are active.
+- Extended the PostgreSQL multi-tab journey through a real active round and authority-scheduled fake-timer expiry, proving no early pause and consecutive relayed host-absence then paused-stage events.
+- Added inverse precedence coverage proving a later player absence cannot replace an existing host-absence reason, timestamp, or stage event.
+- Added dependency-injected runtime startup tests proving persisted leases reach the Socket.IO authority and recovery failure disconnects the database before authority creation.
+- Removed tight global capacity assumptions from non-capacity integration tests because the new cross-file PostgreSQL journey validly creates lobbies concurrently; dedicated admission-limit tests retain exact capacity assertions.
+- Post-fix checks: focused runtime, multi-client, inverse-precedence, and queue tests pass; the approved-PostgreSQL root suite passes typecheck with 25 files and 508 tests; lint, tracked formatting, and whitespace checks pass.
+- Targeted re-review: pending `qa-expert` because only QA findings received substantive test and runtime-seam changes; code and security are not repeated because both initial finding lists were empty.
+
+Targeted re-review outcome for resumed US-033 at 2026-07-17 21:34:08 MST:
+- `qa-expert` reviewed the revised complete staged diff and returned an empty actionable finding list.
+- Queue-drain completeness, combined multi-client pause relay, inverse host precedence, and runtime recovery/cleanup wiring now have direct deterministic coverage.
+- Code and security review had already returned empty finding lists. The low residual for duplicate start/continue activation-guard tests remains non-blocking because call-next and resume exercise the same shared transaction query.
+- No in-scope critical, high, or medium findings remain; US-033 can be marked passing and committed after the final consistency check.

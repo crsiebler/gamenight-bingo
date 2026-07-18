@@ -46,6 +46,20 @@ export async function expireDueParticipantSessions(
       where: { id: participantId, lobbyId, departedAt: null },
       data: { departedAt },
     });
+    if (departed.count > 0) {
+      await transaction.presenceGeneration.updateMany({
+        where: { lobbyId, participantId, endedAt: null },
+        data: {
+          status: "DEPARTED",
+          connectionCount: 0,
+          changedAt: departedAt,
+          graceEndsAt: null,
+          absentSince: null,
+          departedAt,
+          overridden: false,
+        },
+      });
+    }
     departedParticipants += departed.count;
   }
   return departedParticipants;

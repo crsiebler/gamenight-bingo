@@ -50,6 +50,8 @@ export {
   type PresenceStatus,
   type RecognizedParticipantSession,
   type RealtimePresenceDisconnectInput,
+  type RealtimePresenceGraceExpiryResult,
+  type RealtimePresenceGracePeriod,
   type RealtimePresenceIdentity,
   type RoundEligibility,
   type RoundStage,

@@ -14,7 +14,7 @@ import {
 } from "@gamenight-bingo/contracts";
 import { connectDatabase, type NewActiveLobbyState } from "@gamenight-bingo/database";
 import { io as createClient, Manager, type Socket } from "socket.io-client";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
   AuthenticatedConnectionCapacity,
@@ -682,7 +682,24 @@ interface HarnessOptions {
   readonly unregisterPresence?: (
     identity: AuthenticatedRealtimeIdentity,
     presenceGeneration: number,
-  ) => Promise<void>;
+  ) => Promise<{
+    readonly lobbyId: string;
+    readonly participantId: string;
+    readonly presenceGeneration: number;
+    readonly graceEndsAt: Date;
+  } | null>;
+  readonly expirePresenceGrace?: (grace: {
+    readonly lobbyId: string;
+    readonly participantId: string;
+    readonly presenceGeneration: number;
+    readonly graceEndsAt: Date;
+  }) => Promise<"expired" | "stale" | "too-early">;
+  readonly initialPresenceGracePeriods?: readonly {
+    readonly lobbyId: string;
+    readonly participantId: string;
+    readonly presenceGeneration: number;
+    readonly graceEndsAt: Date;
+  }[];
   readonly limits?: {
     readonly connectionsPerMinute?: number;
     readonly commandsPerMinute?: number;
@@ -711,6 +728,9 @@ async function createHarness(options: HarnessOptions = {}) {
   const server = createGameServer({
     allowedOrigin: ORIGIN,
     clock: options.clock ?? (() => new Date(NOW)),
+    ...(options.initialPresenceGracePeriods === undefined
+      ? {}
+      : { initialPresenceGracePeriods: options.initialPresenceGracePeriods }),
     ...(options.limits === undefined ? {} : { limits: options.limits }),
     ticketConsumer: {
       consumeRealtimeTicket: async ({ ticketHash: hash }) => {
@@ -755,7 +775,8 @@ async function createHarness(options: HarnessOptions = {}) {
       registerConnection: async (identity) => options.registerPresence?.(identity) ?? 1,
       recordHeartbeat: async (identity) => options.recordHeartbeat?.(identity) ?? true,
       unregisterConnection: async (identity, presenceGeneration) =>
-        options.unregisterPresence?.(identity, presenceGeneration),
+        options.unregisterPresence?.(identity, presenceGeneration) ?? null,
+      expireGracePeriod: async (grace) => options.expirePresenceGrace?.(grace) ?? "stale",
     },
   });
   servers.push(server);
@@ -818,6 +839,211 @@ async function createHarness(options: HarnessOptions = {}) {
 }
 
 describe("authenticated Socket.IO authority", () => {
+  test("restores a persisted disconnect grace lease after authority restart", async () => {
+    const expired: unknown[] = [];
+    const grace = {
+      lobbyId: identities.player.lobbyId,
+      participantId: identities.player.participantId,
+      presenceGeneration: 4,
+      graceEndsAt: new Date(Date.parse(NOW) + 10_000),
+    };
+    vi.useFakeTimers({ now: new Date(NOW) });
+
+    try {
+      await createHarness({
+        initialPresenceGracePeriods: [grace],
+        expirePresenceGrace: async (lease) => {
+          expired.push(lease);
+          return "expired";
+        },
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(expired).toEqual([grace]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("expires a persisted disconnect grace lease only at its configured deadline", async () => {
+    const credential = ticket(59);
+    const releasePersisted = deferred();
+    const expired: unknown[] = [];
+    const graceEndsAt = new Date(Date.parse(NOW) + 10_000);
+    const grace = {
+      lobbyId: identities.host.lobbyId,
+      participantId: identities.host.participantId,
+      presenceGeneration: 7,
+      graceEndsAt,
+    };
+    const harness = await createHarness({
+      tickets: new Map([[ticketHash(credential), identities.host]]),
+      unregisterPresence: async () => {
+        releasePersisted.resolve();
+        return grace;
+      },
+      expirePresenceGrace: async (lease) => {
+        expired.push(lease);
+        return "expired";
+      },
+    });
+    const client = await harness.connect(credential);
+    vi.useFakeTimers({ now: new Date(NOW) });
+
+    try {
+      client.disconnect();
+      await releasePersisted.promise;
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(expired).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(expired).toEqual([grace]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("reschedules a grace lease when wall-clock rollback makes the first expiry early", async () => {
+    let now = new Date(NOW);
+    const attempts: unknown[] = [];
+    const grace = {
+      lobbyId: identities.player.lobbyId,
+      participantId: identities.player.participantId,
+      presenceGeneration: 9,
+      graceEndsAt: new Date(Date.parse(NOW) + 10_000),
+    };
+    vi.useFakeTimers({ now });
+
+    try {
+      await createHarness({
+        clock: () => now,
+        initialPresenceGracePeriods: [grace],
+        expirePresenceGrace: async (lease) => {
+          attempts.push(lease);
+          return attempts.length > 1 ? "expired" : "too-early";
+        },
+      });
+      now = new Date(Date.parse(NOW) + 5_000);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(attempts).toEqual([grace]);
+
+      now = grace.graceEndsAt;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(attempts).toEqual([grace, grace]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("reschedules an authoritative early expiry that completes after the deadline", async () => {
+    let now = new Date(NOW);
+    const firstResult = deferred<"expired" | "stale" | "too-early">();
+    const attempts: unknown[] = [];
+    const grace = {
+      lobbyId: identities.player.lobbyId,
+      participantId: identities.player.participantId,
+      presenceGeneration: 10,
+      graceEndsAt: new Date(Date.parse(NOW) + 10_000),
+    };
+    vi.useFakeTimers({ now });
+
+    try {
+      await createHarness({
+        clock: () => now,
+        initialPresenceGracePeriods: [grace],
+        expirePresenceGrace: async (lease) => {
+          attempts.push(lease);
+          return attempts.length === 1 ? firstResult.promise : "expired";
+        },
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(attempts).toEqual([grace]);
+
+      now = new Date(grace.graceEndsAt.getTime() + 1);
+      firstResult.resolve("too-early");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(attempts).toEqual([grace, grace]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("bounds concurrent expiry of restart-restored grace leases", async () => {
+    const release = deferred();
+    const gracePeriods = Array.from({ length: 9 }, (_, index) => ({
+      lobbyId: identities.player.lobbyId,
+      participantId: `${identities.player.participantId}-${index}`,
+      presenceGeneration: 1,
+      graceEndsAt: new Date(NOW),
+    }));
+    const attempted: unknown[] = [];
+    let active = 0;
+    let maximumActive = 0;
+    vi.useFakeTimers({ now: new Date(NOW) });
+
+    try {
+      await createHarness({
+        initialPresenceGracePeriods: gracePeriods,
+        expirePresenceGrace: async (grace) => {
+          attempted.push(grace);
+          active += 1;
+          maximumActive = Math.max(maximumActive, active);
+          await release.promise;
+          active -= 1;
+          return "expired";
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(maximumActive).toBe(8);
+
+      release.resolve();
+      await vi.runAllTimersAsync();
+      expect(attempted).toEqual(gracePeriods);
+    } finally {
+      release.resolve();
+      vi.useRealTimers();
+    }
+  });
+
+  test("does not start queued grace expiry after persistence fails", async () => {
+    const releaseOthers = deferred();
+    let rejectFirst!: (error: Error) => void;
+    const firstAttempt = new Promise<"expired" | "stale" | "too-early">((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    const gracePeriods = Array.from({ length: 9 }, (_, index) => ({
+      lobbyId: identities.player.lobbyId,
+      participantId: `${identities.player.participantId}-failure-${index}`,
+      presenceGeneration: 1,
+      graceEndsAt: new Date(NOW),
+    }));
+    let attempts = 0;
+    vi.useFakeTimers({ now: new Date(NOW) });
+
+    try {
+      const harness = await createHarness({
+        initialPresenceGracePeriods: gracePeriods,
+        expirePresenceGrace: async () => {
+          attempts += 1;
+          if (attempts === 1) return firstAttempt;
+          await releaseOthers.promise;
+          return "stale";
+        },
+      });
+      const authorityFailure = harness.server.failure.catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(attempts).toBe(8);
+
+      rejectFirst(new Error("private grace persistence detail"));
+      await expect(authorityFailure).resolves.toMatchObject({
+        message: "Game server authority failed.",
+      });
+      expect(attempts).toBe(8);
+    } finally {
+      releaseOthers.resolve();
+      vi.useRealTimers();
+    }
+  });
+
   test("tracks multiple tabs for one participant session and releases each connection", async () => {
     const firstCredential = ticket(60);
     const secondCredential = ticket(61);
@@ -845,6 +1071,7 @@ describe("authenticated Socket.IO authority", () => {
         expect(presenceGeneration).toBe(7);
         unregistered.push(identity);
         (unregistered.length === 1 ? firstRelease : secondRelease).resolve();
+        return null;
       },
     });
     const first = await harness.connect(firstCredential);
@@ -936,12 +1163,25 @@ describe("authenticated Socket.IO authority", () => {
     await expect(harness.reject(secondCredential)).resolves.toBeDefined();
   });
 
-  testDatabase("aggregates PostgreSQL-backed tabs and relays only the final absence", async () => {
+  testDatabase("aggregates PostgreSQL-backed tabs and relays final grace and absence", async () => {
     let now = new Date("2026-07-17T21:00:00.000Z");
-    const database = await connectDatabase(testDatabaseUrl!, { lifecycleClock: () => now });
+    const database = await connectDatabase(testDatabaseUrl!, {
+      lifecycleClock: () => now,
+      roundCommands: {
+        patterns: [
+          { id: "standard-one-line", mode: "one-line" },
+          { id: "standard-two-lines", mode: "two-lines" },
+          { id: "standard-blackout", mode: "blackout" },
+        ],
+        clock: () => now,
+        randomBytes: (length) => new Uint8Array(randomBytes(length)),
+        nextId: (prefix) => `${prefix}-${randomUUID()}`,
+      },
+    });
     let subscription: Awaited<ReturnType<typeof subscribeGameServerToActiveLobbyEvents>> | null =
       null;
     let harness: Awaited<ReturnType<typeof createHarness>> | null = null;
+    const releaseFinalHostGrace = deferred();
     try {
       const suffix = randomUUID();
       const lobbyId = `lobby-tabs-${suffix}`;
@@ -976,6 +1216,28 @@ describe("authenticated Socket.IO authority", () => {
         maxPlayersPerLobby: 25,
       });
       if (!joined.ok) throw new Error(joined.error.message);
+      for (const command of [
+        {
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "create-round",
+          commandId: `command-tabs-create-${suffix}`,
+        },
+        {
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "configure",
+          commandId: `command-tabs-configure-${suffix}`,
+          patternId: "standard-one-line",
+          callConfiguration: { mode: "manual" },
+        },
+      ]) {
+        const result = await database.roundCommands.executeAuthenticated({
+          lobbyId,
+          participantId: hostParticipantId,
+          participantSessionId: hostSessionId,
+          command: MutationCommandSchema.parse(command),
+        });
+        if (!result.ok) throw new Error(result.error.code);
+      }
 
       const credentials = {
         player: Buffer.from(randomBytes(32)).toString("base64url"),
@@ -1000,8 +1262,10 @@ describe("authenticated Socket.IO authority", () => {
 
       const firstHostRelease = deferred();
       const finalHostRelease = deferred();
+      const finalHostPersistence = deferred();
       let hostReleaseCount = 0;
       harness = await createHarness({
+        clock: () => now,
         consumeTicket: (hash) =>
           database.lobbyStates.consumeRealtimeTicket({
             ticketHash: Buffer.from(hash, "hex"),
@@ -1011,16 +1275,25 @@ describe("authenticated Socket.IO authority", () => {
         registerPresence: (identity) => database.lobbyStates.registerRealtimeConnection(identity),
         recordHeartbeat: (identity) => database.lobbyStates.recordRealtimeHeartbeat(identity),
         unregisterPresence: async (identity, presenceGeneration) => {
-          await database.lobbyStates.unregisterRealtimeConnection({
+          const grace = await database.lobbyStates.unregisterRealtimeConnection({
             ...identity,
             presenceGeneration,
             reconnectWindowSeconds: 120,
+            disconnectPauseGraceSeconds: 10,
           });
           if (identity.participantId === hostParticipantId) {
             hostReleaseCount += 1;
-            (hostReleaseCount === 1 ? firstHostRelease : finalHostRelease).resolve();
+            if (hostReleaseCount === 1) {
+              firstHostRelease.resolve();
+            } else {
+              finalHostPersistence.resolve();
+              await releaseFinalHostGrace.promise;
+              finalHostRelease.resolve();
+            }
           }
+          return grace;
         },
+        expirePresenceGrace: (grace) => database.lobbyStates.expireRealtimePresenceGrace(grace),
       });
       subscription = await subscribeGameServerToActiveLobbyEvents(
         database.activeLobbyEvents,
@@ -1035,6 +1308,22 @@ describe("authenticated Socket.IO authority", () => {
         presence: { participantId: hostParticipantId, status: "connected" },
       });
       const secondHost = await harness.connect(credentials.hostSecond);
+      const roundStarted = once<unknown>(player, "v1:lobby-event");
+      const started = await database.roundCommands.executeAuthenticated({
+        lobbyId,
+        participantId: hostParticipantId,
+        participantSessionId: hostSessionId,
+        command: MutationCommandSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "start-round",
+          commandId: `command-tabs-start-${suffix}`,
+        }),
+      });
+      if (!started.ok) throw new Error(started.error.code);
+      await expect(roundStarted).resolves.toMatchObject({
+        type: "stage",
+        round: { stage: "active" },
+      });
 
       firstHost.disconnect();
       await waitForSignal(firstHostRelease.promise, "the first PostgreSQL host tab release");
@@ -1050,23 +1339,30 @@ describe("authenticated Socket.IO authority", () => {
       ).toMatchObject({ status: "connected" });
 
       now = new Date("2026-07-17T21:01:00.000Z");
-      const hostAbsent = once<unknown>(player, "v1:lobby-event");
+      const hostGrace = once<unknown>(player, "v1:lobby-event");
       secondHost.disconnect();
-      await waitForSignal(finalHostRelease.promise, "the final PostgreSQL host tab release");
-      await expect(hostAbsent).resolves.toMatchObject({
+      await waitForSignal(finalHostPersistence.promise, "the final PostgreSQL host persistence");
+      await expect(hostGrace).resolves.toMatchObject({
         type: "presence",
         presence: {
           participantId: hostParticipantId,
-          status: "absent",
-          absentSince: now.toISOString(),
+          status: "grace",
+          graceEndsAt: "2026-07-17T21:01:10.000Z",
         },
       });
-      const persisted = await database.lobbyStates.findById(lobbyId);
+      vi.useFakeTimers({ now });
+      releaseFinalHostGrace.resolve();
+      await waitForSignal(finalHostRelease.promise, "the final PostgreSQL host tab release");
+      let persisted = await database.lobbyStates.findById(lobbyId);
       expect(
         persisted?.presenceGenerations
           .filter(({ participantId }) => participantId === hostParticipantId)
           .at(-1),
-      ).toMatchObject({ status: "absent", connectionCount: 0 });
+      ).toMatchObject({
+        status: "grace",
+        connectionCount: 0,
+        graceEndsAt: new Date("2026-07-17T21:01:10.000Z"),
+      });
       expect(persisted?.sessions.find(({ id }) => id === hostSessionId)).toMatchObject({
         status: "disconnected",
         disconnectedAt: now,
@@ -1077,7 +1373,64 @@ describe("authenticated Socket.IO authority", () => {
           ticketHash: Buffer.from(ticketHash(credentials.hostUnused), "hex"),
         }),
       ).resolves.toBeNull();
+
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect((await database.lobbyStates.findById(lobbyId))?.round).toMatchObject({
+        stage: "active",
+        pauseReason: null,
+      });
+
+      const relayed: unknown[] = [];
+      const bothRelayed = deferred();
+      const onLobbyEvent = (event: unknown) => {
+        if (
+          typeof event === "object" &&
+          event !== null &&
+          ((event as { type?: unknown }).type === "presence" ||
+            (event as { type?: unknown }).type === "stage")
+        ) {
+          relayed.push(event);
+          if (relayed.length === 2) bothRelayed.resolve();
+        }
+      };
+      player.on("v1:lobby-event", onLobbyEvent);
+      now = new Date("2026-07-17T21:01:10.000Z");
+      await vi.advanceTimersByTimeAsync(1);
+      vi.useRealTimers();
+      await bothRelayed.promise;
+      player.off("v1:lobby-event", onLobbyEvent);
+      expect(relayed).toMatchObject([
+        {
+          type: "presence",
+          presence: {
+            participantId: hostParticipantId,
+            status: "absent",
+            absentSince: now.toISOString(),
+          },
+        },
+        {
+          type: "stage",
+          round: { stage: "paused", pauseReason: "host-absent" },
+        },
+      ]);
+      expect((relayed[1] as { eventSequence: number }).eventSequence).toBe(
+        (relayed[0] as { eventSequence: number }).eventSequence + 1,
+      );
+      persisted = await database.lobbyStates.findById(lobbyId);
+      expect(
+        persisted?.presenceGenerations
+          .filter(({ participantId }) => participantId === hostParticipantId)
+          .at(-1),
+      ).toMatchObject({ status: "absent", connectionCount: 0, absentSince: now });
+      expect(persisted?.round).toMatchObject({
+        stage: "paused",
+        pauseReason: "host-absent",
+        pausedAt: now,
+        nextCallAt: null,
+      });
     } finally {
+      releaseFinalHostGrace.resolve();
+      vi.useRealTimers();
       await harness?.server.close();
       await subscription?.close();
       await database.disconnect();

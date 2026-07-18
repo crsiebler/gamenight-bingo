@@ -186,12 +186,23 @@ export function subscribeGameServerToActiveLobbyEvents(
   });
 }
 
+interface GameServerRuntimeDependencies {
+  readonly connectDatabase: typeof connectDatabase;
+  readonly createGameServer: typeof createGameServer;
+}
+
+const defaultGameServerRuntimeDependencies: GameServerRuntimeDependencies = {
+  connectDatabase,
+  createGameServer,
+};
+
 export async function startGameServerRuntime(
   environment: Readonly<Record<string, string | undefined>>,
+  dependencies: GameServerRuntimeDependencies = defaultGameServerRuntimeDependencies,
 ): Promise<RunningGameServer> {
   const runtimeConfiguration = parseRuntimeConfig(environment);
   const configuration = parseGameServerConfiguration(environment);
-  const database = await connectDatabase(configuration.databaseUrl, {
+  const database = await dependencies.connectDatabase(configuration.databaseUrl, {
     roundCommands: {
       patterns: patternCatalog,
       clock: () => new Date(),
@@ -199,9 +210,17 @@ export async function startGameServerRuntime(
       nextId: (prefix) => `${prefix}-${randomUUID()}`,
     },
   });
-  const server = createGameServer({
+  let initialPresenceGracePeriods;
+  try {
+    initialPresenceGracePeriods = await database.lobbyStates.findRealtimePresenceGracePeriods();
+  } catch (error) {
+    await database.disconnect();
+    throw error;
+  }
+  const server = dependencies.createGameServer({
     allowedOrigin: configuration.allowedOrigin,
     clock: () => new Date(),
+    initialPresenceGracePeriods,
     ticketConsumer: database.lobbyStates,
     commandExecutor: {
       execute: async ({ identity, command }) => {
@@ -234,12 +253,14 @@ export async function startGameServerRuntime(
         database.lobbyStates.registerRealtimeConnection({ ...identity }),
       recordHeartbeat: (identity) => database.lobbyStates.recordRealtimeHeartbeat({ ...identity }),
       unregisterConnection: async (identity, presenceGeneration) => {
-        await database.lobbyStates.unregisterRealtimeConnection({
+        return database.lobbyStates.unregisterRealtimeConnection({
           ...identity,
           presenceGeneration,
           reconnectWindowSeconds: runtimeConfiguration.playerReconnectWindowSeconds,
+          disconnectPauseGraceSeconds: runtimeConfiguration.disconnectPauseGraceSeconds,
         });
       },
+      expireGracePeriod: (grace) => database.lobbyStates.expireRealtimePresenceGrace(grace),
     },
   });
 

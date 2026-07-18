@@ -255,8 +255,15 @@ invalid counts, timestamps, or durations.
 - Aggregate multiple connections for one session as one participant. Persist
   count-only tab opens/closes without broadcasting; only the first connection
   and final disconnection commit sequenced presence events. The final connection
-  also disconnects the participant session, invalidates outstanding tickets, and
-  fixes its configured rejoin deadline in the same lobby-fenced transaction.
+  also disconnects the participant session, invalidates outstanding tickets,
+  fixes its configured rejoin deadline, and starts the persisted disconnect-grace
+  generation in the same lobby-fenced transaction. Recover a bounded grace set
+  after restart, limit concurrent expiry work, and expire each generation through
+  a fenced transaction that commits absence before any required pause event.
+  Retry only a persistence-authoritative `too-early` result; reconnect or
+  participant departure makes the old timer stale and never resumes a paused
+  round. Host absence takes pause-reason precedence, and resume remains blocked
+  while a current non-overridden absence exists.
   Bind disconnect cleanup to the registered presence generation, consolidate
   sibling sessions, and disconnect the participant's canonical active session
   when the final connection belongs to an older departed sibling. Treat cleanup

@@ -32,6 +32,15 @@ export interface AuthenticatedRealtimeIdentity {
   readonly participantSessionId: string;
 }
 
+export interface RealtimePresenceGracePeriod {
+  readonly lobbyId: string;
+  readonly participantId: string;
+  readonly presenceGeneration: number;
+  readonly graceEndsAt: Date;
+}
+
+export type RealtimePresenceGraceExpiryResult = "expired" | "stale" | "too-early";
+
 export type RealtimeCommandExecutionResult =
   | {
       readonly ok: true;
@@ -66,8 +75,12 @@ export interface GameServerOptions {
     unregisterConnection(
       identity: AuthenticatedRealtimeIdentity,
       presenceGeneration: number,
-    ): Promise<void>;
+    ): Promise<RealtimePresenceGracePeriod | null>;
+    expireGracePeriod(
+      grace: RealtimePresenceGracePeriod,
+    ): Promise<RealtimePresenceGraceExpiryResult>;
   };
+  readonly initialPresenceGracePeriods?: readonly RealtimePresenceGracePeriod[];
   readonly limits?: {
     readonly connectionsPerMinute?: number;
     readonly commandsPerMinute?: number;
@@ -117,6 +130,7 @@ interface SocketData {
 }
 
 const MAXIMUM_PENDING_SYNCHRONIZATION_EVENTS = 256;
+const MAXIMUM_CONCURRENT_PRESENCE_GRACE_EXPIRATIONS = 8;
 
 const errorMessages = {
   INVALID_PAYLOAD: "The request payload is invalid.",
@@ -295,17 +309,28 @@ export function createGameServer(options: GameServerOptions): GameServer {
     },
   });
   const pendingPresenceTasks = new Set<Promise<void>>();
+  const presenceGraceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const queuedPresenceGraceExpirations: RealtimePresenceGracePeriod[] = [];
+  let activePresenceGraceExpirations = 0;
+  let presenceGraceExpiryFailed = false;
   let fatalPresenceClose: Promise<void> | null = null;
+  let closed = false;
   let failureReported = false;
   let rejectFailure!: (reason: unknown) => void;
   const failure = new Promise<never>((_resolve, reject) => {
     rejectFailure = reject;
   });
   void failure.catch(() => {});
+  const stopPresenceGraceWork = () => {
+    for (const timer of presenceGraceTimers.values()) clearTimeout(timer);
+    presenceGraceTimers.clear();
+    queuedPresenceGraceExpirations.length = 0;
+  };
   const trackPresenceTask = (task: Promise<void>) => {
     const observed = task.catch(() => {
       if (!failureReported) {
         failureReported = true;
+        stopPresenceGraceWork();
         rejectFailure(new Error("Game server authority failed."));
       }
       fatalPresenceClose ??= new Promise<void>((resolve) => io.close(() => resolve()));
@@ -313,6 +338,57 @@ export function createGameServer(options: GameServerOptions): GameServer {
     pendingPresenceTasks.add(observed);
     void observed.finally(() => pendingPresenceTasks.delete(observed));
   };
+  const drainPresenceGraceExpirations = () => {
+    while (
+      !closed &&
+      !presenceGraceExpiryFailed &&
+      activePresenceGraceExpirations < MAXIMUM_CONCURRENT_PRESENCE_GRACE_EXPIRATIONS
+    ) {
+      const grace = queuedPresenceGraceExpirations.shift();
+      if (grace === undefined) return;
+      activePresenceGraceExpirations += 1;
+      trackPresenceTask(
+        options.presenceLifecycle
+          .expireGracePeriod(grace)
+          .then((result) => {
+            if (result === "too-early" && !closed) schedulePresenceGrace(grace);
+          })
+          .catch((error: unknown) => {
+            presenceGraceExpiryFailed = true;
+            stopPresenceGraceWork();
+            throw error;
+          })
+          .finally(() => {
+            activePresenceGraceExpirations -= 1;
+            drainPresenceGraceExpirations();
+          }),
+      );
+    }
+  };
+  const schedulePresenceGrace = (grace: RealtimePresenceGracePeriod) => {
+    if (closed) return;
+    if (
+      !Number.isSafeInteger(grace.presenceGeneration) ||
+      grace.presenceGeneration < 1 ||
+      !Number.isFinite(grace.graceEndsAt.getTime())
+    ) {
+      trackPresenceTask(Promise.reject(new Error("Invalid persisted presence grace period.")));
+      return;
+    }
+    const key = JSON.stringify([grace.lobbyId, grace.participantId, grace.presenceGeneration]);
+    const existing = presenceGraceTimers.get(key);
+    if (existing !== undefined) clearTimeout(existing);
+    const timer = setTimeout(
+      () => {
+        presenceGraceTimers.delete(key);
+        queuedPresenceGraceExpirations.push(grace);
+        drainPresenceGraceExpirations();
+      },
+      Math.max(0, grace.graceEndsAt.getTime() - options.clock().getTime()),
+    );
+    presenceGraceTimers.set(key, timer);
+  };
+  options.initialPresenceGracePeriods?.forEach(schedulePresenceGrace);
 
   io.use(async (socket, next) => {
     let transportClosed = socket.conn.readyState !== "open";
@@ -698,7 +774,11 @@ export function createGameServer(options: GameServerOptions): GameServer {
       const presenceGeneration = await registration;
       if (presenceGeneration === null || presenceReleased) return;
       presenceReleased = true;
-      await options.presenceLifecycle.unregisterConnection(identity, presenceGeneration);
+      const grace = await options.presenceLifecycle.unregisterConnection(
+        identity,
+        presenceGeneration,
+      );
+      if (grace !== null) schedulePresenceGrace(grace);
     };
     socket.once("disconnect", () => trackPresenceTask(releasePresence()));
     const initialization = (async () => {
@@ -828,7 +908,6 @@ export function createGameServer(options: GameServerOptions): GameServer {
     });
   });
 
-  let closed = false;
   return {
     failure,
     async listen({ host, port }) {
@@ -838,6 +917,7 @@ export function createGameServer(options: GameServerOptions): GameServer {
     async close() {
       if (closed) return Promise.resolve();
       closed = true;
+      stopPresenceGraceWork();
       fatalPresenceClose ??= new Promise<void>((resolve) => io.close(() => resolve()));
       await fatalPresenceClose;
       await Promise.all([...pendingPresenceTasks]);
