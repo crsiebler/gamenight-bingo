@@ -58,6 +58,8 @@ Next story: US-001
 - Inactive-lobby cleanup uses bounded candidate scans only as hints, revalidates the configured threshold plus active-call/connection protection under the Serializable lobby fence with lock-time sampling, and deletes only the lobby parent so PostgreSQL cascades all owned private state. The game server sweeps before lease recovery, runs nonoverlapping periodic cleanup, and treats cleanup failure as fatal; successful join, rejoin, connection, heartbeat, and sequenced presence transitions advance activity with `GREATEST`.
 - Shared framework-neutral controls live in `packages/ui`; Next-specific adapters and the atoms/molecules/organisms/templates/lib alias barrels live under `apps/web/src`, with matching app/root TypeScript paths and `react-jsx` so both Next builds and Vitest-imported app TSX resolve consistently.
 - After removing a temporary App Router browser harness, run the final production Next build before typecheck so generated `.next/types` no longer reference deleted preview pages, then restore any unrelated `next-env.d.ts` working-tree side effect without staging it.
+- Multi-step browser entry flows allocate one stable command ID per persisted step, prevent duplicate submission, retain completed-step state after partial failure, and retry only the unfinished command; public landing metadata and pattern choices derive from the same visible/canonical source rather than duplicate browser data.
+- Browser mutation clients treat non-success responses as definitive only when a strict error contract correlates to the outgoing command ID; malformed, missing-ID, and mismatched-ID responses remain ambiguous and replay through the original command session.
 
 Append-only iteration log
 -------------------------
@@ -4335,3 +4337,114 @@ Targeted re-review outcome for US-044 at 2026-07-18 05:53:12 MST:
 - `qa-expert`, `ui-designer`, and `ux-researcher` returned empty actionable finding lists after reviewing the revised complete staged diff and browser evidence.
 - Exact root/layer alias resolution, semantic theme variables, and mounted-field error announcement are resolved with no remaining in-scope critical, high, or medium findings.
 - Residual risk is limited to later real-form screen-reader timing and committed page integration, both owned by the dependency-ordered frontend flow stories.
+
+## 2026-07-18 06:23:11 MST - US-045
+- What was implemented
+  - Added the first committed App Router landing page with a distinctive mobile-first public presentation, responsive 75-ball artwork, visible three-step hosting guidance, and a local generated app icon.
+  - Added an accessible create-lobby form for host name, all eleven approved theme identities, the canonical pattern catalog defaulted explicitly to One Line, and manual or automatic calling with only 5/10/30/60/120-second intervals.
+  - Implemented a resumable create flow that commits lobby entry, round creation, and configuration in order with stable per-step command IDs, same-origin credentials, duplicate-submit prevention, strict contract response parsing, and retry of only the unfinished step.
+  - Added public WebApplication and HowTo JSON-LD generated from the same visible step model with no participant, session, credential, or private-lobby data.
+  - Added form, configuration-flow, metadata, structured-data parity, validation-focus, and accessibility tests plus the DOM libraries required by the real web workspace.
+- Files changed: `AGENTS.md`, `apps/web/tsconfig.json`, `apps/web/src/app/globals.css`, `apps/web/src/app/icon.tsx`, `apps/web/src/app/layout.tsx`, `apps/web/src/app/page.tsx`, `apps/web/src/components/organisms/create-lobby-form.tsx`, `apps/web/src/components/organisms/create-lobby-form.test.tsx`, `apps/web/src/components/organisms/index.ts`, `apps/web/src/components/templates/public-landing-page.tsx`, `apps/web/src/components/templates/public-landing-page.test.tsx`, `apps/web/src/components/templates/index.ts`, `apps/web/src/lib/create-lobby-flow.ts`, `apps/web/src/lib/create-lobby-flow.test.ts`, `apps/web/src/lib/index.ts`, `apps/web/src/ui.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-045 - Build public landing and create flow`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/lib/create-lobby-flow.test.ts apps/web/src/components/organisms/create-lobby-form.test.tsx apps/web/src/components/templates/public-landing-page.test.tsx` (expected fail before implementation because all three product modules were absent; pass after implementation with 8 tests and after review remediation with 13 tests)
+  - `bun run test` (pass after review remediation; typecheck, 28 files passed, 1 database file skipped, 479 tests passed, and 135 database-backed tests skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - Focused Prettier check for every intended text/configuration file (pass)
+  - `bun run format:check` (fails only on three pre-existing untracked Lighthouse/DOM artifacts; all intended files pass the focused check)
+  - `DATABASE_URL=<isolated approved local database> bun run --cwd apps/web build` (pass; static landing and generated icon plus dynamic APIs)
+  - `TEST_DATABASE_URL=<isolated approved local database> DATABASE_URL=<same> bun run test:e2e` (pass; 2 Playwright tests)
+  - `bun install --frozen-lockfile` (pass; 393 installs checked with no changes)
+  - `git diff --check` (pass)
+  - Manual dev-browser verification at 320px mobile and 1440px desktop (pass; no overflow, logical keyboard order, visible focus, 44px controls, conditional interval, real 201/200/200 creation flow, accessible success state, and clean final console)
+  - Mobile Lighthouse navigation audit (pass; accessibility 100, best practices 100, SEO 100, and agentic browsing 100 after correcting decorative numeral contrast)
+- Implementation agents:
+  - Recommended: `nextjs-developer`, `accessibility-tester`
+  - Used: `nextjs-developer`, `accessibility-tester` for App Router boundaries, request sequencing, partial-failure behavior, native semantics, conditional fields, structured-data privacy, and browser-test guidance
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, `security-engineer`, `ui-designer`, and `ux-researcher`; targeted re-review planned for all five after substantive fixes
+  - Findings: fixed ambiguous create-response replay, non-retryable failure handling, active-lobby acknowledgement scope, duplicate-submit/retry-ID coverage, native/custom validation mismatch, duplicate pattern labels, and tablet gutter loss before targeted re-review
+- Decisions (why):
+  - Imported the canonical pattern catalog in the server page rather than fetching the app's own API because the catalog is static public data and self-fetching would unnecessarily initialize the database runtime.
+  - Kept selectable theme identity options in this flow while deferring semantic tokens, moodboards, and assets to US-053/US-054 so later theme stories retain their dependency-ordered scope.
+  - Created the waiting round before applying the selected configuration because the authoritative configure command operates on an existing waiting round.
+  - Showed a complete accessible ready/code state instead of redirecting to or inventing the private lobby page owned by US-047.
+  - Used a generated Next icon route instead of a static SVG because the repository-wide Prettier command cannot infer an SVG parser.
+- **Learnings for future iterations:**
+  - Public form pages should keep static catalog/metadata work in a Server Component and isolate interactive mutation state in a focused Client Component.
+  - A partially successful entry flow must retain the issued cookie/lobby and completed command state; retrying lobby creation would leak an abandoned lobby and can violate credential replay constraints.
+  - Browser success testing should use a canonical origin accepted by the exact-origin guard and an isolated migrated local database when the long-lived development database has reached the active-lobby cap.
+- Known issues / follow-ups:
+  - US-047 owns navigation into the full private lobby/sharing page; this story intentionally stops at the ready/code state.
+  - The isolated `gamenight_bingo_us045_browser` local test database remains in the existing PostgreSQL volume; no existing local data was deleted.
+  - Root `bun run format:check` remains blocked by unrelated pre-existing untracked reports; all intended story files pass Prettier.
+  - The pre-existing browser-report artifacts and specialist-generated `desktop-review.png` remain unstaged.
+- Next iteration start:
+  - If review passes, implement US-046 typed/pasted code entry and same-device rejoin flows; otherwise resume any recorded blocking finding.
+---
+
+Fresh review outcome for US-045 at 2026-07-18 07:02:03 MST:
+- `code-reviewer`, `qa-expert`, `security-engineer`, `ui-designer`, and `ux-researcher` reviewed the revised complete staged diff; the UI and UX specialists also used dev-browser against the live mobile and desktop flow.
+- All five specialists returned empty actionable finding lists, so no targeted re-review was needed.
+- Residual risk is limited to native screen-reader/forced-colors manual coverage and the already verified but non-automated live 201/200/200 success journey; focused transport tests cover the revised correlation behavior.
+- US-045 has no unresolved in-scope critical, high, or medium findings.
+
+Review remediation for US-045 at 2026-07-18 06:38:41 MST:
+- The initial `code-reviewer`, `qa-expert`, `security-engineer`, `ui-designer`, and `ux-researcher` pass produced six deduplicated blocking root causes plus one cheap low-severity tablet layout issue.
+- Added failing regressions proving ambiguous initial response loss must remain locked to the original flow, participant-private acknowledgements cannot complete lobby setup, real submit-button validation reaches the custom accessible errors, and duplicate canonical names need distinct category labels.
+- Preserved structured retryability/ambiguity in a dedicated flow error, retained the same command session after uncertain success, hid retry for terminal partial failures, required active-lobby acknowledgement scope, and parsed configure intent through its strict contract.
+- Strengthened concurrency and retry tests to prove one request sequence and the same unfinished command ID, grouped patterns by canonical category with distinct X/Cross labels, and delayed the two-column layout until its minimum tracks preserve tablet gutters.
+- Manual post-fix browser verification confirmed 768px single-column gutters, category groups/distinct duplicate labels, click-driven focused/announced errors, and a second real 201/200/200 manual-mode success.
+- Post-fix checks: focused suite passes 13 tests, root suite passes 479 tests with 135 database-backed skips, typecheck/lint/intended formatting pass, and the production Next build plus 2 live Playwright tests pass.
+- Targeted re-review: all five specialists because the substantive remediations affect correctness, QA, security, visual, and UX findings.
+
+Targeted re-review outcome for US-045 at 2026-07-18 06:45:20 MST:
+- `qa-expert`, `security-engineer`, and `ui-designer` returned empty actionable finding lists; the active-lobby acknowledgement, test coverage, security boundary, duplicate labels, and tablet layout remediations are resolved.
+- `code-reviewer` found one remaining medium ambiguity blocker: malformed non-2xx responses and valid errors whose command ID does not correlate to the outgoing mutation are treated as definitive. A proxy/framework 5xx after a committed create can therefore clear the original session and permit a duplicate lobby. The next iteration must pass the expected command ID into response handling, classify malformed/mismatched/uncorrelated internal failures as ambiguous, and prove retry reuses the original create ID.
+- `ux-researcher` found one remaining medium terminal-state blocker: a conclusive non-retryable failure before lobby creation leaves the fields editable while removing the submit action permanently. The next iteration must restore a clear Start over/create action after an edit or provide an explicit reset while reserving locked terminal states for partial/uncertain creation, with component and browser coverage.
+- Per the one-targeted-re-review limit, no further substantive fixes or specialist passes are permitted in this iteration. `US-045` remains `passes: false`, `prd.json` is unchanged, and no commit was created.
+- Next iteration start: add failing regressions for malformed/mismatched/uncorrelated initial responses and editable terminal pre-create recovery, implement the two focused fixes, rerun all US-045 checks/browser verification, and restart the complete staged review loop.
+
+## 2026-07-18 06:53:00 MST - US-045
+- What was implemented
+  - Resumed the blocked public landing/create story and made non-success mutation responses definitive only when a strict error payload carries the exact outgoing command ID.
+  - Classified malformed, mismatched, and missing-command-ID create responses as ambiguous so retries preserve the original create command and cannot duplicate an already committed lobby.
+  - Restored the `Create lobby` action when the host edits a terminal failure that occurred before lobby creation, while keeping partial and uncertain creations locked to their original flow session.
+- Files changed: `AGENTS.md`, `apps/web/tsconfig.json`, `apps/web/src/app/globals.css`, `apps/web/src/app/icon.tsx`, `apps/web/src/app/layout.tsx`, `apps/web/src/app/page.tsx`, `apps/web/src/components/organisms/create-lobby-form.tsx`, `apps/web/src/components/organisms/create-lobby-form.test.tsx`, `apps/web/src/components/organisms/index.ts`, `apps/web/src/components/templates/public-landing-page.tsx`, `apps/web/src/components/templates/public-landing-page.test.tsx`, `apps/web/src/components/templates/index.ts`, `apps/web/src/lib/create-lobby-flow.ts`, `apps/web/src/lib/create-lobby-flow.test.ts`, `apps/web/src/lib/index.ts`, `apps/web/src/ui.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-045 - Build public landing and create flow`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/lib/create-lobby-flow.test.ts apps/web/src/components/organisms/create-lobby-form.test.tsx` (expected fail before implementation: 4 blocker regressions failed; pass after implementation with 15 tests)
+  - `bun run test` (pass; typecheck, 28 files passed, 1 database file skipped, 483 tests passed, and 135 database-backed tests skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - Focused Prettier check for every staged text/configuration file (pass after formatting)
+  - `bun run format:check` (fails only on three pre-existing untracked Lighthouse/DOM artifacts; all intended files pass the focused check)
+  - `DATABASE_URL=<approved local database> bun run --cwd apps/web build` (pass; static landing and generated icon plus dynamic APIs)
+  - `TEST_DATABASE_URL=<approved local database> DATABASE_URL=<same> bun run test:e2e` (pass; 2 Playwright tests)
+  - `git diff --check && git diff --cached --check` (pass)
+  - Manual dev-browser verification at 320px mobile and 1440px desktop (pass; terminal pre-create error is announced, editing restores the create action, no horizontal overflow, and no console errors)
+  - Mobile Lighthouse snapshot (pass; accessibility 100, best practices 100, SEO 100, and agentic browsing 100)
+- Implementation agents:
+  - Recommended: `nextjs-developer`, `accessibility-tester`
+  - Used: skipped in this resumed iteration because both recommended agents already advised US-045 and the remaining work followed two concrete targeted-review findings
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, `security-engineer`, `ui-designer`, and `ux-researcher` planned for the revised complete staged diff
+  - Findings: pending fresh staged-diff review
+- Decisions (why):
+  - Required exact error-command correlation because any malformed or uncorrelated response can arrive after the server committed a mutation, so treating it as conclusive risks creating a second lobby.
+  - Reset terminal form state only when no lobby has been created because partial or uncertain creation must preserve its issued cookie, command IDs, and completed steps.
+  - Reused the existing focused flow/session boundaries rather than adding a separate reset component because edit-driven recovery needs only the current form state and no new public API.
+- **Learnings for future iterations:**
+  - HTTP status alone cannot prove a browser mutation failed before commit; strict response parsing must also correlate the returned command ID.
+  - Terminal errors need different recovery UX before and after durable creation: pre-create failures may unlock on edit, while partial or ambiguous creation remains locked for safe replay.
+- Known issues / follow-ups:
+  - US-047 owns navigation into the full private lobby/sharing page; this story intentionally stops at the ready/code state.
+  - Root `bun run format:check` remains blocked by unrelated pre-existing untracked reports; all intended story files pass Prettier.
+  - The pre-existing `apps/web/next-env.d.ts` side effect and browser-report artifacts remain unstaged.
+- Next iteration start:
+  - If review passes, implement US-046 typed/pasted code entry and same-device rejoin flows; otherwise resume any recorded blocking finding.
+---

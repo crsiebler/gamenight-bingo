@@ -370,6 +370,12 @@ then refactor while green.
   co-winner-window, result, and expired states explicitly where applicable.
 - Keep current call, card, call mode/timer, pause reason, and valid controls
   prominent. Prevent duplicate pending commands.
+- Multi-step browser mutations keep one command ID per committed step, prevent
+  duplicate submission, and resume only the unfinished step after a partial
+  success; never restart a completed entry mutation merely to retry setup.
+- Treat a mutation error response as definitive only when its strict contract
+  correlates to the outgoing command ID; malformed, missing-ID, or mismatched-ID
+  responses are ambiguous and must retain the original command session for replay.
 - Generate pattern previews from canonical catalog data. Never hand-maintain a
   second mask source or transform a source mask implicitly.
 - Themes may change presentation, not game semantics or readability. Lazy-load
