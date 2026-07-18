@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 import {
   CONTRACT_SCHEMA_VERSION,
@@ -12,6 +12,7 @@ import {
   type ParticipantPrivateEvent,
   type Snapshot,
 } from "@gamenight-bingo/contracts";
+import { connectDatabase, type NewActiveLobbyState } from "@gamenight-bingo/database";
 import { io as createClient, Manager, type Socket } from "socket.io-client";
 import { afterEach, describe, expect, test } from "vitest";
 
@@ -27,6 +28,8 @@ import {
 const ORIGIN = "https://bingo.example.test";
 const NOW = "2026-07-17T20:00:00.000Z";
 const LATER = "2026-07-17T20:00:02.000Z";
+const testDatabaseUrl = process.env["TEST_DATABASE_URL"];
+const testDatabase = testDatabaseUrl === undefined ? test.skip : test;
 
 const identities = {
   host: {
@@ -102,6 +105,464 @@ const waitingSnapshot = SnapshotSchema.parse({
   calls: [],
   timer: null,
 });
+
+function waitingSnapshotForIdentity(identity: AuthenticatedRealtimeIdentity): Snapshot {
+  const inPrimaryLobby = identity.lobbyId === identities.host.lobbyId;
+  const hostParticipantId = inPrimaryLobby ? identities.host.participantId : identity.participantId;
+  const isHost = identity.participantId === hostParticipantId;
+  const summary = {
+    id: identity.participantId,
+    username: isHost ? "Host" : "Player",
+    role: isHost ? ("host" as const) : ("player" as const),
+    roundEligibility: "waiting" as const,
+    presence: {
+      participantId: identity.participantId,
+      generation: 1,
+      status: "connected" as const,
+      changedAt: NOW,
+    },
+  };
+  const hostSummary = {
+    id: hostParticipantId,
+    username: "Host",
+    role: "host" as const,
+    roundEligibility: "waiting" as const,
+    presence: {
+      participantId: hostParticipantId,
+      generation: 1,
+      status: "connected" as const,
+      changedAt: NOW,
+    },
+  };
+
+  return SnapshotSchema.parse({
+    schemaVersion: CONTRACT_SCHEMA_VERSION,
+    generatedAt: NOW,
+    lastEventSequence: null,
+    lobby: {
+      id: identity.lobbyId,
+      code: inPrimaryLobby ? "ABC234" : "DEF567",
+      hostParticipantId,
+      themeId: "theme_classic",
+      status: "waiting",
+      createdAt: NOW,
+    },
+    session: {
+      id: identity.participantSessionId,
+      lobbyId: identity.lobbyId,
+      participantId: identity.participantId,
+      status: "active",
+      issuedAt: NOW,
+    },
+    self: summary,
+    participants: isHost ? [summary] : [hostSummary, summary],
+    round: null,
+    ownCard: null,
+    ownMarks: [],
+    calls: [],
+    timer: null,
+  });
+}
+
+const activeSnapshot = SnapshotSchema.parse({
+  schemaVersion: CONTRACT_SCHEMA_VERSION,
+  generatedAt: NOW,
+  lastEventSequence: 1,
+  lobby: {
+    id: identities.host.lobbyId,
+    code: "ABC234",
+    hostParticipantId: identities.host.participantId,
+    themeId: "theme_classic",
+    status: "active",
+    createdAt: NOW,
+    roundId: "round_one",
+  },
+  session: {
+    id: identities.host.participantSessionId,
+    lobbyId: identities.host.lobbyId,
+    participantId: identities.host.participantId,
+    status: "active",
+    issuedAt: NOW,
+  },
+  self: {
+    id: identities.host.participantId,
+    username: "Host",
+    role: "host",
+    roundEligibility: "playing",
+    presence: {
+      participantId: identities.host.participantId,
+      generation: 1,
+      status: "connected",
+      changedAt: NOW,
+    },
+  },
+  participants: [
+    {
+      id: identities.host.participantId,
+      username: "Host",
+      role: "host",
+      roundEligibility: "playing",
+      presence: {
+        participantId: identities.host.participantId,
+        generation: 1,
+        status: "connected",
+        changedAt: NOW,
+      },
+    },
+    {
+      id: identities.player.participantId,
+      username: "Player",
+      role: "player",
+      roundEligibility: "playing",
+      presence: {
+        participantId: identities.player.participantId,
+        generation: 1,
+        status: "connected",
+        changedAt: NOW,
+      },
+    },
+  ],
+  round: {
+    id: "round_one",
+    lobbyId: identities.host.lobbyId,
+    patternId: "standard-one-line",
+    callConfiguration: { mode: "automatic", intervalSeconds: 30 },
+    stage: "active",
+    startedAt: NOW,
+  },
+  ownCard: {
+    id: "card_host",
+    roundId: "round_one",
+    participantId: identities.host.participantId,
+    cells: [
+      1,
+      16,
+      31,
+      46,
+      61,
+      2,
+      17,
+      32,
+      47,
+      62,
+      3,
+      18,
+      "FREE",
+      48,
+      63,
+      4,
+      19,
+      34,
+      49,
+      64,
+      5,
+      20,
+      35,
+      50,
+      65,
+    ],
+  },
+  ownMarks: [{ id: "mark_one", cardId: "card_host", ball: 1, markedAt: NOW }],
+  calls: [{ id: "call_one", roundId: "round_one", position: 1, ball: 1, calledAt: NOW }],
+  timer: { kind: "automatic-call", deadline: LATER },
+});
+
+const pausedSnapshot = SnapshotSchema.parse({
+  ...activeSnapshot,
+  generatedAt: LATER,
+  lastEventSequence: 2,
+  round: {
+    ...activeSnapshot.round,
+    stage: "paused",
+    pauseReason: "host-command",
+    pausedAt: LATER,
+  },
+  timer: null,
+});
+
+const resultSnapshot = SnapshotSchema.parse({
+  ...activeSnapshot,
+  generatedAt: "2026-07-17T20:00:04.000Z",
+  lastEventSequence: 3,
+  round: {
+    ...activeSnapshot.round,
+    stage: "result",
+    result: {
+      triggeringCallId: "call_one",
+      openedAt: "2026-07-17T20:00:01.000Z",
+      closesAt: LATER,
+      settledAt: LATER,
+      winnerParticipantIds: [identities.host.participantId],
+    },
+  },
+  timer: null,
+});
+
+function createRestartLobbyState(): {
+  readonly state: NewActiveLobbyState;
+  readonly identity: AuthenticatedRealtimeIdentity;
+  readonly sessionTokenHash: Uint8Array;
+  readonly foreignCardId: string;
+  readonly expectedSnapshot: (code: string, generatedAt: string) => Snapshot;
+} {
+  const suffix = randomUUID();
+  const lobbyId = `lobby-restart-${suffix}`;
+  const hostParticipantId = `participant-host-${suffix}`;
+  const playerParticipantId = `participant-player-${suffix}`;
+  const participantSessionId = `session-host-${suffix}`;
+  const roundId = `round-restart-${suffix}`;
+  const hostCardId = `card-host-${suffix}`;
+  const foreignCardId = `card-player-${suffix}`;
+  const callId = `call-restart-${suffix}`;
+  const createdAt = new Date("2026-07-17T19:55:00.000Z");
+  const startedAt = new Date(NOW);
+  const calledAt = new Date("2026-07-17T20:00:00.500Z");
+  const openedAt = new Date("2026-07-17T20:00:01.000Z");
+  const closedAt = new Date(LATER);
+  const sessionTokenHash = new Uint8Array(randomBytes(32));
+  const hostCells = activeSnapshot.ownCard!.cells.map((cell) => (cell === "FREE" ? 0 : cell));
+  const playerCells = [
+    6, 21, 36, 51, 66, 7, 22, 37, 52, 67, 8, 23, 0, 53, 68, 9, 24, 39, 54, 69, 10, 25, 40, 55, 70,
+  ];
+
+  return {
+    identity: { lobbyId, participantId: hostParticipantId, participantSessionId },
+    sessionTokenHash,
+    foreignCardId,
+    expectedSnapshot: (code, generatedAt) =>
+      SnapshotSchema.parse({
+        schemaVersion: CONTRACT_SCHEMA_VERSION,
+        generatedAt,
+        lastEventSequence: 1,
+        lobby: {
+          id: lobbyId,
+          code,
+          hostParticipantId,
+          themeId: "theme_classic",
+          status: "active",
+          createdAt: createdAt.toISOString(),
+          roundId,
+        },
+        session: {
+          id: participantSessionId,
+          lobbyId,
+          participantId: hostParticipantId,
+          status: "active",
+          issuedAt: createdAt.toISOString(),
+        },
+        self: {
+          id: hostParticipantId,
+          username: `Restart Host ${suffix}`,
+          role: "host",
+          roundEligibility: "playing",
+          presence: {
+            participantId: hostParticipantId,
+            generation: 1,
+            status: "connected",
+            changedAt: startedAt.toISOString(),
+          },
+        },
+        participants: [
+          {
+            id: hostParticipantId,
+            username: `Restart Host ${suffix}`,
+            role: "host",
+            roundEligibility: "playing",
+            presence: {
+              participantId: hostParticipantId,
+              generation: 1,
+              status: "connected",
+              changedAt: startedAt.toISOString(),
+            },
+          },
+          {
+            id: playerParticipantId,
+            username: `Restart Player ${suffix}`,
+            role: "player",
+            roundEligibility: "playing",
+            presence: {
+              participantId: playerParticipantId,
+              generation: 1,
+              status: "connected",
+              changedAt: startedAt.toISOString(),
+            },
+          },
+        ],
+        round: {
+          id: roundId,
+          lobbyId,
+          patternId: "standard-one-line",
+          callConfiguration: { mode: "automatic", intervalSeconds: 30 },
+          stage: "result",
+          startedAt: startedAt.toISOString(),
+          result: {
+            triggeringCallId: callId,
+            openedAt: openedAt.toISOString(),
+            closesAt: closedAt.toISOString(),
+            settledAt: closedAt.toISOString(),
+            winnerParticipantIds: [hostParticipantId],
+          },
+        },
+        ownCard: {
+          id: hostCardId,
+          roundId,
+          participantId: hostParticipantId,
+          cells: activeSnapshot.ownCard!.cells,
+        },
+        ownMarks: [
+          {
+            id: `mark-restart-${suffix}`,
+            cardId: hostCardId,
+            ball: 1,
+            markedAt: calledAt.toISOString(),
+          },
+        ],
+        calls: [
+          {
+            id: callId,
+            roundId,
+            position: 1,
+            ball: 1,
+            calledAt: calledAt.toISOString(),
+          },
+        ],
+        timer: null,
+      }),
+    state: {
+      lobby: {
+        id: lobbyId,
+        status: "active",
+        themeId: "theme_classic",
+        createdAt,
+        lastActivityAt: closedAt,
+        endedAt: null,
+        lastEventSequence: 1n,
+      },
+      participants: [
+        {
+          id: hostParticipantId,
+          username: `Restart Host ${suffix}`,
+          normalizedUsername: `restart host ${suffix}`,
+          role: "host",
+          roundEligibility: "playing",
+          joinedAt: createdAt,
+          departedAt: null,
+        },
+        {
+          id: playerParticipantId,
+          username: `Restart Player ${suffix}`,
+          normalizedUsername: `restart player ${suffix}`,
+          role: "player",
+          roundEligibility: "playing",
+          joinedAt: createdAt,
+          departedAt: null,
+        },
+      ],
+      sessions: [
+        {
+          id: participantSessionId,
+          participantId: hostParticipantId,
+          tokenHash: sessionTokenHash,
+          status: "active",
+          issuedAt: createdAt,
+          disconnectedAt: null,
+          rejoinUntil: null,
+          departedAt: null,
+        },
+      ],
+      presenceGenerations: [
+        {
+          participantId: hostParticipantId,
+          generation: 1n,
+          status: "connected",
+          connectionCount: 1,
+          changedAt: startedAt,
+          graceEndsAt: null,
+          absentSince: null,
+          departedAt: null,
+          overridden: false,
+          endedAt: null,
+        },
+        {
+          participantId: playerParticipantId,
+          generation: 1n,
+          status: "connected",
+          connectionCount: 1,
+          changedAt: startedAt,
+          graceEndsAt: null,
+          absentSince: null,
+          departedAt: null,
+          overridden: false,
+          endedAt: null,
+        },
+      ],
+      round: {
+        id: roundId,
+        initialPatternId: "standard-one-line",
+        currentPatternId: "standard-one-line",
+        stage: "result",
+        callMode: "automatic",
+        callIntervalSeconds: 30,
+        createdAt,
+        startedAt,
+        activeAt: startedAt,
+        pausedAt: null,
+        pauseReason: null,
+        nextCallAt: null,
+        coWinnerTriggeringCallId: callId,
+        coWinnerOpenedAt: openedAt,
+        coWinnerClosesAt: closedAt,
+        resultSettledAt: closedAt,
+        endedAt: null,
+        drawOrder: Array.from({ length: 75 }, (_, index) => ({
+          position: index + 1,
+          ball: index + 1,
+        })),
+        cards: [
+          {
+            id: hostCardId,
+            participantId: hostParticipantId,
+            cells: hostCells,
+            createdAt,
+            marks: [{ id: `mark-restart-${suffix}`, ball: 1, markedAt: calledAt }],
+          },
+          {
+            id: foreignCardId,
+            participantId: playerParticipantId,
+            cells: playerCells,
+            createdAt,
+            marks: [],
+          },
+        ],
+        calls: [{ id: callId, position: 1, ball: 1, calledAt }],
+        coWinners: [
+          {
+            participantId: hostParticipantId,
+            cardId: hostCardId,
+            triggeringCallId: callId,
+            confirmedAt: closedAt,
+          },
+        ],
+      },
+      events: [
+        {
+          sequence: 1n,
+          roundId,
+          eventType: "co-winner-result",
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          payload: { winnerParticipantIds: [hostParticipantId] },
+          createdAt: closedAt,
+        },
+      ],
+      commandResults: [],
+    },
+  };
+}
+
+function randomLobbyCode(): string {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  return Array.from(randomBytes(6), (byte) => alphabet[byte % alphabet.length]).join("");
+}
 
 const stageEvent = ActiveLobbyEventSchema.parse({
   schemaVersion: CONTRACT_SCHEMA_VERSION,
@@ -277,7 +738,8 @@ async function createHarness(options: HarnessOptions = {}) {
       },
     },
     snapshotProvider: {
-      findAuthorizedSnapshot: async (identity) => options.snapshot?.(identity) ?? null,
+      findAuthorizedSnapshot: async (identity) =>
+        options.snapshot?.(identity) ?? waitingSnapshotForIdentity(identity),
     },
     identityAuthorizer: {
       isIdentityActive: async (identity) => options.authorize?.(identity) ?? true,
@@ -291,7 +753,7 @@ async function createHarness(options: HarnessOptions = {}) {
     url: `http://127.0.0.1:${address.port}`,
     consumedHashes,
     executed,
-    async connect(
+    open(
       credential: string,
       auth: Record<string, unknown> = {
         schemaVersion: CONTRACT_SCHEMA_VERSION,
@@ -307,10 +769,23 @@ async function createHarness(options: HarnessOptions = {}) {
         reconnection: false,
       });
       clients.push(client);
+      return client;
+    },
+    async connect(
+      credential: string,
+      auth: Record<string, unknown> = {
+        schemaVersion: CONTRACT_SCHEMA_VERSION,
+        ticket: credential,
+      },
+      origin = ORIGIN,
+    ) {
+      const client = this.open(credential, auth, origin);
       const connected = once<void>(client, "connect");
+      const initialized = once<unknown>(client, "v1:snapshot");
       const failed = once<Error>(client, "connect_error").then((error) => Promise.reject(error));
       client.connect();
       await Promise.race([connected, failed]);
+      await initialized;
       return client;
     },
     async reject(
@@ -321,14 +796,7 @@ async function createHarness(options: HarnessOptions = {}) {
       },
       origin = ORIGIN,
     ) {
-      const client = createClient(`http://127.0.0.1:${address.port}`, {
-        autoConnect: false,
-        transports: ["websocket"],
-        extraHeaders: { Origin: origin },
-        auth,
-        reconnection: false,
-      });
-      clients.push(client);
+      const client = this.open(credential, auth, origin);
       const errorPromise = once<Error & { data?: unknown }>(client, "connect_error");
       client.connect();
       return errorPromise;
@@ -337,6 +805,520 @@ async function createHarness(options: HarnessOptions = {}) {
 }
 
 describe("authenticated Socket.IO authority", () => {
+  test("automatically restores the latest full snapshot with a fresh reconnect ticket", async () => {
+    const firstCredential = ticket(50);
+    const reconnectCredential = ticket(51);
+    let durableSnapshot = activeSnapshot;
+    const requestedIdentities: AuthenticatedRealtimeIdentity[] = [];
+    const harness = await createHarness({
+      tickets: new Map([
+        [ticketHash(firstCredential), identities.host],
+        [ticketHash(reconnectCredential), identities.host],
+      ]),
+      snapshot: async (identity) => {
+        requestedIdentities.push(identity);
+        return durableSnapshot;
+      },
+    });
+
+    const firstClient = harness.open(firstCredential);
+    const firstSnapshot = once<unknown>(firstClient, "v1:snapshot");
+    firstClient.connect();
+    await once<void>(firstClient, "connect");
+    await expect(firstSnapshot).resolves.toEqual({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "snapshot",
+      snapshot: activeSnapshot,
+    });
+
+    const disconnected = once<void>(firstClient, "disconnect");
+    firstClient.disconnect();
+    await disconnected;
+    durableSnapshot = pausedSnapshot;
+
+    const reconnectClient = harness.open(reconnectCredential);
+    const reconnectSnapshot = once<unknown>(reconnectClient, "v1:snapshot");
+    reconnectClient.connect();
+    await once<void>(reconnectClient, "connect");
+    await expect(reconnectSnapshot).resolves.toEqual({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "snapshot",
+      snapshot: pausedSnapshot,
+    });
+    expect(requestedIdentities).toEqual([identities.host, identities.host]);
+    expect(harness.consumedHashes).toEqual([
+      ticketHash(firstCredential),
+      ticketHash(reconnectCredential),
+    ]);
+    expect(JSON.stringify(pausedSnapshot)).not.toMatch(/drawOrder|card_player/);
+  });
+
+  test("restores durable result state after the game-server authority restarts", async () => {
+    const firstCredential = ticket(52);
+    const firstHarness = await createHarness({
+      tickets: new Map([[ticketHash(firstCredential), identities.host]]),
+      snapshot: async () => activeSnapshot,
+    });
+    const firstClient = firstHarness.open(firstCredential);
+    const firstSnapshot = once<unknown>(firstClient, "v1:snapshot");
+    firstClient.connect();
+    await once<void>(firstClient, "connect");
+    await expect(firstSnapshot).resolves.toMatchObject({ snapshot: activeSnapshot });
+
+    const firstDisconnect = once<void>(firstClient, "disconnect");
+    await firstHarness.server.close();
+    await firstDisconnect;
+
+    const restartCredential = ticket(53);
+    const restartedHarness = await createHarness({
+      tickets: new Map([[ticketHash(restartCredential), identities.host]]),
+      snapshot: async () => resultSnapshot,
+    });
+    const restartedClient = restartedHarness.open(restartCredential);
+    const restartedSnapshot = once<unknown>(restartedClient, "v1:snapshot");
+    restartedClient.connect();
+    await once<void>(restartedClient, "connect");
+
+    await expect(restartedSnapshot).resolves.toEqual({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "snapshot",
+      snapshot: resultSnapshot,
+    });
+    expect(restartedHarness.executed).toEqual([]);
+  });
+
+  testDatabase(
+    "restores the exact PostgreSQL-backed authorized snapshot after authority restart",
+    async () => {
+      const fixture = createRestartLobbyState();
+      const lifecycleTime = new Date("2026-07-17T20:00:04.000Z");
+      let firstDatabase: Awaited<ReturnType<typeof connectDatabase>> | null = null;
+      let restartedDatabase: Awaited<ReturnType<typeof connectDatabase>> | null = null;
+      try {
+        firstDatabase = await connectDatabase(testDatabaseUrl!, {
+          lifecycleClock: () => lifecycleTime,
+        });
+        const created = await firstDatabase.lobbyStates.createActive(fixture.state, {
+          maxActiveLobbies: 100_000,
+          nextCode: randomLobbyCode,
+        });
+        if (!created.ok) throw new Error(created.error.message);
+        const expected = fixture.expectedSnapshot(created.code, lifecycleTime.toISOString());
+
+        const firstCredential = Buffer.from(randomBytes(32)).toString("base64url");
+        await expect(
+          firstDatabase.lobbyStates.issueRealtimeTicket({
+            lobbyId: fixture.identity.lobbyId,
+            sessionTokenHash: fixture.sessionTokenHash,
+            ticketHash: Buffer.from(ticketHash(firstCredential), "hex"),
+            ttlSeconds: 60,
+          }),
+        ).resolves.toMatchObject({ ok: true });
+        const firstAuthority = await createHarness({
+          consumeTicket: (hash) =>
+            firstDatabase!.lobbyStates.consumeRealtimeTicket({
+              ticketHash: Buffer.from(hash, "hex"),
+            }),
+          snapshot: (identity) =>
+            firstDatabase!.lobbyStates.findAuthorizedSnapshotByIdentity(identity),
+          authorize: (identity) =>
+            firstDatabase!.lobbyStates.isParticipantSessionIdentityActive(identity),
+        });
+        const firstClient = firstAuthority.open(firstCredential);
+        const firstSnapshot = once<unknown>(firstClient, "v1:snapshot");
+        firstClient.connect();
+        await once<void>(firstClient, "connect");
+        await expect(firstSnapshot).resolves.toEqual({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "snapshot",
+          snapshot: expected,
+        });
+
+        const firstDisconnect = once<void>(firstClient, "disconnect");
+        await firstAuthority.server.close();
+        await firstDisconnect;
+        await firstDatabase.disconnect();
+        firstDatabase = null;
+
+        restartedDatabase = await connectDatabase(testDatabaseUrl!, {
+          lifecycleClock: () => lifecycleTime,
+        });
+        const restartCredential = Buffer.from(randomBytes(32)).toString("base64url");
+        await expect(
+          restartedDatabase.lobbyStates.issueRealtimeTicket({
+            lobbyId: fixture.identity.lobbyId,
+            sessionTokenHash: fixture.sessionTokenHash,
+            ticketHash: Buffer.from(ticketHash(restartCredential), "hex"),
+            ttlSeconds: 60,
+          }),
+        ).resolves.toMatchObject({ ok: true });
+        const restartedAuthority = await createHarness({
+          consumeTicket: (hash) =>
+            restartedDatabase!.lobbyStates.consumeRealtimeTicket({
+              ticketHash: Buffer.from(hash, "hex"),
+            }),
+          snapshot: (identity) =>
+            restartedDatabase!.lobbyStates.findAuthorizedSnapshotByIdentity(identity),
+          authorize: (identity) =>
+            restartedDatabase!.lobbyStates.isParticipantSessionIdentityActive(identity),
+        });
+        const restartedClient = restartedAuthority.open(restartCredential);
+        const restartedSnapshot = once<unknown>(restartedClient, "v1:snapshot");
+        restartedClient.connect();
+        await once<void>(restartedClient, "connect");
+
+        await expect(restartedSnapshot).resolves.toEqual({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "snapshot",
+          snapshot: expected,
+        });
+        expect(JSON.stringify(expected)).not.toMatch(
+          new RegExp(`${fixture.foreignCardId}|drawOrder|tokenHash|commandResults|events`),
+        );
+      } finally {
+        await firstDatabase?.disconnect();
+        await restartedDatabase?.disconnect();
+      }
+    },
+  );
+
+  test.each([
+    ["unauthorized", async (): Promise<Snapshot | null> => null, "UNAUTHORIZED"],
+    [
+      "persistence failure",
+      async (): Promise<Snapshot | null> => {
+        throw new Error("private snapshot persistence detail");
+      },
+      "INTERNAL_ERROR",
+    ],
+  ] as const)(
+    "disconnects when initial snapshot restoration has an %s",
+    async (_case, snapshot, code) => {
+      const credential = ticket(code === "UNAUTHORIZED" ? 54 : 55);
+      const harness = await createHarness({
+        tickets: new Map([[ticketHash(credential), identities.host]]),
+        snapshot,
+      });
+      const client = harness.open(credential);
+      const error = once<unknown>(client, "v1:error");
+      const disconnected = once<void>(client, "disconnect");
+      const snapshots: unknown[] = [];
+      client.on("v1:snapshot", (message) => snapshots.push(message));
+
+      client.connect();
+
+      const receivedError = await error;
+      expect(receivedError).toMatchObject({ code });
+      expect(JSON.stringify(receivedError)).not.toContain("private snapshot persistence detail");
+      await disconnected;
+      expect(snapshots).toEqual([]);
+    },
+  );
+
+  test("establishes the snapshot baseline before buffered live events", async () => {
+    const credential = ticket(56);
+    const snapshotRequested = deferred();
+    const releaseSnapshot = deferred();
+    const harness = await createHarness({
+      tickets: new Map([[ticketHash(credential), identities.host]]),
+      snapshot: async () => {
+        snapshotRequested.resolve();
+        await releaseSnapshot.promise;
+        return activeSnapshot;
+      },
+    });
+    const client = harness.open(credential);
+    const observed: string[] = [];
+    const laterEventObserved = deferred();
+    client.on("v1:snapshot", (message: { snapshot: { lastEventSequence: number | null } }) => {
+      observed.push(`snapshot:${message.snapshot.lastEventSequence}`);
+    });
+    client.on("v1:lobby-event", (event: { eventSequence: number }) => {
+      observed.push(`event:${event.eventSequence}`);
+      if (event.eventSequence === 2) laterEventObserved.resolve();
+    });
+
+    client.connect();
+    await waitForSignal(snapshotRequested.promise, "initial snapshot loading to start");
+    await harness.server.publishLobbyEvent(identities.host.lobbyId, stageEvent);
+    const laterEvent = ActiveLobbyEventSchema.parse({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "presence",
+      eventSequence: 2,
+      occurredAt: LATER,
+      presence: {
+        participantId: identities.player.participantId,
+        generation: 1,
+        status: "grace",
+        changedAt: LATER,
+        graceEndsAt: "2026-07-17T20:00:12.000Z",
+      },
+    });
+    await harness.server.publishLobbyEvent(identities.host.lobbyId, laterEvent);
+    releaseSnapshot.resolve();
+
+    await waitForSignal(
+      laterEventObserved.promise,
+      "the buffered event after the snapshot baseline",
+    );
+    expect(observed).toEqual(["snapshot:1", "event:2"]);
+  });
+
+  test("filters an initialization-era event when authorization settles after the snapshot", async () => {
+    const credential = ticket(57);
+    const snapshotRequested = deferred();
+    const releaseSnapshot = deferred();
+    const authorizationRequested = deferred();
+    const releaseAuthorization = deferred();
+    let snapshotRequests = 0;
+    const harness = await createHarness({
+      tickets: new Map([[ticketHash(credential), identities.host]]),
+      snapshot: async () => {
+        snapshotRequests += 1;
+        if (snapshotRequests === 1) {
+          snapshotRequested.resolve();
+          await releaseSnapshot.promise;
+        }
+        return activeSnapshot;
+      },
+      authorize: async () => {
+        authorizationRequested.resolve();
+        await releaseAuthorization.promise;
+        return true;
+      },
+    });
+    const client = harness.open(credential);
+    const initialization = once<unknown>(client, "v1:snapshot");
+    const observedEvents: unknown[] = [];
+    client.on("v1:lobby-event", (event) => observedEvents.push(event));
+
+    client.connect();
+    await waitForSignal(snapshotRequested.promise, "initial snapshot loading to start");
+    const publication = harness.server.publishLobbyEvent(identities.host.lobbyId, stageEvent);
+    try {
+      await waitForSignal(authorizationRequested.promise, "delivery authorization to start");
+      releaseSnapshot.resolve();
+      await initialization;
+      releaseAuthorization.resolve();
+      await publication;
+    } finally {
+      releaseSnapshot.resolve();
+      releaseAuthorization.resolve();
+    }
+
+    const resynchronized = once<unknown>(client, "v1:snapshot");
+    client.emit("v1:command", {
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "resync",
+      lastEventSequence: 1,
+    });
+    await resynchronized;
+    expect(observedEvents).toEqual([]);
+  });
+
+  test("filters a queued baseline event whose socket delivery starts after the snapshot", async () => {
+    const credential = ticket(58);
+    const snapshotRequested = deferred();
+    const releaseSnapshot = deferred();
+    const loadStarted = deferred();
+    const releaseLoad = deferred();
+    const harness = await createHarness({
+      tickets: new Map([[ticketHash(credential), identities.host]]),
+      snapshot: async () => {
+        snapshotRequested.resolve();
+        await releaseSnapshot.promise;
+        return activeSnapshot;
+      },
+    });
+    const client = harness.open(credential);
+    const initialized = once<unknown>(client, "v1:snapshot");
+    const observedSequences: number[] = [];
+    client.on("v1:lobby-event", (event: { eventSequence: number }) => {
+      observedSequences.push(event.eventSequence);
+    });
+
+    client.connect();
+    await waitForSignal(snapshotRequested.promise, "initial snapshot loading to start");
+    const publication = harness.server.publishLobbyEventFromSource(
+      identities.host.lobbyId,
+      stageEvent.eventSequence,
+      async () => {
+        loadStarted.resolve();
+        await releaseLoad.promise;
+        return stageEvent;
+      },
+    );
+    try {
+      await waitForSignal(loadStarted.promise, "queued event loading to start");
+      releaseSnapshot.resolve();
+      await initialized;
+      releaseLoad.resolve();
+      await publication;
+    } finally {
+      releaseSnapshot.resolve();
+      releaseLoad.resolve();
+    }
+
+    const resynchronized = once<unknown>(client, "v1:snapshot");
+    client.emit("v1:command", {
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "resync",
+      lastEventSequence: 1,
+    });
+    await resynchronized;
+    expect(observedSequences).toEqual([]);
+  });
+
+  test("establishes a new delivery boundary for an explicit resync snapshot", async () => {
+    const credential = ticket(59);
+    const resyncRequested = deferred();
+    const releaseResync = deferred();
+    let snapshotRequests = 0;
+    const harness = await createHarness({
+      tickets: new Map([[ticketHash(credential), identities.host]]),
+      snapshot: async () => {
+        snapshotRequests += 1;
+        if (snapshotRequests === 1) return activeSnapshot;
+        resyncRequested.resolve();
+        await releaseResync.promise;
+        return pausedSnapshot;
+      },
+    });
+    const client = await harness.connect(credential);
+    const observed: string[] = [];
+    client.on("v1:lobby-event", (event: { eventSequence: number }) => {
+      observed.push(`event:${event.eventSequence}`);
+    });
+    client.on("v1:snapshot", (message: { snapshot: { lastEventSequence: number | null } }) => {
+      observed.push(`snapshot:${message.snapshot.lastEventSequence}`);
+    });
+    const resynchronized = once<unknown>(client, "v1:snapshot");
+
+    client.emit("v1:command", {
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "resync",
+      lastEventSequence: 1,
+    });
+    await waitForSignal(resyncRequested.promise, "resync snapshot loading to start");
+    const secondEvent = ActiveLobbyEventSchema.parse({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "presence",
+      eventSequence: 2,
+      occurredAt: LATER,
+      presence: {
+        participantId: identities.player.participantId,
+        generation: 1,
+        status: "grace",
+        changedAt: LATER,
+        graceEndsAt: "2026-07-17T20:00:12.000Z",
+      },
+    });
+    try {
+      await harness.server.publishLobbyEvent(identities.host.lobbyId, secondEvent);
+      releaseResync.resolve();
+      await resynchronized;
+    } finally {
+      releaseResync.resolve();
+    }
+
+    expect(observed).toEqual(["snapshot:2"]);
+  });
+
+  test("delivers a late-authorized participant event only after the snapshot", async () => {
+    const credential = ticket(60);
+    const snapshotRequested = deferred();
+    const releaseSnapshot = deferred();
+    const authorizationRequested = deferred();
+    const releaseAuthorization = deferred();
+    const harness = await createHarness({
+      tickets: new Map([[ticketHash(credential), identities.host]]),
+      snapshot: async () => {
+        snapshotRequested.resolve();
+        await releaseSnapshot.promise;
+        return activeSnapshot;
+      },
+      authorize: async () => {
+        authorizationRequested.resolve();
+        await releaseAuthorization.promise;
+        return true;
+      },
+    });
+    const client = harness.open(credential);
+    const initialized = once<unknown>(client, "v1:snapshot");
+    const privateEvent = once<unknown>(client, "v1:private-event");
+    const observed: string[] = [];
+    client.on("v1:snapshot", () => observed.push("snapshot"));
+    client.on("v1:private-event", () => observed.push("private"));
+
+    client.connect();
+    await waitForSignal(snapshotRequested.promise, "initial snapshot loading to start");
+    const publication = harness.server.publishParticipantEvent(
+      identities.host.participantId,
+      markEvent,
+    );
+    try {
+      await waitForSignal(
+        authorizationRequested.promise,
+        "private delivery authorization to start",
+      );
+      releaseSnapshot.resolve();
+      await initialized;
+      releaseAuthorization.resolve();
+      await publication;
+      await privateEvent;
+    } finally {
+      releaseSnapshot.resolve();
+      releaseAuthorization.resolve();
+    }
+
+    expect(observed).toEqual(["snapshot", "private"]);
+  });
+
+  test("disconnects when the combined synchronization buffer exceeds its bound", async () => {
+    const credential = ticket(61);
+    const snapshotRequested = deferred();
+    const releaseSnapshot = deferred();
+    let authorizationCount = 0;
+    const harness = await createHarness({
+      tickets: new Map([[ticketHash(credential), identities.host]]),
+      snapshot: async () => {
+        snapshotRequested.resolve();
+        await releaseSnapshot.promise;
+        return activeSnapshot;
+      },
+      authorize: async () => {
+        authorizationCount += 1;
+        return true;
+      },
+    });
+    const client = harness.open(credential);
+    const connected = once<void>(client, "connect");
+    const error = once<unknown>(client, "v1:error");
+    const disconnected = once<void>(client, "disconnect");
+    const observedPrivateEvents: unknown[] = [];
+    client.on("v1:private-event", (event) => observedPrivateEvents.push(event));
+
+    client.connect();
+    await connected;
+    await waitForSignal(snapshotRequested.promise, "initial snapshot loading to start");
+    try {
+      for (let index = 0; index < 255; index += 1) {
+        await harness.server.publishParticipantEvent(identities.host.participantId, markEvent);
+      }
+      await harness.server.publishLobbyEvent(identities.host.lobbyId, stageEvent);
+      expect(authorizationCount).toBe(256);
+      expect(client.connected).toBe(true);
+      await harness.server.publishParticipantEvent(identities.host.participantId, markEvent);
+      await expect(error).resolves.toMatchObject({ code: "INTERNAL_ERROR" });
+      await disconnected;
+    } finally {
+      releaseSnapshot.resolve();
+    }
+
+    expect(observedPrivateEvents).toEqual([]);
+    expect(authorizationCount).toBe(256);
+  });
+
   test("keeps active-bucket overflow bounded and admits keys after expiry", () => {
     const limiter = new BoundedFixedWindowRateLimiter(2);
 
@@ -1698,9 +2680,13 @@ describe("authenticated Socket.IO authority", () => {
     await heartbeatDisconnect;
 
     const resyncCredential = ticket(44);
+    let resyncRequests = 0;
     const resyncHarness = await createHarness({
       tickets: new Map([[ticketHash(resyncCredential), identities.host]]),
-      snapshot: async () => null,
+      snapshot: async (identity) => {
+        resyncRequests += 1;
+        return resyncRequests === 1 ? waitingSnapshotForIdentity(identity) : null;
+      },
     });
     const resyncClient = await resyncHarness.connect(resyncCredential);
     const resyncError = once<unknown>(resyncClient, "v1:error");
@@ -1718,9 +2704,12 @@ describe("authenticated Socket.IO authority", () => {
 
   test("returns a safe error without a snapshot when resync persistence fails", async () => {
     const credential = ticket(45);
+    let snapshotRequests = 0;
     const harness = await createHarness({
       tickets: new Map([[ticketHash(credential), identities.host]]),
-      snapshot: async () => {
+      snapshot: async (identity) => {
+        snapshotRequests += 1;
+        if (snapshotRequests === 1) return waitingSnapshotForIdentity(identity);
         throw new Error("private snapshot persistence detail");
       },
     });

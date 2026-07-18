@@ -145,6 +145,13 @@ invalid counts, timestamps, or durations.
   are deleted with the lobby.
 - On reconnect, send a complete authorized snapshot unless transport-level
   recovery proves continuity across a very brief interruption.
+- Establish a new socket's actor-scoped snapshot before releasing live room
+  events: join first, buffer bounded deliveries during the query, emit the
+  snapshot, discard buffered lobby sequences at or below its baseline, then
+  release newer lobby and participant-private events. Apply the same delivery
+  boundary to explicit resync snapshots; if a transient resync query fails,
+  restore the prior safe baseline and release events buffered during the attempt.
+  Disconnect if the initial baseline cannot be established safely.
 - After process restart, ticket renewal, uncertain sequence state, or failed
   recovery, require a full snapshot rather than reconstructing state from the
   client.

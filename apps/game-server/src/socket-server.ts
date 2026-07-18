@@ -97,7 +97,17 @@ interface ServerToClientEvents {
 
 interface SocketData {
   identity: AuthenticatedRealtimeIdentity;
+  synchronization?:
+    | {
+        readonly status: "pending";
+        readonly lobbyEvents: ActiveLobbyEvent[];
+        readonly participantEvents: ParticipantPrivateEvent[];
+        reservedDeliveries: number;
+      }
+    | { readonly status: "ready"; readonly baseline: number };
 }
+
+const MAXIMUM_PENDING_SYNCHRONIZATION_EVENTS = 256;
 
 const errorMessages = {
   INVALID_PAYLOAD: "The request payload is invalid.",
@@ -462,10 +472,39 @@ export function createGameServer(options: GameServerOptions): GameServer {
           const authorizations = new Map<string, Promise<boolean>>();
           await Promise.all(
             sockets.map(async (socket) => {
-              if (await authorizeIdentityOnce(authorizations, socket.data.identity)) {
-                socket.emit("v1:lobby-event", event);
-              } else {
-                socket.disconnect(true);
+              const synchronizationAtStart = socket.data.synchronization;
+              const reserved = synchronizationAtStart?.status === "pending";
+              if (reserved) {
+                if (
+                  synchronizationAtStart.lobbyEvents.length +
+                    synchronizationAtStart.participantEvents.length +
+                    synchronizationAtStart.reservedDeliveries >=
+                  MAXIMUM_PENDING_SYNCHRONIZATION_EVENTS
+                ) {
+                  socket.emit("v1:error", createContractError("INTERNAL_ERROR", options.clock));
+                  socket.disconnect(true);
+                  return;
+                }
+                synchronizationAtStart.reservedDeliveries += 1;
+              }
+              try {
+                if (await authorizeIdentityOnce(authorizations, socket.data.identity)) {
+                  const synchronization = socket.data.synchronization;
+                  if (synchronization?.status === "pending") {
+                    synchronization.lobbyEvents.push(event);
+                  } else if (
+                    synchronization?.status === "ready" &&
+                    event.eventSequence <= synchronization.baseline
+                  ) {
+                    return;
+                  } else {
+                    socket.emit("v1:lobby-event", event);
+                  }
+                } else {
+                  socket.disconnect(true);
+                }
+              } finally {
+                if (reserved) synchronizationAtStart.reservedDeliveries -= 1;
               }
             }),
           );
@@ -529,10 +568,34 @@ export function createGameServer(options: GameServerOptions): GameServer {
     const authorizations = new Map<string, Promise<boolean>>();
     await Promise.all(
       sockets.map(async (socket) => {
-        if (await authorizeIdentityOnce(authorizations, socket.data.identity)) {
-          socket.emit("v1:private-event", parsed);
-        } else {
-          socket.disconnect(true);
+        const synchronizationAtStart = socket.data.synchronization;
+        const reserved = synchronizationAtStart?.status === "pending";
+        if (reserved) {
+          if (
+            synchronizationAtStart.lobbyEvents.length +
+              synchronizationAtStart.participantEvents.length +
+              synchronizationAtStart.reservedDeliveries >=
+            MAXIMUM_PENDING_SYNCHRONIZATION_EVENTS
+          ) {
+            socket.emit("v1:error", createContractError("INTERNAL_ERROR", options.clock));
+            socket.disconnect(true);
+            return;
+          }
+          synchronizationAtStart.reservedDeliveries += 1;
+        }
+        try {
+          if (await authorizeIdentityOnce(authorizations, socket.data.identity)) {
+            const synchronization = socket.data.synchronization;
+            if (synchronization?.status === "pending") {
+              synchronization.participantEvents.push(parsed);
+            } else {
+              socket.emit("v1:private-event", parsed);
+            }
+          } else {
+            socket.disconnect(true);
+          }
+        } finally {
+          if (reserved) synchronizationAtStart.reservedDeliveries -= 1;
         }
       }),
     );
@@ -540,10 +603,66 @@ export function createGameServer(options: GameServerOptions): GameServer {
 
   io.on("connection", (socket) => {
     const identity = socket.data.identity;
-    void socket.join([
-      room("lobby", identity.lobbyId),
-      room("participant", identity.participantId),
-    ]);
+    const establishSnapshotBaseline = async (joinRooms: boolean): Promise<boolean> => {
+      const previousSynchronization = socket.data.synchronization;
+      const synchronization = {
+        status: "pending" as const,
+        lobbyEvents: [] as ActiveLobbyEvent[],
+        participantEvents: [] as ParticipantPrivateEvent[],
+        reservedDeliveries: 0,
+      };
+      socket.data.synchronization = synchronization;
+      try {
+        if (joinRooms) {
+          await socket.join([
+            room("lobby", identity.lobbyId),
+            room("participant", identity.participantId),
+          ]);
+        }
+        const snapshot = await options.snapshotProvider.findAuthorizedSnapshot(identity);
+        if (!socket.connected) return false;
+        if (snapshot === null) {
+          socket.emit("v1:error", createContractError("UNAUTHORIZED", options.clock));
+          socket.disconnect(true);
+          return false;
+        }
+        const message = SnapshotMessageSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "snapshot",
+          snapshot,
+        });
+        socket.emit("v1:snapshot", message);
+
+        const baseline = message.snapshot.lastEventSequence ?? 0;
+        synchronization.lobbyEvents
+          .filter((event) => event.eventSequence > baseline)
+          .sort((left, right) => left.eventSequence - right.eventSequence)
+          .forEach((event) => socket.emit("v1:lobby-event", event));
+        synchronization.participantEvents.forEach((event) =>
+          socket.emit("v1:private-event", event),
+        );
+        socket.data.synchronization = { status: "ready", baseline };
+        return true;
+      } catch {
+        if (socket.connected) {
+          socket.emit("v1:error", createContractError("INTERNAL_ERROR", options.clock));
+          if (previousSynchronization?.status === "ready") {
+            synchronization.lobbyEvents
+              .filter((event) => event.eventSequence > previousSynchronization.baseline)
+              .sort((left, right) => left.eventSequence - right.eventSequence)
+              .forEach((event) => socket.emit("v1:lobby-event", event));
+            synchronization.participantEvents.forEach((event) =>
+              socket.emit("v1:private-event", event),
+            );
+            socket.data.synchronization = previousSynchronization;
+          } else {
+            socket.disconnect(true);
+          }
+        }
+        return false;
+      }
+    };
+    const initialization = establishSnapshotBaseline(true);
 
     let commandInFlight = false;
     socket.on("v1:command", async (payload) => {
@@ -559,6 +678,7 @@ export function createGameServer(options: GameServerOptions): GameServer {
       }
       commandInFlight = true;
       try {
+        if (!(await initialization)) return;
         const parsed = RealtimeCommandSchema.safeParse(payload);
         if (!parsed.success) {
           socket.emit(
@@ -577,24 +697,7 @@ export function createGameServer(options: GameServerOptions): GameServer {
         }
 
         if (parsed.data.type === "resync") {
-          try {
-            const snapshot = await options.snapshotProvider.findAuthorizedSnapshot(identity);
-            if (snapshot === null) {
-              socket.emit("v1:error", createContractError("UNAUTHORIZED", options.clock));
-              socket.disconnect(true);
-              return;
-            }
-            socket.emit(
-              "v1:snapshot",
-              SnapshotMessageSchema.parse({
-                schemaVersion: CONTRACT_SCHEMA_VERSION,
-                type: "snapshot",
-                snapshot,
-              }),
-            );
-          } catch {
-            socket.emit("v1:error", createContractError("INTERNAL_ERROR", options.clock));
-          }
+          await establishSnapshotBaseline(false);
           return;
         }
 

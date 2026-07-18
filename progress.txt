@@ -46,6 +46,7 @@ Next story: US-001
 - Round-control commands are rate-limited before lobby-fence acquisition, then resolve the active session, actor role, current round, and own card inside one Serializable transaction; command results persist canonical intent so changed-payload command-ID reuse is rejected, active-lobby replays retain their original sequence, and private mark acknowledgements allocate no lobby sequence. Before replacing a round, expire due participant sessions before roster selection and detach prior active-event and command-result round scopes so replay tombstones survive without retaining old gameplay state.
 - Socket.IO accepts only strict versioned handshake auth from the configured exact browser origin, burns any canonical ticket reaching auth even in an invalid envelope, discards handshake plaintext, stores only persistence-returned identity in `socket.data`, and revalidates that identity inside command/snapshot lobby fences and before later room delivery. Engine.IO admission and namespace authentication have separate bounded direct-peer limits; mark a rejected transport terminal before awaiting its bounded ticket burn, close it, cap authenticated sockets globally and per session, and recheck both transport closure and transport-wide rejection after ticket consumption before reserving capacity or calling `next()`. Every command attempt is charged before the one-in-flight guard, and per-lobby delivery queues preserve committed sequence order through asynchronous authorization while authorizing each unique persisted identity once per delivery. Active-lobby commits emit a transaction-scoped PostgreSQL notification; the separate game-server process serially reloads and validates each committed event before sequence-deduplicated publication, so HTTP fallback mutations reach connected clients without pre-commit effects. Validate every successful acknowledgement's command ID against the incoming mutation before any delivery; fresh committed lobby events broadcast before requester acknowledgements, replays do not rebroadcast, eventless replay tombstones can acknowledge either delivery scope, and replayed private results return only to the requesting socket. Disconnect sockets on terminal command-time identity outcomes (`UNAUTHORIZED`, inactive/deleted-lobby `NOT_FOUND`, or `LOBBY_EXPIRED`) so stale clients cannot retain rooms or capacity.
 - Active-event subscription, malformed dedicated-channel notification, durable reload, or relay failure is fatal to the game-server runtime because `LISTEN` recovery cannot prove continuity without a durable cursor. Stop Socket.IO before awaiting subscription/database drain so a stalled delivery cannot keep a continuity-lost authority serving, and settle runtime completion with a safe failure if cleanup fails. Exact direct/notification echoes are idempotent only when their canonical event identity matches bounded recent delivery history; same-sequence conflicts and unknown stale deliveries fail closed.
+- Authenticated sockets establish an actor-scoped snapshot baseline before live delivery: join authorized rooms first, buffer a bounded combined set of lobby/private events during the query, emit the snapshot, discard buffered lobby sequences at or below its baseline, then release newer events; every ready-state lobby delivery must also suppress sequences at or below that baseline even when it was queued before synchronization but began socket delivery afterward. Explicit resync uses the same boundary and restores the prior safe baseline plus buffered deliveries after transient query failure; failed initialization disconnects and executes no commands.
 
 Append-only iteration log
 -------------------------
@@ -2954,4 +2955,119 @@ Targeted re-review outcome for resumed US-030 at 2026-07-17 17:48:15 MST:
   - The unrelated untracked browser-report artifacts remain untouched and unstaged.
 - Next iteration start:
   - If review passes, implement US-031 authoritative snapshot restoration; otherwise resume any recorded blocking finding.
+---
+
+## 2026-07-17 18:22:21 MST - US-031
+- What was implemented
+  - Added mandatory automatic actor-scoped snapshot restoration for every authenticated Socket.IO connection, including fresh-ticket reconnects and a reconstructed game-server authority.
+  - Joined authorized rooms before the snapshot query, buffered a bounded combined set of lobby and participant-private deliveries during synchronization, emitted the snapshot first, discarded buffered lobby events at or below its durable baseline, and released only newer live state afterward.
+  - Failed closed with safe errors and disconnection when authorization, persistence, or snapshot validation cannot establish a baseline, and held command execution until initialization completes.
+  - Added exact transport tests for automatic call/timer state, own card and marks, calls, roster, paused reason, settled result, privacy exclusions, fresh-ticket reconnect, authority restart, safe failure, and snapshot-before-event ordering.
+- Files changed: `AGENTS.md`, `apps/game-server/src/socket-server.ts`, `apps/game-server/src/socket-server.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-031 - Restore authoritative snapshots`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts` (expected fail before implementation with 5 missing restoration behaviors; review race regression also failed before remediation; pass after implementation with 47 tests and 1 PostgreSQL-gated test skipped)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run apps/game-server/src/socket-server.test.ts -t "PostgreSQL-backed authorized snapshot"` (pass; exact production repository restoration across authority/database reconstruction)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (initial fail on an explicit-resync test race exposed by automatic initialization; pass after review remediation with typecheck, 25 files, and 475 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun run format:check` (fails only on three pre-existing untracked browser-report files; every tracked file passes)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - Live game-server listener start/close on `127.0.0.1:3102` (pass)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `websocket-engineer`, `test-automator`
+  - Used: `websocket-engineer`, `test-automator` for recovery compatibility, baseline ordering, fail-closed initialization, restart simulation, privacy assertions, and deterministic test guidance
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive `security-engineer`; targeted re-review by `code-reviewer` and `qa-expert` planned after substantive fixes
+  - Findings: fixed the in-flight authorization/synchronization race, replaced the stub-only restart proof with a PostgreSQL-backed authority reconstruction test, and removed an unbounded test polling loop before targeted re-review
+- Decisions (why):
+  - Kept Socket.IO connection-state recovery disabled because every actual reconnect must consume a fresh single-use ticket, stock recovery restores rooms/data before this strict authentication boundary, and in-memory recovery cannot survive the required process-restart case; therefore every new connection receives a full snapshot.
+  - Reused the existing actor-scoped repository projection and strict `SnapshotMessageSchema` rather than loading or adapting the private durable aggregate, preserving established card, credential, draw-order, event-history, and command-result privacy.
+  - Buffered after joining rooms instead of querying before room membership because the latter can miss a commit between snapshot generation and subscription; the durable sequence baseline safely removes events already represented by the snapshot.
+- **Learnings for future iterations:**
+  - A reconnect snapshot and room subscription must form one synchronization boundary: query-before-join can miss events, while join-without-buffering can expose live events before the authoritative baseline.
+  - Client connection test harnesses must await the automatic snapshot before issuing later commands; waiting only for Socket.IO `connect` leaves explicit resync and command assertions race-prone.
+  - Built-in Socket.IO recovery should remain disabled until continuity can be proven without bypassing fresh-ticket middleware or exposing recovered packets before identity revalidation.
+- Known issues / follow-ups:
+  - The unrelated untracked browser-report artifacts remain untouched and unstaged; root `bun run format:check` reports three of them while every tracked file passes.
+  - Presence persistence, disconnect generations, and pause grace remain assigned to US-032 and US-033; snapshot restoration does not resume paused calls.
+- Next iteration start:
+  - If review passes, implement US-032 participant presence aggregation; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for resumed US-031 at 2026-07-17 19:30:19 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced three QA blockers; code and security review returned no findings.
+- A high-severity explicit-resync race allowed a concurrent event to arrive before a newer full snapshot or pass the stale initial baseline. Added a failing blocked-resync regression, then reused the initial bounded synchronization boundary for every explicit resync.
+- Preserved the established transient-resync failure contract by restoring the prior safe baseline and releasing buffered events after a failed query; initial baseline failures still disconnect.
+- Replaced the PostgreSQL restart test's projection-derived oracle with an independent fixture-derived exact snapshot covering lobby/session identity, roster/presence, automatic configuration, result stage, own card/marks, calls, timer, and sequence.
+- Added deterministic delayed-authorization participant-private ordering coverage and a mixed 255-private-plus-one-lobby buffer test proving the 257th pending delivery fails closed and disconnects.
+- Post-fix checks: focused resync/private/overflow tests pass; the Socket.IO suite passes 51 tests with one database-gated skip; the independently asserted PostgreSQL restart test passes; the approved-PostgreSQL root suite passes typecheck, 25 files, and 479 tests; lint and tracked formatting pass after formatting the expanded test file.
+- Targeted re-review: pending `code-reviewer` and `qa-expert` because the substantive fixes address their correctness and test-completeness domains; security review is not repeated because it returned no findings and the security model was unchanged.
+
+Targeted re-review outcome for resumed US-031 at 2026-07-17 19:37:11 MST:
+- `code-reviewer` returned no findings; `qa-expert` returned no blocking findings.
+- QA identified one specific low assertion gap: the overflow test did not independently prove the first 256 mixed deliveries reached authorization before the 257th failed. Added exact authorization-count and connected-state assertions; the 257th delivery must not invoke authorization.
+- The first strengthened run exposed that the test had not awaited the client `connect` event before inspecting local connection state; adding that event barrier made the focused test pass, followed by the 51-test Socket.IO suite and 479-test approved-PostgreSQL root suite.
+- The low PostgreSQL fixture-retention residual remains documented because no exact non-destructive cleanup repository operation exists.
+- No further specialist re-review is permitted or required; only a low test-strengthening change followed the passing targeted review.
+
+Review remediation for US-031 at 2026-07-17 18:31:26 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced two deduplicated medium blockers: a delivery whose authorization began during initialization could observe ready state afterward and bypass baseline filtering/buffer accounting, and the restart test reconstructed only injected providers rather than the production PostgreSQL projection. Security review returned no findings.
+- Added a failing delayed-authorization regression before reserving initialization-era lobby/private deliveries against the combined buffer limit. A reserved lobby delivery that settles after readiness now compares against the stored snapshot baseline, so already-represented sequences remain suppressed while newer events follow the snapshot.
+- Added a PostgreSQL-gated real Socket.IO test that persists a result-stage lobby containing private draw order and another participant's card, closes the first authority and database connection, opens fresh production repository and authority instances, consumes a new ticket, and receives the exact actor-authorized snapshot without private aggregate fields.
+- Replaced the low-severity unbounded `setImmediate` polling assertion with an event-driven deferred signal so a failed ordering assertion cannot leave the Vitest worker spinning.
+- Post-fix checks: focused race and PostgreSQL restart cases pass; the Socket.IO suite passes 47 tests with one database-gated skip when no URL is supplied; the PostgreSQL-enabled root suite passes typecheck, 25 files, and 475 tests.
+- Targeted re-review: pending `code-reviewer` and `qa-expert` because their findings received substantive production and test fixes; `security-engineer` is not repeated because its initial findings list was empty.
+
+Targeted re-review outcome for US-031 at 2026-07-17 18:45:00 MST:
+- `code-reviewer` and `qa-expert` identified one deduplicated in-scope medium blocker: baseline suppression applies only when a per-socket delivery callback observes pending synchronization and reserves capacity. An event queued while synchronization is pending can begin its socket callback only after the snapshot becomes ready, bypass the `reserved` condition, and emit a sequence already represented by the snapshot.
+- The next iteration must add a failing regression that queues a baseline event behind delayed event loading or earlier lobby delivery, then make every ready-state lobby delivery suppress `eventSequence <= baseline` regardless of whether its callback reserved pending synchronization capacity.
+- QA also recorded a non-blocking low test-isolation follow-up: the PostgreSQL restart fixture leaves its randomly identified lobby in the approved test database. Prefer exact fixture cleanup or an isolated disposable database/schema when a safe repository cleanup path is available.
+- Residual test risk remains for late-settling participant-private authorization and synchronization-buffer overflow; these are non-blocking unless the baseline fix exposes related behavior.
+- Per the one-targeted-re-review limit, no further substantive implementation changes or commit are permitted in this iteration. `US-031` remains `passes: false`, and `prd.json` remains unchanged.
+- Next iteration start: add the queued/late-starting baseline-event regression, apply baseline filtering to every ready-state lobby event, rerun all US-031 checks, and restart the complete staged review loop.
+
+## 2026-07-17 19:18:43 MST - US-031
+- What was implemented
+  - Resumed the blocked authoritative snapshot story and fixed the remaining queued-delivery race from the prior targeted review.
+  - Applied the actor snapshot baseline to every ready-state lobby delivery, including events queued during initialization whose event load and socket callback begin only after the snapshot is emitted.
+  - Added a deterministic deferred-loader regression that proves an event already represented by the snapshot is not emitted afterward.
+- Files changed: `AGENTS.md`, `apps/game-server/src/socket-server.ts`, `apps/game-server/src/socket-server.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-031 - Restore authoritative snapshots`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts -t "filters a queued baseline event whose socket delivery starts after the snapshot"` (expected fail before implementation with sequence 1 emitted after baseline 1; pass after implementation)
+  - Focused snapshot baseline and delayed-authorization tests (pass; 3 tests)
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts` (pass; 48 tests and 1 PostgreSQL-gated skip)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass; typecheck, 25 files, and 476 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun run format:check` (fails only on three pre-existing untracked browser-report files; every tracked file passes)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `DATABASE_URL=<approved local Compose database> bun run --cwd apps/web build` (pass; all versioned API routes compiled)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `websocket-engineer`, `test-automator`
+  - Used: `websocket-engineer`, `test-automator` for the minimal baseline-filtering correction, deterministic queued-loader regression, and race/brittleness risks
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive `security-engineer` planned for the complete restaged high-risk diff
+  - Findings: fixed explicit-resync ordering, independent restart expectations, participant-private ordering, and combined synchronization-buffer coverage before targeted re-review
+- Decisions (why):
+  - Kept `reserved` solely for bounded pending-synchronization accounting because whether an event is covered by the actor snapshot depends on its sequence and ready baseline, not when its socket callback began.
+  - Used a blocked durable event loader rather than timing sleeps so the regression deterministically queues the event before readiness while delaying per-socket delivery until afterward.
+  - Left the prior low-severity PostgreSQL fixture cleanup follow-up unchanged because the repository exposes no exact non-destructive test cleanup operation and destructive test-data deletion is outside this minimal race fix.
+- **Learnings for future iterations:**
+  - Snapshot baseline filtering must apply when delivery reaches a ready socket, even if the event never occupied the pending synchronization buffer.
+  - A resync response can provide an event-driven Socket.IO delivery barrier for negative assertions without fixed sleeps.
+- Known issues / follow-ups:
+  - The PostgreSQL restart fixture leaves a randomly identified test lobby; prefer isolated disposable test storage or an approved exact cleanup repository operation when available.
+  - The unrelated untracked browser-report artifacts remain untouched and unstaged; root `bun run format:check` reports three of them while every tracked file passes.
+- Next iteration start:
+  - If review passes, implement US-032 participant presence aggregation; otherwise resume any recorded blocking finding.
 ---
