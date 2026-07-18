@@ -9,7 +9,7 @@ import type {
 import { LobbyCodeSchema } from "@gamenight-bingo/contracts";
 import { normalizeLobbyCodeEntry, normalizeUsername } from "@gamenight-bingo/domain";
 
-import { Button } from "@/atoms";
+import { Button, LinkButton } from "@/atoms";
 import { Input } from "@/molecules";
 import {
   LobbyEntryFlowError,
@@ -367,6 +367,11 @@ export function JoinLobbyForm({
           ? `This device is already active as ${sessionStatus.username}.`
           : message}
       </div>
+      {result !== null ? (
+        <LinkButton href={`/lobbies/${result.lobby.code}`}>Open lobby</LinkButton>
+      ) : sessionStatus?.status === "active" && checkedCode !== null ? (
+        <LinkButton href={`/lobbies/${checkedCode}`}>Open lobby</LinkButton>
+      ) : null}
     </form>
   );
 }

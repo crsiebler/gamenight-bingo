@@ -334,6 +334,9 @@ then refactor while green.
   dispatcher unit tests or route-source assertions alone do not exercise that
   boundary. The live API route suite requires an approved migrated
   `TEST_DATABASE_URL` and otherwise skips only that database-backed test.
+- Verify private App Router document `Cache-Control` headers against a production
+  Next server. Development page responses use `no-cache, must-revalidate`; the
+  production route proxy must emit `no-store`.
 - Use isolated PostgreSQL integration tests for repository, transaction,
   migration, concurrency, and restart behavior.
 - PostgreSQL lock-coordination tests must roll back and release checked-out
@@ -376,6 +379,9 @@ then refactor while green.
 - Treat a mutation error response as definitive only when its strict contract
   correlates to the outgoing command ID; malformed, missing-ID, or mismatched-ID
   responses are ambiguous and must retain the original command session for replay.
+- After an acknowledgement, queue any required authoritative refresh behind an
+  in-flight refresh, verify its snapshot sequence and expected state include the
+  commit, and keep stale mutation controls latched if reconciliation fails.
 - Generate pattern previews from canonical catalog data. Never hand-maintain a
   second mask source or transform a source mask implicitly.
 - Themes may change presentation, not game semantics or readability. Lazy-load

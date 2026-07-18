@@ -110,6 +110,10 @@ describe("JoinLobbyForm", () => {
       username: "River Song",
     });
     expect(screen.getByRole("status")).toHaveTextContent(/River Song.*waiting.*next round/i);
+    expect(screen.getByRole("link", { name: "Open lobby" })).toHaveAttribute(
+      "href",
+      "/lobbies/ABC234",
+    );
   });
 
   it("offers rejoin only before its deadline and refreshes status at expiry", async () => {
@@ -401,5 +405,9 @@ describe("JoinLobbyForm", () => {
 
     expect(await screen.findByRole("status")).toHaveTextContent(/already active as River/i);
     expect(screen.queryByRole("button", { name: /join lobby|rejoin as/i })).toBeNull();
+    expect(screen.getByRole("link", { name: "Open lobby" })).toHaveAttribute(
+      "href",
+      "/lobbies/ABC234",
+    );
   });
 });

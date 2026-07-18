@@ -10,3 +10,9 @@ export {
   lookupSameDeviceSession,
   type LobbyEntrySelection,
 } from "./lobby-entry-flow";
+export {
+  PrivateLobbyFlowError,
+  WaitingLobbyCommandSession,
+  loadPrivateLobbySnapshot,
+  type WaitingLobbyCommand,
+} from "./private-lobby-flow";

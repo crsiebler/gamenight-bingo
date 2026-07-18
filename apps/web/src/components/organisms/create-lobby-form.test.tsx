@@ -100,6 +100,10 @@ describe("CreateLobbyForm", () => {
       callConfiguration: { mode: "automatic", intervalSeconds: 60 },
     });
     expect(screen.getByRole("status")).toHaveTextContent("Lobby ABC234 is ready");
+    expect(screen.getByRole("link", { name: "Open lobby" })).toHaveAttribute(
+      "href",
+      "/lobbies/ABC234",
+    );
   });
 
   it("focuses and announces an empty host-name error", async () => {

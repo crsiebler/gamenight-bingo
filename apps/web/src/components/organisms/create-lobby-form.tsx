@@ -4,7 +4,7 @@ import { useRef, useState, type FormEvent } from "react";
 
 import type { AutomaticCallInterval, CallConfiguration } from "@gamenight-bingo/contracts";
 
-import { Button, Option } from "@/atoms";
+import { Button, LinkButton, Option } from "@/atoms";
 import { Input, Select } from "@/molecules";
 import {
   CreateLobbyFlowError,
@@ -294,7 +294,8 @@ export function CreateLobbyForm({
         <section aria-label="Lobby created" className="lobby-ready">
           <span>Your lobby code</span>
           <strong>{result.code}</strong>
-          <p>Keep this page open. Sharing and live lobby controls arrive in the next step.</p>
+          <p>Open the private lobby to invite players and start the round.</p>
+          <LinkButton href={`/lobbies/${result.code}`}>Open lobby</LinkButton>
         </section>
       ) : null}
     </form>

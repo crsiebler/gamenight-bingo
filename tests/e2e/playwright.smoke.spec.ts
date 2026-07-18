@@ -10,6 +10,16 @@ test.describe("versioned private API routing", () => {
     "A migrated TEST_DATABASE_URL is required for the live Next route test.",
   );
 
+  test("marks private lobby documents no-store and noindex", async ({ request }) => {
+    const response = await request.get("/lobbies/ABC234");
+
+    expect(response.status()).toBe(200);
+    expect(response.headers()["cache-control"]).toContain("no-store");
+    expect(await response.text()).toContain(
+      '<meta name="robots" content="noindex, nofollow, noarchive"',
+    );
+  });
+
   test("preserves stable no-store errors across the Next routing boundary", async ({ request }) => {
     for (const requestCase of [
       { method: "get", path: "/api/v1/lobbies/ABC234" },

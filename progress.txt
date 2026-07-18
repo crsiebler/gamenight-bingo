@@ -61,6 +61,8 @@ Next story: US-001
 - Multi-step browser entry flows allocate one stable command ID per persisted step, prevent duplicate submission, retain completed-step state after partial failure, and retry only the unfinished command; public landing metadata and pattern choices derive from the same visible/canonical source rather than duplicate browser data.
 - Browser mutation clients treat non-success responses as definitive only when a strict error contract correlates to the outgoing command ID; malformed, missing-ID, and mismatched-ID responses remain ambiguous and replay through the original command session.
 - Status-driven forms may move focus into newly revealed controls only when focus remains within the form or was removed with the prior control; asynchronous refreshes must preserve focus that the user moved to another workflow.
+- Verify private App Router document cache headers with a production Next server; development mode rewrites document responses to `no-cache, must-revalidate` even when the production route proxy emits `no-store`.
+- After a browser mutation acknowledgement, serialize any mandatory snapshot reconciliation behind an in-flight refresh, require the snapshot sequence and expected projection to include the commit, and keep stale controls latched until authority confirms the transition.
 
 Append-only iteration log
 -------------------------
@@ -4478,7 +4480,7 @@ Targeted re-review outcome for US-045 at 2026-07-18 06:45:20 MST:
   - Recommended: none
   - Used: `frontend-developer` for minimal component/flow boundaries, deadline and stale-response risks, accessibility states, and focused browser/test guidance because this was a complex frontend entry flow
 - Specialist review:
-  - Agents used: `code-reviewer`, `qa-expert`, security-triggered `security-engineer`, and UI/UX-triggered `ui-designer`/`ux-researcher` planned for the complete staged diff
+  - Agents used: `code-reviewer`, `qa-expert`, security-triggered `security-engineer`, and UI/UX-triggered `ui-designer`/`ux-researcher`; targeted re-review by all finding-producing specialists pending
   - Findings: fixed replayed-join credential verification, ambiguous-rejoin expiry unlock, revealed-state focus, and lobby-specific lookup recovery copy; targeted re-review pending
 - Decisions (why):
   - Required an explicit `Find lobby` action after invite prefill because a lobby code is only a locator and loading a URL must not silently authenticate or expose same-device identity.
@@ -4567,3 +4569,132 @@ Targeted re-review outcome for US-046 at 2026-07-18 08:27:50 MST:
 - `code-reviewer`, `qa-expert`, and `ui-designer` returned empty actionable finding lists; all six initial review root causes are resolved.
 - Residual risk is limited to the 135 database-backed tests and database-gated live Playwright route test skipped without `TEST_DATABASE_URL`; focused client/component coverage and live browser verification cover the remediated paths.
 - US-046 has no unresolved in-scope critical, high, or medium findings.
+
+## 2026-07-18 09:04:50 MST - US-047
+- What was implemented
+  - Added a dynamic private lobby route that loads only the strict actor-authorized snapshot and renders explicit loading, authorization, unavailable, rate-limit, and retry states.
+  - Added large lobby-code sharing, allowlisted credential-free invite URLs, clipboard success/manual-copy fallback, capability-gated native sharing, and confirmed-entry links from both create and join flows.
+  - Added one authoritative participant roster with visible host, connected, grace, absent, departed, playing, and waiting semantics plus responsive host-only waiting-round configuration/start controls backed by stable command IDs and strict acknowledgements.
+  - Added private `noindex`, `nofollow`, `noarchive`, and production `no-store` enforcement through the narrow lobby-page proxy, with production Next Playwright coverage.
+- Files changed: `AGENTS.md`, `apps/web/package.json`, `apps/web/src/app/globals.css`, `apps/web/src/app/lobbies/[code]/page.tsx`, `apps/web/src/components/organisms/create-lobby-form.tsx`, `apps/web/src/components/organisms/create-lobby-form.test.tsx`, `apps/web/src/components/organisms/join-lobby-form.tsx`, `apps/web/src/components/organisms/join-lobby-form.test.tsx`, `apps/web/src/components/templates/index.ts`, `apps/web/src/components/templates/private-lobby-page.tsx`, `apps/web/src/components/templates/private-lobby-page.test.tsx`, `apps/web/src/lib/index.ts`, `apps/web/src/lib/private-lobby-flow.ts`, `apps/web/src/lib/private-lobby-flow.test.ts`, `apps/web/src/proxy.ts`, `playwright.config.ts`, `tests/e2e/playwright.smoke.spec.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-047 - Build sharing and lobby pages`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/lib/private-lobby-flow.test.ts apps/web/src/components/templates/private-lobby-page.test.tsx` (expected fail before implementation with 9 missing-behavior failures; pass after implementation)
+  - Focused create/join success-link tests (expected fail before implementation; pass after implementation)
+  - Focused four-file private lobby/create/join suite (pass after review remediation; 32 tests)
+  - `bun run test` (pass after review remediation; typecheck, 32 files passed, 1 database file skipped, 523 tests passed, and 135 database-backed tests skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - Focused Prettier check for every intended story file (pass)
+  - `bun run format:check` (fails only on three unrelated pre-existing untracked browser-report files; every intended story file passes)
+  - `DATABASE_URL=<approved isolated local database> bun run --cwd apps/web build` (pass; private route and proxy compiled as dynamic production boundaries)
+  - `TEST_DATABASE_URL=<approved isolated local database> bun run test:e2e` (pass; 3 Playwright tests against a production Next server)
+  - `bun install --frozen-lockfile` (pass; 393 installs checked with no changes)
+  - `git diff --check` (pass)
+  - Manual dev-browser verification at 375px mobile and 1440px desktop (pass; real create/open lobby, credential-free invite, clipboard, automatic setup persistence, host controls, roster semantics, no horizontal overflow, 44px targets, production `no-store`, private robots metadata, and clean console)
+  - Mobile Lighthouse snapshot (pass after sharing-panel contrast correction; accessibility 100, best practices 100, SEO 100, and agentic browsing 100)
+- Implementation agents:
+  - Recommended: none
+  - Used: `frontend-developer` for component/route boundaries, snapshot failure states, safe sharing, host command scope, accessibility semantics, and focused browser/test risks because this was a complex frontend flow
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, security-triggered `security-engineer`, and UI/UX-triggered `ui-designer`/`ux-researcher` planned for the complete staged diff
+  - Findings: fixed invalid absent-host start, unsaved-setup start, active-session navigation, refresh retention/concurrency, round-less/waiting copy, duplicate pattern labels, command/share fallback coverage, focus preservation, and failure-specific recovery before targeted re-review
+- Decisions (why):
+  - Loaded the snapshot in the client from the existing private API because the scoped HttpOnly lobby cookie belongs to that API path and must remain opaque to page JavaScript and route parameters.
+  - Constructed invites from only the current origin and validated lobby code instead of copying the private page URL, preventing credentials, participant identifiers, and unrelated query data from entering shared links.
+  - Rendered the snapshot roster directly by participant ID rather than deduplicating in the browser because the strict authoritative projection already guarantees one participant entry and intentionally aggregates tabs server-side.
+  - Reused stable command-session replay semantics for configure/start and refreshed the snapshot after acknowledgements rather than optimistically claiming authoritative setup or round state.
+  - Kept realtime connection/event handling in US-049, but disabled start with explicit guidance until the authoritative snapshot reports the host connected so this page cannot offer a command the server must reject.
+  - Switched live page-header validation to a production Next server because development mode rewrites App Router document cache headers after route processing.
+- **Learnings for future iterations:**
+  - Private App Router documents need production-server header tests; development responses can hide a correct route-level `no-store` policy behind `no-cache, must-revalidate`.
+  - Share links should be rebuilt from an allowlist of public locator fields rather than derived from the current private URL.
+  - Presence and round eligibility are orthogonal roster states: waiting participants can still be connected, in grace, absent, or departed.
+- Known issues / follow-ups:
+  - The isolated `gamenight_bingo_us047_browser` local browser database remains in the existing PostgreSQL volume; no existing local data was deleted.
+  - Realtime ticket/socket lifecycle and sequenced updates remain assigned to US-049; until an authoritative snapshot reports the host connected, this lobby page keeps Start round unavailable with explicit guidance.
+  - Root `bun run format:check` remains blocked by unrelated pre-existing untracked browser reports; all intended story files pass Prettier.
+- Next iteration start:
+  - If review passes, implement US-048 accessible Bingo card interaction; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-047 at 2026-07-18 09:35:10 MST:
+- The initial `code-reviewer`, `qa-expert`, `security-engineer`, `ui-designer`, and `ux-researcher` pass returned no security findings and nine deduplicated blocking root causes plus one cheap low roster-test improvement.
+- Added failing regressions before remediation for recognized active-session entry, native-share rejection/cancellation selection, duplicate labels, connected/absent and dirty-setup start gating, exact configure/start wiring, bounded refresh failure retention, and round-less/waiting readiness copy.
+- Prevented absent hosts and unsaved setup from invoking start, retained keyboard focus with guarded `aria-disabled` actions, preserved last-good snapshots and host drafts through bounded refreshes, and mapped failure-specific recovery actions.
+- Added category-qualified duplicate pattern labels, explicit active-session lobby navigation, accurate round-less/waiting messaging, native/copy selection coverage, and exact configure/start payload plus post-ack refresh tests.
+- Realtime ticket/socket lifecycle and sequenced live updates remain in US-049; US-047 now fails closed by requiring authoritative connected presence before start rather than issuing a known-invalid HTTP command.
+- Post-fix checks: focused suite passes 32 tests, root suite passes typecheck with 523 tests and 135 database-backed skips, lint and production build pass, production Playwright passes 3 tests, and mobile/desktop browser checks retain 375px no-overflow, 44px targets, clear disabled-start guidance, category-qualified labels, clean console, and Lighthouse 100 scores.
+- Targeted re-review: `code-reviewer`, `qa-expert`, `ui-designer`, and `ux-researcher` because fixes address correctness, test, visual, and UX findings; `security-engineer` is not repeated because its initial findings list was empty and the remediation narrows command availability without changing a trust boundary.
+
+Targeted re-review outcome for US-047 at 2026-07-18 09:51:16 MST:
+- The four targeted specialists confirmed active-session navigation, absent-host/dirty-setup guards, bounded visible refresh, focus preservation, native sharing fallbacks, and waiting-player copy, but found remaining in-scope blockers.
+- A configure/start acknowledgement can overlap or fail its required post-command snapshot refresh; the workflow then reports success and can re-enable stale setup/start controls. The next iteration must serialize or queue mandatory reconciliation and latch committed start until a newer authoritative snapshot confirms the transition.
+- Start gating checks only the host; it must also account for every current non-overridden absent playing participant while excluding waiting and overridden participants.
+- Round-less snapshots still label playing-eligible roster entries as `Playing this round`; use a no-current-round readiness label and strengthen participant-specific roster assertions.
+- Duplicate pattern options are qualified, but the authoritative setup summary still drops the category suffix. Recovery actions also need to preserve strict server retryability so unauthorized and rate-limited guidance cannot contradict available actions.
+- Add complete configure/start wire-endpoint assertions and require the post-start snapshot refresh in tests while fixing the reconciliation root cause.
+- Per the one-targeted-re-review limit, no further substantive changes or specialist passes are permitted in this iteration. `US-047` remains `passes: false`, `prd.json` remains unchanged, and no commit was created.
+- Next iteration start: add failing overlap/post-command-refresh, roster-wide absence, round-null roster, qualified-summary, retryability, and complete wire regressions; apply the bounded fixes; rerun all US-047 checks/browser verification; and restart the complete staged review loop.
+
+## 2026-07-18 10:16:24 MST - US-047
+- What was implemented
+  - Resumed the blocked private lobby story by serializing mandatory post-command snapshot reconciliation behind any in-flight refresh and validating that the refreshed sequence and setup/stage projection include the acknowledgement before reporting success.
+  - Latched acknowledged start controls until a newer authoritative snapshot confirms the round transition, retained strict retryable command sessions for same-ID replay, and exposed snapshot retry actions only when the strict error contract permits retry.
+  - Added roster-wide start gating for non-overridden absent current players, first-round readiness labels for round-less snapshots, category-qualified duplicate pattern summaries, participant-specific presence assertions, and exact configure/start wire coverage.
+  - After initial review, extended the acknowledgement latch to configuration commands, synchronized clean controls on refresh without overwriting dirty drafts, removed private content on terminal refresh failures, and added a high-contrast two-tone share-panel focus indicator.
+  - Reverified the existing sharing, roster, host authorization, private metadata/cache policy, responsive layout, and browser flow against the isolated local US-047 database.
+- Files changed: `AGENTS.md`, `apps/web/package.json`, `apps/web/src/app/globals.css`, `apps/web/src/app/lobbies/[code]/page.tsx`, `apps/web/src/components/organisms/create-lobby-form.tsx`, `apps/web/src/components/organisms/create-lobby-form.test.tsx`, `apps/web/src/components/organisms/join-lobby-form.tsx`, `apps/web/src/components/organisms/join-lobby-form.test.tsx`, `apps/web/src/components/templates/index.ts`, `apps/web/src/components/templates/private-lobby-page.tsx`, `apps/web/src/components/templates/private-lobby-page.test.tsx`, `apps/web/src/lib/index.ts`, `apps/web/src/lib/private-lobby-flow.ts`, `apps/web/src/lib/private-lobby-flow.test.ts`, `apps/web/src/proxy.ts`, `playwright.config.ts`, `tests/e2e/playwright.smoke.spec.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-047 - Build sharing and lobby pages`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/lib/private-lobby-flow.test.ts apps/web/src/components/templates/private-lobby-page.test.tsx` (expected fail before remediation with 10 missing-behavior failures; pass after implementation with 21 tests)
+  - Review-remediation private lobby regressions (expected fail before fixes with 3 failures; pass after implementation with 19 tests)
+  - Focused private lobby/create/join suite (pass; 4 files and 42 tests)
+  - `bun run test` (pass after review remediation; typecheck, 32 files passed, 1 database file skipped, 533 tests passed, and 135 database-backed tests skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - Focused Prettier check for all resumed implementation/test files (pass)
+  - `bun run format:check` (fails only on 35 unrelated pre-existing untracked Lighthouse, Playwright, and DOM report files; every intended story file passes)
+  - `bun install --frozen-lockfile` (pass; 393 installs checked with no changes)
+  - `DATABASE_URL=<approved isolated local database> bun run --cwd apps/web build` (pass; private route and proxy compiled as dynamic production boundaries)
+  - `TEST_DATABASE_URL=<approved isolated local database> bun run test:e2e` (pass; 3 Playwright tests against a production Next server)
+  - `git diff --check` (pass)
+  - Manual dev-browser verification (pass; real create/open flow, allowlisted invite URL, clipboard success announcement, category-qualified summary, host/absence roster semantics, start gating, 500px no-overflow, 44px controls, no application console errors, and two-tone focus styles computed as a 4px white outline plus 10px brown outer ring)
+- Implementation agents:
+  - Recommended: none
+  - Used: `frontend-developer` for focused architecture, accessibility, privacy, and browser/test guidance because this resumed story remains a complex frontend flow
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and UI-triggered `ui-designer`; targeted re-review planned for all three finding-producing specialists
+  - Findings: fixed unlatched configure reconciliation, stale clean setup controls, retained private content after terminal refresh failures, share-panel focus contrast, and incomplete participant-specific roster assertions before targeted re-review
+- Decisions (why):
+  - Returned the strict active-lobby acknowledgement from the command session because reconciliation must bind to the committed sequence rather than treating any later snapshot as confirmation.
+  - Queued only mandatory reconciliation behind an existing refresh while continuing to collapse duplicate manual refreshes, preserving bounded user actions without skipping authoritative post-command state.
+  - Kept every acknowledged waiting-lobby command latched after stale or failed reconciliation because issuing configure/start again could assign a new command ID to a step that already committed.
+  - Used authoritative participant eligibility, absence status, and override state only as fail-closed UI gating; the server remains responsible for start authorization.
+- **Learnings for future iterations:**
+  - A successful acknowledgement is not sufficient UI state: controls should unlock only after an actor-scoped snapshot at or beyond the acknowledgement sequence confirms the expected projection.
+  - Presence and eligibility must be evaluated together; only non-overridden absent playing participants block round start, while waiting or overridden absences do not.
+  - Duplicate canonical names need the same category qualification in summaries and selectors so the persisted pattern remains unambiguous.
+- Known issues / follow-ups:
+  - The isolated `gamenight_bingo_us047_browser` local browser database retains the new browser-verification lobby; no local data was deleted.
+  - Root `bun run format:check` remains blocked by unrelated untracked browser-report artifacts; all intended story files pass Prettier.
+  - Database-backed generic tests remain skipped without a root `TEST_DATABASE_URL`; the approved isolated database was used for the production build and live Playwright route suite.
+- Next iteration start:
+  - If review passes, implement US-048 accessible Bingo card interaction; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-047 at 2026-07-18 10:32:07 MST:
+- The fresh initial `code-reviewer`, `qa-expert`, and `ui-designer` pass produced four deduplicated blocking root causes plus one cheap roster-test improvement: configuration acknowledgements were not latched, clean controls could stay stale after refresh, definitive refresh failures retained private UI, and share-panel focus contrast was insufficient.
+- Added failing regressions before fixing clean-control synchronization, configure latching across network/stale-sequence/wrong-projection reconciliation, and terminal unauthorized refresh privacy; strengthened participant-scoped Connected/Playing/Waiting assertions.
+- Generalized the pending command latch to configure and start acknowledgements, synchronized authoritative setup only when the draft is clean or confirmed, preserved dirty drafts, and cleared private snapshot content for strict nonretryable unauthorized/not-found/expired responses.
+- Added a two-tone share-panel focus indicator whose computed browser style is a 4px white outline plus a 10px brown outer ring, preserving contrast against both dark panel and light control surfaces.
+- Post-fix checks: focused suite passes 42 tests, root suite passes typecheck with 533 tests and 135 database-backed skips, lint and intended formatting pass, production build passes, production Playwright passes 3 tests, diff checks pass, and browser focus verification passes.
+- Targeted re-review: `code-reviewer`, `qa-expert`, and `ui-designer` because substantive correctness, test, privacy-state, and visual-accessibility fixes address findings from all three specialists.
+
+Targeted re-review outcome for US-047 at 2026-07-18 10:38:28 MST:
+- `code-reviewer`, `qa-expert`, and `ui-designer` returned empty actionable finding lists; all initial review root causes are resolved.
+- UI browser re-review confirmed the two-tone keyboard focus indicator, 500px no-overflow layout, 44px share controls, successful private snapshot rendering, and no application console errors.
+- Residual risk is limited to the 135 generic database-backed tests skipped without a root test URL, realtime event-driven reconciliation assigned to US-049, and non-Chromium/forced-colors manual rendering not rechecked; focused deterministic coverage and approved-database production checks cover this story.
+- US-047 has no unresolved in-scope critical, high, or medium findings.
