@@ -150,6 +150,11 @@ invalid counts, timestamps, or durations.
   so stale reads cannot replace current work or monopolize bounded workers.
   Latch scheduler failures as terminal before draining or reconciling more work,
   and recheck terminal/closed state after asynchronous recovery before binding.
+- Continue One Line to Two Lines to Blackout by updating the current round in
+  place: preserve cards, marks, calls, and private draw order, clear only the
+  settled stage winner fields, carry forward prior winners whose latest-ball
+  mark also completed the next pattern, and schedule no automatic lease when
+  every draw position has already been called.
 - Treat co-winner settlement as a separate exact persisted lobby, round,
   triggering-call, and deadline lease with the same bounded, generation-fenced,
   fail-closed scheduler discipline. A winner must transition from incomplete to

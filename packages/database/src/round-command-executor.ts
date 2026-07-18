@@ -1005,20 +1005,79 @@ async function executeMutation(
       at: now.getTime(),
     });
     if (!transition.ok) return null;
-    await transaction.coWinner.deleteMany({ where: { roundId: current.id } });
+    const [drawPositionCount, calls, settledWinners] = await Promise.all([
+      transaction.drawPosition.count({ where: { roundId: current.id } }),
+      transaction.call.findMany({
+        where: { roundId: current.id },
+        select: { id: true, ball: true },
+        orderBy: { position: "asc" },
+      }),
+      transaction.coWinner.findMany({
+        where: { lobbyId, roundId: current.id },
+        select: { participantId: true, cardId: true, triggeringCallId: true },
+      }),
+    ]);
+    const winnerCards = await transaction.card.findMany({
+      where: { roundId: current.id, id: { in: settledWinners.map(({ cardId }) => cardId) } },
+      select: { id: true, cells: true, marks: { select: { ball: true } } },
+    });
+    const cardsById = new Map(winnerCards.map((card) => [card.id, card]));
+    const latestCall = calls.at(-1);
+    const calledBalls = new Set(calls.map(({ ball }) => ball));
+    const pattern = patternOrThrow(options.patterns, command.patternId);
+    const carriedParticipantIds = settledWinners.flatMap((winner) => {
+      const card = cardsById.get(winner.cardId);
+      const markedBalls = new Set(card?.marks.map(({ ball }) => ball));
+      if (
+        card === undefined ||
+        latestCall === undefined ||
+        winner.triggeringCallId !== latestCall.id ||
+        !markedBalls.has(latestCall.ball)
+      ) {
+        return [];
+      }
+      const calledCells = card.cells.map((ball) => ball === 0 || calledBalls.has(ball));
+      const progress = calculatePatternProgress(pattern, {
+        calledCells,
+        markedCells: card.cells.map((ball) => ball === 0 || markedBalls.has(ball)),
+      });
+      const priorProgress = calculatePatternProgress(pattern, {
+        calledCells,
+        markedCells: card.cells.map(
+          (ball) => ball === 0 || (ball !== latestCall.ball && markedBalls.has(ball)),
+        ),
+      });
+      return !priorProgress.complete && progress.complete ? [winner.participantId] : [];
+    });
+    const carriesResult = carriedParticipantIds.length > 0;
+    await transaction.coWinner.deleteMany({
+      where: {
+        roundId: current.id,
+        ...(carriesResult ? { participantId: { notIn: carriedParticipantIds } } : {}),
+      },
+    });
     await transaction.round.update({
       where: { id: current.id },
       data: {
         currentPatternId: command.patternId,
-        stage: "ACTIVE",
+        stage: carriesResult ? "RESULT" : "ACTIVE",
         activeAt: now,
         pausedAt: null,
         pauseReason: null,
-        nextCallAt: nextAutomaticCallAt(current, now),
-        coWinnerTriggeringCallId: null,
-        coWinnerOpenedAt: null,
-        coWinnerClosesAt: null,
-        resultSettledAt: null,
+        nextCallAt:
+          !carriesResult && calls.length < drawPositionCount
+            ? nextAutomaticCallAt(current, now)
+            : null,
+        coWinnerTriggeringCallId: carriesResult
+          ? requireString(current.coWinnerTriggeringCallId, "Winning call ID")
+          : null,
+        coWinnerOpenedAt: carriesResult
+          ? requireDate(current.coWinnerOpenedAt, "Co-winner opening time")
+          : null,
+        coWinnerClosesAt: carriesResult
+          ? requireDate(current.coWinnerClosesAt, "Co-winner closing time")
+          : null,
+        resultSettledAt: carriesResult ? now : null,
       },
     });
     const round = await loadCurrentRound(transaction, lobbyId);

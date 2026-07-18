@@ -54,6 +54,7 @@ Next story: US-001
 - Pattern progress evaluates every canonical mask from authoritative called/marked cell projections, excludes the free center from required counts, uses canonical mask order for deterministic flexible-rule ties, and treats near-win as exactly one required called-but-unmarked cell while keeping feedback gating separate from completion.
 - Participant-private mutations persist a bounded ordered event batch plus its immutable canonical pattern definition, called/marked projection, and feedback decision; a row-level result-format discriminator and integrity digest bind current result JSON to its private row metadata so catalog revisions and coordinated payload rewrites cannot reinterpret replay. Adapters validate the full batch before emitting, fresh commits deliver to the participant room, replays deliver only to the requesting socket, and replacement rounds strip private payload/context plus integrity while retaining intent-only tombstones.
 - Co-winner settlement uses an exact persisted `(lobbyId, roundId, triggeringCallId, deadline)` lease with bounded fail-closed scheduling. Only an incomplete-to-complete mark of the latest called ball opens or joins the exclusive-deadline window; the first mark persists one integrity-bound mixed lobby/private result, and settlement orders the complete durable winner set by participant ID before one sequenced broadcast.
+- One Line stage continuation updates the same durable round in place through Two Lines and Blackout: preserve cards/marks, calls, and private draw order; replace prior stage winners with only latest-ball completions that also satisfy the next pattern; and leave `nextCallAt` null when all draw positions are already called.
 
 Append-only iteration log
 -------------------------
@@ -4034,3 +4035,59 @@ Targeted re-review outcome for US-040 at 2026-07-18 03:09:39 MST:
 - `qa-expert` reviewed the revised complete staged diff and returned an empty actionable finding list with no residual risks.
 - Pre-broadcast mixed validation, scheduler recovery/race/failure/bound coverage, concurrent exact-deadline settlement, stale lease rejection, lifecycle-driven multi-client delivery, and format-4 integrity checks resolve every initial finding.
 - No in-scope critical, high, or medium findings remain; US-040 can be marked passing and committed after the final consistency check.
+
+## 2026-07-18 03:18:28 MST - US-041
+- What was implemented
+  - Expanded PostgreSQL progression coverage through One Line, Two Lines, and Blackout while proving the same round, cards and marks, complete call history, and private draw order remain unchanged.
+  - Kept continuation limited to the required next canonical pattern and replaced only the settled stage's co-winner/result fields before either reactivating play or carrying an attributable result forward.
+  - Prevented an exhausted automatic round from creating another call deadline when continuation occurs after all 75 draw positions have already been called.
+  - Carried prior-stage winners directly into the next result when the same latest-ball mark changed the next canonical pattern from incomplete to complete, preventing preserved marks from leaving the stage unwinnable.
+- Files changed: `AGENTS.md`, `packages/database/src/database.integration.test.ts`, `packages/database/src/round-command-executor.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-041 - Continue One Line rounds`
+- Auto approval: `enabled`
+- Checks:
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "continues One Line through Two Lines and Blackout"` (expected fail before implementation because continuation scheduled an exhausted automatic call; pass after implementation)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "continues One Line|schedules the next automatic call when continuation|carries a latest-call completion"` (expected fail during review remediation because an already-complete Two Lines stage reactivated; pass after implementation with 3 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass after review remediation; typecheck, 25 files, and 580 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `bun run format:check` (fails only on three pre-existing untracked Lighthouse/DOM artifacts)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: none
+  - Used: skipped because the existing domain transition, canonical matcher, co-winner settlement, and transaction patterns made the in-scope implementation path clear without another adviser
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and `postgres-pro`; targeted re-review planned for the same specialists after substantive correctness, coverage, and fixture fixes
+  - Findings: fixed next-stage completion carry-forward, non-exhausted automatic scheduling coverage, and the synthetic result timeline before targeted re-review
+- Decisions (why):
+  - Extended the existing production-path integration test instead of adding a parallel progression abstraction because the domain transition and authenticated command path already enforced the required sequence.
+  - Counted persisted calls and draw positions inside the same Serializable command transaction because timer eligibility must derive from authoritative committed round state.
+  - Preserved the round and all play-owned child rows while deleting only `co_winners` and resetting result-window columns because progression is a stage change, not a new round.
+  - Retained only prior winners whose latest triggering-ball mark also changed the requested next pattern from incomplete to complete, because clearing every winner and exposing active play would make an already-complete preserved card unable to win through a later daub.
+  - Testing decision: this is a behavior change, so test-first was required; the focused PostgreSQL test failed on the unexpected exhausted deadline and passed after the minimal executor change.
+- **Learnings for future iterations:**
+  - Progression tests should compare complete cards (including marks), calls, and draw order across both continuation boundaries rather than checking only the round ID and next pattern.
+  - Any transition that reactivates automatic calling must account for draw exhaustion before persisting a new timer lease.
+  - Before reactivating a continued stage, evaluate prior settled winners against the next canonical pattern both with and without the triggering-ball mark; qualifying incomplete-to-complete transitions settle immediately using the already-closed co-winner window.
+- Known issues / follow-ups:
+  - Root `bun run format:check` remains blocked by unrelated untracked Lighthouse/DOM artifacts; every tracked file passes Prettier.
+  - The unrelated `apps/web/next-env.d.ts` side effect and untracked browser-report artifacts remain untouched and will not be staged.
+- Next iteration start:
+  - If review passes, implement US-042 fresh-round replacement without prior-round result history; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-041 at 2026-07-18 03:18:28 MST:
+- The initial `code-reviewer`, `qa-expert`, and `postgres-pro` pass produced one high correctness finding, one medium coverage finding, and one low fixture-validity finding.
+- Added a failing production-path regression where one latest-ball daub completes both a row and column, settles One Line, and then continues to Two Lines. The prior implementation exposed an active already-complete stage that could never produce a later incomplete-to-complete daub.
+- Continuation now evaluates the prior settled winners' preserved cards against the requested canonical pattern before deleting stage winners. It retains only winners whose triggering-ball mark also changed the next pattern from incomplete to complete and publishes the next stage as an immediate settled result; otherwise it reactivates normally.
+- Added the missing non-exhausted automatic branch assertion for the exact interval deadline and advanced the synthetic second-stage result timeline so every opening, settlement, and continuation occurs in valid chronological order.
+- Post-fix checks: the 3 focused progression tests pass, the PostgreSQL-backed root suite passes typecheck with 25 files and 580 tests, and typecheck, lint, tracked formatting, Playwright, and diff checks pass.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `postgres-pro` because the remediation changed continuation correctness, progression coverage, and persisted fixture semantics.
+
+Targeted re-review outcome for US-041 at 2026-07-18 03:18:28 MST:
+- `code-reviewer`, `qa-expert`, and `postgres-pro` reviewed the revised complete staged diff and returned empty actionable finding lists.
+- Latest-ball completion carry-forward, normal and exhausted automatic scheduling, full two-stage state preservation, and the corrected persisted timeline resolve every initial finding.
+- No in-scope critical, high, or medium findings remain; US-041 can be marked passing and committed after the final consistency check.

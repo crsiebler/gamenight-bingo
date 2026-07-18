@@ -5414,12 +5414,30 @@ describeDatabase("PostgreSQL durable game state", () => {
     );
   });
 
-  test("continues a settled One Line result without replacing round play state", async () => {
-    const occurredAt = new Date("2026-07-17T09:16:00.000Z");
-    const connection = await connectWithRoundCommands(() => occurredAt);
-    const state = createLobbyState();
+  test("continues One Line through Two Lines and Blackout without replacing round play state", async () => {
+    let now = new Date("2026-07-17T09:16:00.000Z");
+    const connection = await connectWithRoundCommands(() => now);
+    const initial = createLobbyState();
+    const calls = initial.round!.drawOrder.map(({ position, ball }) => ({
+      id: position === 1 ? initial.round!.calls[0]!.id : `call-${position}-${randomUUID()}`,
+      position,
+      ball,
+      calledAt: initial.round!.calls[0]!.calledAt,
+    }));
+    const state: DurableLobbyState = {
+      ...initial,
+      round: {
+        ...initial.round!,
+        calls,
+        coWinnerTriggeringCallId: calls.at(-1)!.id,
+        coWinners: initial.round!.coWinners.map((winner) => ({
+          ...winner,
+          triggeringCallId: calls.at(-1)!.id,
+        })),
+      },
+    };
     await createPersistedLobby(connection, state);
-    const command = ContinueRoundCommandSchema.parse({
+    const continueToTwoLines = ContinueRoundCommandSchema.parse({
       schemaVersion: 1,
       type: "continue-round",
       commandId: `continue-${randomUUID()}`,
@@ -5430,18 +5448,223 @@ describeDatabase("PostgreSQL durable game state", () => {
       connection.roundCommands.execute({
         lobbyId: state.lobby.id,
         sessionTokenHash: state.sessions[0]!.tokenHash,
-        command,
+        command: continueToTwoLines,
       }),
     ).resolves.toMatchObject({ ok: true, acknowledgement: { eventSequence: 2 } });
-    const restored = await connection.lobbyStates.findById(state.lobby.id);
+    const twoLines = await connection.lobbyStates.findById(state.lobby.id);
 
-    expect(restored?.round).toMatchObject({
+    expect(twoLines?.round).toMatchObject({
       id: state.round!.id,
       stage: "active",
       currentPatternId: "standard-two-lines",
+      nextCallAt: null,
       cards: state.round!.cards,
       calls: state.round!.calls,
+      drawOrder: state.round!.drawOrder,
       coWinners: [],
+      coWinnerTriggeringCallId: null,
+      coWinnerOpenedAt: null,
+      coWinnerClosesAt: null,
+      resultSettledAt: null,
+    });
+
+    const triggeringCallId = calls.at(-1)!.id;
+    const openedAt = new Date(now.getTime() + 1_000);
+    const settledAt = new Date(now.getTime() + 3_000);
+    await pool.query(
+      `UPDATE rounds
+          SET stage = 'RESULT',
+              next_call_at = NULL,
+              co_winner_triggering_call_id = $2,
+              co_winner_opened_at = $3,
+              co_winner_closes_at = $4,
+              result_settled_at = $4
+        WHERE id = $1`,
+      [state.round!.id, triggeringCallId, openedAt, settledAt],
+    );
+    await pool.query(
+      `INSERT INTO co_winners (
+         lobby_id, round_id, participant_id, card_id, triggering_call_id, confirmed_at
+       ) VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        state.lobby.id,
+        state.round!.id,
+        state.participants[0]!.id,
+        state.round!.cards[0]!.id,
+        triggeringCallId,
+        settledAt,
+      ],
+    );
+    now = new Date(settledAt.getTime() + 1_000);
+
+    const continueToBlackout = ContinueRoundCommandSchema.parse({
+      schemaVersion: 1,
+      type: "continue-round",
+      commandId: `continue-${randomUUID()}`,
+      patternId: "standard-blackout",
+    });
+    await expect(
+      connection.roundCommands.execute({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: state.sessions[0]!.tokenHash,
+        command: continueToBlackout,
+      }),
+    ).resolves.toMatchObject({ ok: true, acknowledgement: { eventSequence: 3 } });
+    const blackout = await connection.lobbyStates.findById(state.lobby.id);
+
+    expect(blackout?.round).toMatchObject({
+      id: state.round!.id,
+      initialPatternId: "standard-one-line",
+      currentPatternId: "standard-blackout",
+      stage: "active",
+      nextCallAt: null,
+      cards: state.round!.cards,
+      calls: state.round!.calls,
+      drawOrder: state.round!.drawOrder,
+      coWinners: [],
+      coWinnerTriggeringCallId: null,
+      coWinnerOpenedAt: null,
+      coWinnerClosesAt: null,
+      resultSettledAt: null,
+    });
+  });
+
+  test("schedules the next automatic call when continuation has remaining draw positions", async () => {
+    const occurredAt = new Date("2026-07-17T09:16:00.000Z");
+    const connection = await connectWithRoundCommands(() => occurredAt);
+    const state = createLobbyState();
+    await createPersistedLobby(connection, state);
+
+    await expect(
+      connection.roundCommands.execute({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: state.sessions[0]!.tokenHash,
+        command: ContinueRoundCommandSchema.parse({
+          schemaVersion: 1,
+          type: "continue-round",
+          commandId: `continue-with-draws-${randomUUID()}`,
+          patternId: "standard-two-lines",
+        }),
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toMatchObject({
+      round: {
+        stage: "active",
+        currentPatternId: "standard-two-lines",
+        nextCallAt: new Date(occurredAt.getTime() + 30_000),
+      },
+    });
+  });
+
+  test("carries a latest-call completion into the next stage before reactivating play", async () => {
+    let now = new Date("2026-07-17T09:16:00.000Z");
+    const connection = await connectWithRoundCommands(() => now, { coWinnerWindowMs: 2_000 });
+    const initial = createLobbyState();
+    const hostCard = initial.round!.cards[0]!;
+    const latestBall = hostCard.cells[0]!;
+    const priorRequiredIndexes = [1, 2, 3, 4, 5, 10, 15, 20];
+    const calledBalls = [
+      ...priorRequiredIndexes.map((index) => hostCard.cells[index]!),
+      latestBall,
+    ];
+    const drawBalls = [
+      ...calledBalls,
+      ...Array.from({ length: 75 }, (_, index) => index + 1),
+    ].filter((ball, index, balls) => balls.indexOf(ball) === index);
+    const calls = calledBalls.map((ball, index) => ({
+      id: `call-carried-completion-${index}-${randomUUID()}`,
+      position: index + 1,
+      ball,
+      calledAt: new Date(now.getTime() - (calledBalls.length - index) * 1_000),
+    }));
+    const state: DurableLobbyState = {
+      ...initial,
+      lobby: { ...initial.lobby, lastEventSequence: 0n },
+      round: {
+        ...initial.round!,
+        stage: "active",
+        nextCallAt: new Date(now.getTime() + 30_000),
+        coWinnerTriggeringCallId: null,
+        coWinnerOpenedAt: null,
+        coWinnerClosesAt: null,
+        resultSettledAt: null,
+        coWinners: [],
+        drawOrder: drawBalls.map((ball, index) => ({ position: index + 1, ball })),
+        calls,
+        cards: initial.round!.cards.map((card) =>
+          card.id === hostCard.id
+            ? {
+                ...card,
+                marks: priorRequiredIndexes.map((cellIndex, index) => ({
+                  id: `mark-carried-completion-${index}-${randomUUID()}`,
+                  ball: hostCard.cells[cellIndex]!,
+                  markedAt: new Date(now.getTime() - (priorRequiredIndexes.length - index) * 1_000),
+                })),
+              }
+            : card,
+        ),
+      },
+      events: [],
+      commandResults: [],
+    };
+    await createPersistedLobby(connection, state);
+
+    await expect(
+      connection.roundCommands.executeAuthenticated({
+        lobbyId: state.lobby.id,
+        participantId: state.participants[0]!.id,
+        participantSessionId: state.sessions[0]!.id,
+        command: MarkCardCommandSchema.parse({
+          schemaVersion: 1,
+          type: "mark-card",
+          commandId: `complete-two-lines-${randomUUID()}`,
+          ball: latestBall,
+        }),
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      activeLobbyEvent: { type: "co-winner-window" },
+    });
+    const lease = await connection.roundCommands.findCoWinnerSettlementLease(state.lobby.id);
+    if (lease === null) throw new Error("Expected the One Line result to have a settlement lease.");
+    now = new Date(now.getTime() + 2_000);
+    await expect(connection.roundCommands.executeCoWinnerSettlement(lease)).resolves.toBe(
+      "settled",
+    );
+    now = new Date(now.getTime() + 1);
+
+    await expect(
+      connection.roundCommands.execute({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: state.sessions[0]!.tokenHash,
+        command: ContinueRoundCommandSchema.parse({
+          schemaVersion: 1,
+          type: "continue-round",
+          commandId: `continue-completed-two-lines-${randomUUID()}`,
+          patternId: "standard-two-lines",
+        }),
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      acknowledgement: { eventSequence: 3 },
+      activeLobbyEvent: {
+        type: "stage",
+        round: {
+          stage: "result",
+          patternId: "standard-two-lines",
+          result: { winnerParticipantIds: [state.participants[0]!.id] },
+        },
+      },
+    });
+    await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toMatchObject({
+      round: {
+        id: state.round!.id,
+        stage: "result",
+        currentPatternId: "standard-two-lines",
+        nextCallAt: null,
+        coWinners: [{ participantId: state.participants[0]!.id }],
+      },
     });
   });
 
