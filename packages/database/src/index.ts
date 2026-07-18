@@ -30,6 +30,8 @@ export {
   type DurableParticipantSession,
   type DurablePresenceGeneration,
   type DurableRoundState,
+  type ExpireInactiveLobbiesInput,
+  type InactiveLobbyCleanupResult,
   type JsonObject,
   type JsonPrimitive,
   type JsonValue,

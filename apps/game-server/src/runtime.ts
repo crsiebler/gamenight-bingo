@@ -10,6 +10,8 @@ import {
   connectDatabase,
   type ActiveLobbyEventSubscriber,
   type ActiveLobbyEventSubscription,
+  type ExpireInactiveLobbiesInput,
+  type LobbyStateRepository,
 } from "@gamenight-bingo/database";
 import { patternCatalog } from "@gamenight-bingo/patterns";
 
@@ -80,6 +82,74 @@ export interface RunningGameServer {
   readonly address: { readonly host: string; readonly port: number };
   readonly completion: Promise<void>;
   close(): Promise<void>;
+}
+
+export interface InactiveLobbyCleanupWorker {
+  readonly failure: Promise<never>;
+  close(): Promise<void>;
+}
+
+export function startInactiveLobbyCleanupWorker(options: {
+  readonly intervalMs: number;
+  readonly cleanup: () => Promise<unknown>;
+}): InactiveLobbyCleanupWorker {
+  if (
+    !Number.isSafeInteger(options.intervalMs) ||
+    options.intervalMs < 1 ||
+    options.intervalMs > 2_147_483_647
+  ) {
+    throw new RangeError("The inactive lobby cleanup interval must be a positive timer duration.");
+  }
+
+  let closed = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let inFlight: Promise<void> | null = null;
+  let rejectFailure!: (reason: unknown) => void;
+  const failure = new Promise<never>((_resolve, reject) => {
+    rejectFailure = reject;
+  });
+  const schedule = () => {
+    if (closed) return;
+    timer = setTimeout(() => {
+      timer = null;
+      inFlight = options.cleanup().then(
+        () => {
+          inFlight = null;
+          schedule();
+        },
+        () => {
+          inFlight = null;
+          if (!closed) {
+            closed = true;
+            rejectFailure(new Error("Inactive lobby cleanup failed."));
+          }
+        },
+      );
+    }, options.intervalMs);
+  };
+  schedule();
+
+  return {
+    failure,
+    async close() {
+      closed = true;
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      await inFlight?.catch(() => {});
+    },
+  };
+}
+
+async function drainInactiveLobbyCleanup(
+  lobbyStates: Pick<LobbyStateRepository, "expireInactiveLobbies">,
+  input: ExpireInactiveLobbiesInput,
+): Promise<void> {
+  let limitReached: boolean;
+  do {
+    ({ limitReached } = await lobbyStates.expireInactiveLobbies(input));
+  } while (limitReached);
 }
 
 interface SupervisedGameServerResources {
@@ -214,67 +284,79 @@ export async function startGameServerRuntime(
   });
   let initialPresenceGracePeriods;
   try {
+    await drainInactiveLobbyCleanup(database.lobbyStates, {
+      inactivityTtlSeconds: runtimeConfiguration.lobbyIdleTtlSeconds,
+      maximum: runtimeConfiguration.maxActiveLobbies,
+    });
     initialPresenceGracePeriods = await database.lobbyStates.findRealtimePresenceGracePeriods();
   } catch (error) {
     await database.disconnect();
     throw error;
   }
-  const server = dependencies.createGameServer({
-    allowedOrigin: configuration.allowedOrigin,
-    clock: () => new Date(),
-    initialPresenceGracePeriods,
-    ticketConsumer: database.lobbyStates,
-    commandExecutor: {
-      execute: async ({ identity, command }) => {
-        const result = await database.roundCommands.executeAuthenticated({
-          ...identity,
-          command,
-        });
-        if (!result.ok) return result;
-        return {
-          ...result,
-          acknowledgement: CommandAckSchema.parse({
-            schemaVersion: CONTRACT_SCHEMA_VERSION,
-            type: "ack",
-            ...result.acknowledgement,
-            occurredAt: result.acknowledgement.occurredAt.toISOString(),
-          }),
-        };
+  let server: GameServer;
+  try {
+    server = dependencies.createGameServer({
+      allowedOrigin: configuration.allowedOrigin,
+      clock: () => new Date(),
+      initialPresenceGracePeriods,
+      ticketConsumer: database.lobbyStates,
+      commandExecutor: {
+        execute: async ({ identity, command }) => {
+          const result = await database.roundCommands.executeAuthenticated({
+            ...identity,
+            command,
+          });
+          if (!result.ok) return result;
+          return {
+            ...result,
+            acknowledgement: CommandAckSchema.parse({
+              schemaVersion: CONTRACT_SCHEMA_VERSION,
+              type: "ack",
+              ...result.acknowledgement,
+              occurredAt: result.acknowledgement.occurredAt.toISOString(),
+            }),
+          };
+        },
       },
-    },
-    snapshotProvider: {
-      findAuthorizedSnapshot: (identity) =>
-        database.lobbyStates.findAuthorizedSnapshotByIdentity({ ...identity }),
-    },
-    identityAuthorizer: {
-      isIdentityActive: (identity) =>
-        database.lobbyStates.isParticipantSessionIdentityActive({ ...identity }),
-    },
-    presenceLifecycle: {
-      registerConnection: (identity) =>
-        database.lobbyStates.registerRealtimeConnection({ ...identity }),
-      recordHeartbeat: (identity) => database.lobbyStates.recordRealtimeHeartbeat({ ...identity }),
-      unregisterConnection: (identity, presenceGeneration) =>
-        database.lobbyStates.unregisterRealtimeConnection({
-          ...identity,
-          presenceGeneration,
-          reconnectWindowSeconds: runtimeConfiguration.playerReconnectWindowSeconds,
-          disconnectPauseGraceSeconds: runtimeConfiguration.disconnectPauseGraceSeconds,
-        }),
-      expireGracePeriod: (grace) => database.lobbyStates.expireRealtimePresenceGrace(grace),
-    },
-    automaticCallLifecycle: {
-      findAutomaticCallLeases: () => database.roundCommands.findAutomaticCallLeases(),
-      findAutomaticCallLease: (lobbyId) => database.roundCommands.findAutomaticCallLease(lobbyId),
-      executeAutomaticCall: (lease) => database.roundCommands.executeAutomaticCall(lease),
-    },
-    coWinnerSettlementLifecycle: {
-      findCoWinnerSettlementLeases: () => database.roundCommands.findCoWinnerSettlementLeases(),
-      findCoWinnerSettlementLease: (lobbyId) =>
-        database.roundCommands.findCoWinnerSettlementLease(lobbyId),
-      executeCoWinnerSettlement: (lease) => database.roundCommands.executeCoWinnerSettlement(lease),
-    },
-  });
+      snapshotProvider: {
+        findAuthorizedSnapshot: (identity) =>
+          database.lobbyStates.findAuthorizedSnapshotByIdentity({ ...identity }),
+      },
+      identityAuthorizer: {
+        isIdentityActive: (identity) =>
+          database.lobbyStates.isParticipantSessionIdentityActive({ ...identity }),
+      },
+      presenceLifecycle: {
+        registerConnection: (identity) =>
+          database.lobbyStates.registerRealtimeConnection({ ...identity }),
+        recordHeartbeat: (identity) =>
+          database.lobbyStates.recordRealtimeHeartbeat({ ...identity }),
+        unregisterConnection: (identity, presenceGeneration) =>
+          database.lobbyStates.unregisterRealtimeConnection({
+            ...identity,
+            presenceGeneration,
+            reconnectWindowSeconds: runtimeConfiguration.playerReconnectWindowSeconds,
+            disconnectPauseGraceSeconds: runtimeConfiguration.disconnectPauseGraceSeconds,
+          }),
+        expireGracePeriod: (grace) => database.lobbyStates.expireRealtimePresenceGrace(grace),
+      },
+      automaticCallLifecycle: {
+        findAutomaticCallLeases: () => database.roundCommands.findAutomaticCallLeases(),
+        findAutomaticCallLease: (lobbyId) => database.roundCommands.findAutomaticCallLease(lobbyId),
+        executeAutomaticCall: (lease) => database.roundCommands.executeAutomaticCall(lease),
+      },
+      coWinnerSettlementLifecycle: {
+        findCoWinnerSettlementLeases: () => database.roundCommands.findCoWinnerSettlementLeases(),
+        findCoWinnerSettlementLease: (lobbyId) =>
+          database.roundCommands.findCoWinnerSettlementLease(lobbyId),
+        executeCoWinnerSettlement: (lease) =>
+          database.roundCommands.executeCoWinnerSettlement(lease),
+      },
+    });
+  } catch (error) {
+    await database.disconnect();
+    throw error;
+  }
 
   let eventSubscription: ActiveLobbyEventSubscription | null = null;
   try {
@@ -296,10 +378,27 @@ export async function startGameServerRuntime(
         () => Promise.reject(new Error("Active-lobby event subscription failed.")),
       ),
     ]);
+    const lobbyCleanup = startInactiveLobbyCleanupWorker({
+      intervalMs: Math.min(runtimeConfiguration.lobbyIdleTtlSeconds, 60) * 1_000,
+      cleanup: () =>
+        drainInactiveLobbyCleanup(database.lobbyStates, {
+          inactivityTtlSeconds: runtimeConfiguration.lobbyIdleTtlSeconds,
+          maximum: runtimeConfiguration.maxActiveLobbies,
+        }),
+    });
     return superviseGameServerResources({
       address,
       eventSubscription,
-      server,
+      server: {
+        failure: Promise.race([server.failure, lobbyCleanup.failure]),
+        close: async () => {
+          try {
+            await server.close();
+          } finally {
+            await lobbyCleanup.close();
+          }
+        },
+      },
       disconnectDatabase: () => database.disconnect(),
     });
   } catch (error) {

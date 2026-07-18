@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type {
   ActiveLobbyEventNotification,
@@ -8,13 +8,21 @@ import type {
 import {
   GameServerConfigurationError,
   parseGameServerConfiguration,
+  startInactiveLobbyCleanupWorker,
   startGameServerRuntime,
   subscribeGameServerToActiveLobbyEvents,
   superviseGameServerResources,
 } from "./runtime.js";
 import type { GameServer, GameServerOptions } from "./socket-server.js";
 
+const realSetTimeout = globalThis.setTimeout.bind(globalThis);
+const realClearTimeout = globalThis.clearTimeout.bind(globalThis);
+
 describe("game-server runtime configuration", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   test("loads grace leases and preserves the disconnect persistence promise", async () => {
     const grace = {
       lobbyId: "lobby_alpha",
@@ -30,9 +38,25 @@ describe("game-server runtime configuration", () => {
       completion: new Promise<void>(() => {}),
       close: async () => {},
     };
+    let cleanupCalls = 0;
     const database = {
       lobbyStates: {
-        findRealtimePresenceGracePeriods: async () => [grace],
+        expireInactiveLobbies: async (input: unknown) => {
+          cleanupCalls += 1;
+          startupOrder.push("cleanup");
+          expect(input).toEqual({ inactivityTtlSeconds: 1_800, maximum: 100 });
+          return {
+            examinedCount: 0,
+            deletedCount: 0,
+            skippedCount: 0,
+            deletedByStatus: { waiting: 0, active: 0, completed: 0, abandoned: 0 },
+            limitReached: cleanupCalls === 1,
+          };
+        },
+        findRealtimePresenceGracePeriods: async () => {
+          startupOrder.push("grace");
+          return [grace];
+        },
         unregisterRealtimeConnection: () => disconnectPersistence,
       },
       roundCommands: {},
@@ -90,7 +114,7 @@ describe("game-server runtime configuration", () => {
         3,
       ),
     ).toBe(disconnectPersistence);
-    expect(startupOrder).toEqual(["subscribe", "listen"]);
+    expect(startupOrder).toEqual(["cleanup", "cleanup", "grace", "subscribe", "listen"]);
     await running.close();
     expect(databaseDisconnected).toBe(true);
   });
@@ -99,6 +123,13 @@ describe("game-server runtime configuration", () => {
     let databaseDisconnected = false;
     const database = {
       lobbyStates: {
+        expireInactiveLobbies: async () => ({
+          examinedCount: 0,
+          deletedCount: 0,
+          skippedCount: 0,
+          deletedByStatus: { waiting: 0, active: 0, completed: 0, abandoned: 0 },
+          limitReached: false,
+        }),
         findRealtimePresenceGracePeriods: async () => {
           throw new Error("private recovery detail");
         },
@@ -130,6 +161,253 @@ describe("game-server runtime configuration", () => {
       ),
     ).rejects.toThrow();
     expect(databaseDisconnected).toBe(true);
+  });
+
+  test("drains cleanup and database resources when authority construction fails", async () => {
+    vi.useFakeTimers();
+    let cleanupCalls = 0;
+    let databaseDisconnected = false;
+    const database = {
+      lobbyStates: {
+        expireInactiveLobbies: async () => {
+          cleanupCalls += 1;
+          return {
+            examinedCount: 0,
+            deletedCount: 0,
+            skippedCount: 0,
+            deletedByStatus: { waiting: 0, active: 0, completed: 0, abandoned: 0 },
+            limitReached: false,
+          };
+        },
+        findRealtimePresenceGracePeriods: async () => [],
+      },
+      disconnect: async () => {
+        databaseDisconnected = true;
+      },
+    };
+    const startWithDependencies = startGameServerRuntime as unknown as (
+      environment: Readonly<Record<string, string | undefined>>,
+      dependencies: {
+        connectDatabase: () => Promise<typeof database>;
+        createGameServer: () => never;
+      },
+    ) => ReturnType<typeof startGameServerRuntime>;
+
+    await expect(
+      startWithDependencies(
+        {
+          DATABASE_URL: "postgresql://127.0.0.1:1/bingo",
+          GAME_SERVER_PORT: "4103",
+        },
+        {
+          connectDatabase: async () => database,
+          createGameServer: () => {
+            throw new Error("authority construction failed");
+          },
+        },
+      ),
+    ).rejects.toThrow("authority construction failed");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(cleanupCalls).toBe(1);
+    expect(databaseDisconnected).toBe(true);
+  });
+
+  test("starts periodic cleanup only after listener startup can supervise failures", async () => {
+    vi.useFakeTimers();
+    const listenStarted = deferred();
+    const releaseListen = deferred<{ host: string; port: number }>();
+    const listeningAddress = { host: "127.0.0.1", port: 4104 };
+    let cleanupCalls = 0;
+    const eventSubscription = {
+      completion: new Promise<void>(() => {}),
+      close: async () => {},
+    };
+    const database = {
+      lobbyStates: {
+        expireInactiveLobbies: async () => {
+          cleanupCalls += 1;
+          return {
+            examinedCount: 0,
+            deletedCount: 0,
+            skippedCount: 0,
+            deletedByStatus: { waiting: 0, active: 0, completed: 0, abandoned: 0 },
+            limitReached: false,
+          };
+        },
+        findRealtimePresenceGracePeriods: async () => [],
+      },
+      roundCommands: {},
+      activeLobbyEvents: { subscribe: async () => eventSubscription },
+      disconnect: async () => {},
+    };
+    const server: GameServer = {
+      failure: new Promise<never>(() => {}),
+      listen: async () => {
+        listenStarted.resolve();
+        return releaseListen.promise;
+      },
+      close: async () => {},
+      publishLobbyEvent: async () => {},
+      publishLobbyEventFromSource: async () => {},
+      publishParticipantEvent: async () => {},
+    };
+    const startWithDependencies = startGameServerRuntime as unknown as (
+      environment: Readonly<Record<string, string | undefined>>,
+      dependencies: {
+        connectDatabase: () => Promise<typeof database>;
+        createGameServer: () => GameServer;
+      },
+    ) => ReturnType<typeof startGameServerRuntime>;
+    const starting = startWithDependencies(
+      {
+        DATABASE_URL: "postgresql://127.0.0.1:1/bingo",
+        GAME_SERVER_PORT: "4104",
+      },
+      {
+        connectDatabase: async () => database,
+        createGameServer: () => server,
+      },
+    );
+    let running: Awaited<ReturnType<typeof startGameServerRuntime>> | undefined;
+
+    try {
+      await waitForSignal(listenStarted.promise, "game-server listener startup");
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(cleanupCalls).toBe(1);
+
+      releaseListen.resolve(listeningAddress);
+      running = await waitForSignal(starting, "game-server startup");
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(cleanupCalls).toBe(2);
+    } finally {
+      releaseListen.resolve(listeningAddress);
+      running ??= await waitForSignal(starting, "game-server startup cleanup");
+      await running.close();
+    }
+  });
+
+  test("runs periodic cleanup without overlap and drains in-flight work on close", async () => {
+    vi.useFakeTimers();
+    const firstCleanup = deferred();
+    let cleanupCalls = 0;
+    const worker = startInactiveLobbyCleanupWorker({
+      intervalMs: 1_000,
+      cleanup: async () => {
+        cleanupCalls += 1;
+        if (cleanupCalls === 1) await firstCleanup.promise;
+      },
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(cleanupCalls).toBe(1);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(cleanupCalls).toBe(1);
+      firstCleanup.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(cleanupCalls).toBe(2);
+    } finally {
+      firstCleanup.resolve();
+      await waitForSignal(worker.close(), "inactive lobby cleanup worker close");
+    }
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(cleanupCalls).toBe(2);
+  });
+
+  test("reports periodic cleanup failure without exposing persistence details", async () => {
+    vi.useFakeTimers();
+    const worker = startInactiveLobbyCleanupWorker({
+      intervalMs: 1_000,
+      cleanup: async () => {
+        throw new Error("private database detail");
+      },
+    });
+    const failure = worker.failure.catch((error: unknown) => error);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(failure).resolves.toMatchObject({ message: "Inactive lobby cleanup failed." });
+    expect(String(await failure)).not.toContain("private database detail");
+    await worker.close();
+  });
+
+  test("fails and drains the runtime when periodic lobby cleanup cannot continue", async () => {
+    vi.useFakeTimers();
+    let cleanupCalls = 0;
+    const closed: string[] = [];
+    const eventSubscription = {
+      completion: new Promise<void>(() => {}),
+      close: async () => {
+        closed.push("subscription");
+      },
+    };
+    const database = {
+      lobbyStates: {
+        expireInactiveLobbies: async () => {
+          cleanupCalls += 1;
+          if (cleanupCalls > 1) throw new Error("private cleanup detail");
+          return {
+            examinedCount: 0,
+            deletedCount: 0,
+            skippedCount: 0,
+            deletedByStatus: { waiting: 0, active: 0, completed: 0, abandoned: 0 },
+            limitReached: false,
+          };
+        },
+        findRealtimePresenceGracePeriods: async () => [],
+      },
+      roundCommands: {},
+      activeLobbyEvents: { subscribe: async () => eventSubscription },
+      disconnect: async () => {
+        closed.push("database");
+      },
+    };
+    const server: GameServer = {
+      failure: new Promise<never>(() => {}),
+      listen: async ({ host, port }) => ({ host, port }),
+      close: async () => {
+        closed.push("server");
+      },
+      publishLobbyEvent: async () => {},
+      publishLobbyEventFromSource: async () => {},
+      publishParticipantEvent: async () => {},
+    };
+    const startWithDependencies = startGameServerRuntime as unknown as (
+      environment: Readonly<Record<string, string | undefined>>,
+      dependencies: {
+        connectDatabase: () => Promise<typeof database>;
+        createGameServer: () => GameServer;
+      },
+    ) => ReturnType<typeof startGameServerRuntime>;
+    const running = await startWithDependencies(
+      {
+        DATABASE_URL: "postgresql://127.0.0.1:1/bingo",
+        GAME_SERVER_PORT: "4105",
+      },
+      {
+        connectDatabase: async () => database,
+        createGameServer: () => server,
+      },
+    );
+    const completion = running.completion.then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    try {
+      await vi.advanceTimersByTimeAsync(60_000);
+      await expect(
+        waitForSignal(completion, "cleanup-failed runtime completion"),
+      ).resolves.toMatchObject({ message: "Game server authority failed." });
+      expect(cleanupCalls).toBe(2);
+      expect(closed).toEqual(["server", "subscription", "database"]);
+      expect(String(await completion)).not.toContain("private cleanup detail");
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(cleanupCalls).toBe(2);
+    } finally {
+      await running.close();
+    }
   });
 
   test("fails the runtime and closes every resource when event continuity is lost", async () => {
@@ -427,4 +705,23 @@ function deferred<T = void>() {
     resolve = promiseResolve;
   });
   return { promise, resolve };
+}
+
+function waitForSignal<T>(promise: Promise<T>, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeout = realSetTimeout(
+      () => reject(new Error(`Timed out waiting for ${label}.`)),
+      2_000,
+    );
+    promise.then(
+      (value) => {
+        realClearTimeout(timeout);
+        resolve(value);
+      },
+      (error: unknown) => {
+        realClearTimeout(timeout);
+        reject(error);
+      },
+    );
+  });
 }

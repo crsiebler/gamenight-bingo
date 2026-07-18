@@ -418,7 +418,11 @@ then refactor while green.
   `parseRuntimeConfig` from `packages/contracts`; pass the immutable typed result
   inward and keep `packages/domain` independent of `process.env`.
 - Delete inactive lobby data according to configured retention, but never delete
-  an active lobby with active calls or connections.
+  an active lobby with active calls or connections. Treat bounded cleanup
+  candidate scans as hints: revalidate activity and protections after acquiring
+  the lobby fence, then delete only the lobby parent and rely on owned-state
+  cascades. Run one sweep before recovering process-local leases, keep periodic
+  sweeps nonoverlapping, and treat cleanup failure as fatal to the authority.
 - Do not commit secrets, credentials, tokens, local environment files, database
   contents, or captured user data.
 

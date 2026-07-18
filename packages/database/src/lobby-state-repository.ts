@@ -5,7 +5,11 @@ import {
   SnapshotSchema,
   type Snapshot,
 } from "@gamenight-bingo/contracts";
-import { normalizeUsername, type UsernameNormalizationResult } from "@gamenight-bingo/domain";
+import {
+  expireInactiveLobby,
+  normalizeUsername,
+  type UsernameNormalizationResult,
+} from "@gamenight-bingo/domain";
 import { Client, type Notification } from "pg";
 
 import {
@@ -288,6 +292,19 @@ export interface RealtimePresenceGracePeriod {
 
 export type RealtimePresenceGraceExpiryResult = "expired" | "stale" | "too-early";
 
+export interface ExpireInactiveLobbiesInput {
+  readonly inactivityTtlSeconds: number;
+  readonly maximum?: number;
+}
+
+export interface InactiveLobbyCleanupResult {
+  readonly examinedCount: number;
+  readonly deletedCount: number;
+  readonly skippedCount: number;
+  readonly deletedByStatus: Readonly<Record<LobbyStatus, number>>;
+  readonly limitReached: boolean;
+}
+
 export interface ReserveParticipantOptions {
   readonly maxPlayersPerLobby: number;
 }
@@ -410,6 +427,7 @@ export interface LobbyStateRepository {
   consumeRealtimeTicket(input: {
     readonly ticketHash: Uint8Array;
   }): Promise<ConsumedRealtimeTicket | null>;
+  expireInactiveLobbies(input: ExpireInactiveLobbiesInput): Promise<InactiveLobbyCleanupResult>;
   expireParticipantRejoinWindows(lobbyId: string): Promise<number>;
   markParticipantSessionDisconnected(input: {
     readonly lobbyId: string;
@@ -813,7 +831,8 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
     }
     const sequenceRows = await transaction.$queryRaw<readonly { sequence: bigint }[]>`
       UPDATE "lobbies"
-         SET "last_event_sequence" = "last_event_sequence" + 1
+         SET "last_event_sequence" = "last_event_sequence" + 1,
+             "last_activity_at" = GREATEST("last_activity_at", ${input.changedAt})
        WHERE "id" = ${input.lobbyId}
        RETURNING "last_event_sequence" AS "sequence"
     `;
@@ -1280,11 +1299,8 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
                 } as const;
               }
 
-              await expireDueParticipantSessions(
-                transaction,
-                input.lobbyId,
-                this.currentLifecycleTime(),
-              );
+              const now = this.currentLifecycleTime();
+              await expireDueParticipantSessions(transaction, input.lobbyId, now);
               const prior = await transaction.commandResult.findFirst({
                 where: {
                   lobbyId: input.lobbyId,
@@ -1435,6 +1451,11 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
                   createdAt: input.issuedAt,
                 },
               });
+              await transaction.$executeRaw`
+                UPDATE "lobbies"
+                   SET "last_activity_at" = GREATEST("last_activity_at", ${now})
+                 WHERE "id" = ${input.lobbyId}
+              `;
 
               return { ok: true, entry } as const;
             },
@@ -1866,6 +1887,157 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
     );
   }
 
+  async expireInactiveLobbies(
+    input: ExpireInactiveLobbiesInput,
+  ): Promise<InactiveLobbyCleanupResult> {
+    if (
+      !Number.isSafeInteger(input.inactivityTtlSeconds) ||
+      input.inactivityTtlSeconds < 1 ||
+      input.inactivityTtlSeconds > 86_400
+    ) {
+      throw new RangeError("The lobby inactivity TTL must be between 1 and 86400 seconds.");
+    }
+    const maximum = input.maximum ?? 100;
+    if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 100) {
+      throw new RangeError("The lobby cleanup limit must be between 1 and 100.");
+    }
+    const inactivityTtlMs = input.inactivityTtlSeconds * 1_000;
+    const candidateCutoff = new Date(this.currentLifecycleTime().getTime() - inactivityTtlMs);
+    const candidates = await this.prisma.$queryRaw<readonly { id: string }[]>`
+      SELECT lobby."id"
+        FROM "lobbies" lobby
+       WHERE lobby."last_activity_at" <= ${candidateCutoff}
+         AND (
+           lobby."status" IN ('WAITING', 'COMPLETED', 'ABANDONED')
+           OR (
+             lobby."status" = 'ACTIVE'
+             AND NOT EXISTS (
+               SELECT 1
+                 FROM "rounds" round
+                 JOIN "calls" call ON call."round_id" = round."id"
+                WHERE round."lobby_id" = lobby."id"
+             )
+             AND NOT EXISTS (
+               SELECT 1
+                 FROM "presence_generations" presence
+                WHERE presence."lobby_id" = lobby."id"
+                  AND presence."status" = 'CONNECTED'
+                  AND presence."connection_count" > 0
+                  AND presence."ended_at" IS NULL
+             )
+           )
+         )
+       ORDER BY lobby."last_activity_at" ASC, lobby."id" ASC
+       LIMIT ${maximum + 1}
+    `;
+    const selected = candidates.slice(0, maximum);
+    const deletedByStatus: Record<LobbyStatus, number> = {
+      waiting: 0,
+      active: 0,
+      completed: 0,
+      abandoned: 0,
+    };
+    let deletedCount = 0;
+    let skippedCount = 0;
+
+    for (const candidate of selected) {
+      const outcome = await runTransactionWithRetry(
+        async () =>
+          this.prisma.$transaction(
+            async (transaction) => {
+              const fenced = await transaction.$queryRaw<
+                readonly {
+                  status: DatabaseLobbyStatus;
+                  lastActivityAt: Date;
+                }[]
+              >`
+                UPDATE "lobbies"
+                   SET "last_event_sequence" = "last_event_sequence"
+                 WHERE "id" = ${candidate.id}
+                 RETURNING "status", "last_activity_at" AS "lastActivityAt"
+              `;
+              const lobby = fenced[0];
+              if (lobby === undefined) return null;
+
+              const checkedAt = this.currentLifecycleTime();
+              const status = lobbyStatuses.fromDatabase(lobby.status);
+              let expiryState:
+                | {
+                    readonly status: Exclude<LobbyStatus, "active">;
+                    readonly lastActivityAt: number;
+                  }
+                | {
+                    readonly status: "active";
+                    readonly lastActivityAt: number;
+                    readonly hasActiveCalls: boolean;
+                    readonly activeConnectionCount: number;
+                  };
+              if (status === "active") {
+                const activity = await transaction.$queryRaw<
+                  readonly {
+                    hasActiveCalls: boolean;
+                    activeConnectionCount: bigint;
+                  }[]
+                >`
+                  SELECT EXISTS (
+                           SELECT 1
+                             FROM "rounds" round
+                             JOIN "calls" call ON call."round_id" = round."id"
+                            WHERE round."lobby_id" = ${candidate.id}
+                         ) AS "hasActiveCalls",
+                         COALESCE((
+                           SELECT SUM(presence."connection_count")
+                             FROM "presence_generations" presence
+                            WHERE presence."lobby_id" = ${candidate.id}
+                              AND presence."status" = 'CONNECTED'
+                              AND presence."connection_count" > 0
+                              AND presence."ended_at" IS NULL
+                         ), 0)::bigint AS "activeConnectionCount"
+                `;
+                const activeConnectionCount = Number(activity[0]?.activeConnectionCount ?? 0n);
+                expiryState = {
+                  status,
+                  lastActivityAt: lobby.lastActivityAt.getTime(),
+                  hasActiveCalls: activity[0]?.hasActiveCalls ?? false,
+                  activeConnectionCount,
+                };
+              } else {
+                expiryState = {
+                  status,
+                  lastActivityAt: lobby.lastActivityAt.getTime(),
+                };
+              }
+              const expiry = expireInactiveLobby(expiryState, checkedAt.getTime(), inactivityTtlMs);
+              if (!expiry.ok) return null;
+
+              await transaction.lobby.delete({ where: { id: candidate.id } });
+              return status;
+            },
+            {
+              isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+              maxWait: 5_000,
+              timeout: 10_000,
+            },
+          ),
+        this.retryOptions,
+      );
+      if (outcome === null) {
+        skippedCount += 1;
+      } else {
+        deletedCount += 1;
+        deletedByStatus[outcome] += 1;
+      }
+    }
+
+    return {
+      examinedCount: selected.length,
+      deletedCount,
+      skippedCount,
+      deletedByStatus,
+      limitReached: candidates.length > maximum,
+    };
+  }
+
   async expireParticipantRejoinWindows(lobbyId: string): Promise<number> {
     return runTransactionWithRetry(
       async () =>
@@ -2253,6 +2425,11 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
               },
               data: { status: "DEPARTED", departedAt: now },
             });
+            await transaction.$executeRaw`
+              UPDATE "lobbies"
+                 SET "last_activity_at" = GREATEST("last_activity_at", ${now})
+               WHERE "id" = ${input.lobbyId}
+            `;
             return { ok: true, entry } as const;
           },
           {
@@ -2383,6 +2560,11 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
                 },
                 data: { connectionCount: { increment: 1 } },
               });
+              await transaction.$executeRaw`
+                UPDATE "lobbies"
+                   SET "last_activity_at" = GREATEST("last_activity_at", ${changedAt})
+                 WHERE "id" = ${input.lobbyId}
+              `;
               return toGenerationNumber(current.generation);
             }
 
@@ -2453,7 +2635,14 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
               },
               select: { id: true },
             });
-            return session !== null;
+            if (session === null) return false;
+            const heartbeatAt = this.currentLifecycleTime();
+            await transaction.$executeRaw`
+              UPDATE "lobbies"
+                 SET "last_activity_at" = GREATEST("last_activity_at", ${heartbeatAt})
+               WHERE "id" = ${input.lobbyId}
+            `;
+            return true;
           },
           {
             isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
@@ -3474,6 +3663,11 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
                 },
                 data: { status: "DEPARTED", departedAt: now },
               });
+              await transaction.$executeRaw`
+                UPDATE "lobbies"
+                   SET "last_activity_at" = GREATEST("last_activity_at", ${now})
+                 WHERE "id" = ${input.lobbyId}
+              `;
               return { ...identity, status: "active" } as const;
             }
 

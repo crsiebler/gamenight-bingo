@@ -55,6 +55,7 @@ Next story: US-001
 - Participant-private mutations persist a bounded ordered event batch plus its immutable canonical pattern definition, called/marked projection, and feedback decision; a row-level result-format discriminator and integrity digest bind current result JSON to its private row metadata so catalog revisions and coordinated payload rewrites cannot reinterpret replay. Adapters validate the full batch before emitting, fresh commits deliver to the participant room, replays deliver only to the requesting socket, and replacement rounds strip private payload/context plus integrity while retaining intent-only tombstones.
 - Co-winner settlement uses an exact persisted `(lobbyId, roundId, triggeringCallId, deadline)` lease with bounded fail-closed scheduling. Only an incomplete-to-complete mark of the latest called ball opens or joins the exclusive-deadline window; the first mark persists one integrity-bound mixed lobby/private result, and settlement orders the complete durable winner set by participant ID before one sequenced broadcast.
 - One Line stage continuation updates the same durable round in place through Two Lines and Blackout: preserve cards/marks, calls, and private draw order; replace prior stage winners with only latest-ball completions that also satisfy the next pattern; and leave `nextCallAt` null when all draw positions are already called.
+- Inactive-lobby cleanup uses bounded candidate scans only as hints, revalidates the configured threshold plus active-call/connection protection under the Serializable lobby fence with lock-time sampling, and deletes only the lobby parent so PostgreSQL cascades all owned private state. The game server sweeps before lease recovery, runs nonoverlapping periodic cleanup, and treats cleanup failure as fatal; successful join, rejoin, connection, heartbeat, and sequenced presence transitions advance activity with `GREATEST`.
 
 Append-only iteration log
 -------------------------
@@ -4145,3 +4146,126 @@ Targeted re-review outcome for US-042 at 2026-07-18 03:58:18 MST:
 - `qa-expert` reviewed the revised complete staged diff and returned an empty actionable finding list with no residual risks.
 - Strict snapshot parsing plus explicit old-round, old/foreign-card, private-order/history, and stale-result exclusions resolve the initial medium finding.
 - No in-scope critical, high, or medium findings remain; US-042 can be marked passing and committed after the final consistency check.
+
+## 2026-07-18 04:37:33 MST - US-043
+- What was implemented
+  - Added a bounded, privacy-safe inactive-lobby cleanup repository operation that uses configured retention, treats candidate scans only as hints, and revalidates exact-boundary eligibility under each lobby's Serializable fence before deleting the parent row.
+  - Preserved active lobbies with any durable calls or connected presence, expired waiting/completed/abandoned and abandoned-active lobbies, returned aggregate status/count observability, and relied on PostgreSQL cascades to erase all private owned state without restoration records.
+  - Advanced durable activity for fresh joins, rejoins, realtime connections, authenticated heartbeats, and sequenced presence changes so real participation prevents waiting-lobby expiry without allowing rejected or replay-only operations to extend retention.
+  - Wired one cleanup sweep before presence-lease recovery plus a nonoverlapping periodic game-server worker that drains on shutdown and fails the authority with a secret-free error when cleanup cannot continue.
+- Files changed: `AGENTS.md`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/runtime.test.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/database.integration.test.ts`, `packages/database/src/index.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-043 - Expire inactive lobbies`
+- Auto approval: `enabled`
+- Checks:
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "expires every eligible lobby|cascades inactive lobby data|retries cleanup"` (expected fail before implementation: 3 tests reported the missing cleanup operation; pass after implementation)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "treats a fresh join"` (expected fail before activity updates: both waiting lobbies were deleted; pass after implementation)
+  - `bunx vitest run apps/game-server/src/runtime.test.ts` (expected fail before runtime wiring: startup sweep and worker were absent; pass after implementation with 19 tests)
+  - `bunx vitest run apps/game-server/src/runtime.test.ts -t "authority construction fails"` (expected fail before resource fix: periodic cleanup remained scheduled; pass in the complete runtime suite after implementation)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test:database` (pass after review remediation; 131 PostgreSQL integration tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run apps/game-server/src/runtime.test.ts apps/game-server/src/socket-server.test.ts` (pass after review remediation when run without concurrent database-suite contention; 122 tests)
+  - `bun run test` (pass after review remediation; typecheck, 24 files passed, 1 database file skipped, 456 tests passed, and 134 database-backed tests skipped)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (one pass before the final resource-drain-only runtime fix with 25 files and 587 tests; final aggregate reruns reproduced the known first Socket.IO restart timeout and 32 dependent fake-timer timeouts, while the complete database and Socket.IO/runtime suites pass separately)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `bun run format:check` (fails only on three pre-existing untracked Lighthouse/DOM artifacts)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `postgres-pro`, `security-engineer`
+  - Used: `postgres-pro`, `security-engineer` for deletion transaction shape, cascade ownership, race safety, activity semantics, runtime scheduling, redaction, and integration-test guidance
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and data-integrity specialist `postgres-pro` planned for the complete staged high-risk diff
+  - Findings: initial saturated-backlog, startup supervision, call-only protection, lock-test cleanup, and token-hash activity findings fixed; targeted re-review pending
+- Decisions (why):
+  - Selected per-lobby fenced Serializable deletion after a bounded hint scan instead of one global bulk delete because commands, presence, and cleanup must linearize on the same lobby row and sample the authoritative clock after that fence.
+  - Deleted only the lobby parent instead of ordering application-level child deletes because the existing foreign-key graph already defines ownership and atomic cascade behavior, including sessions, tickets, cards, marks, calls, winners, events, and command results.
+  - Ran startup cleanup before presence-grace recovery so expired lobbies cannot create stale process-local leases, then used recursive scheduling so slow sweeps cannot overlap or accumulate timer work.
+  - Returned only aggregate counts/status buckets and converted periodic persistence failures to a generic fatal error so cleanup is observable without exposing lobby identities or private database details.
+  - Testing decision: this is a behavior and data-lifecycle change, so test-first was required; repository, activity, worker, and startup-resource regressions each failed for the missing behavior before the minimal implementation made them pass.
+- **Learnings for future iterations:**
+  - A stale candidate query is never deletion authority; every cleanup candidate must be reloaded after acquiring the lobby fence because recent activity or protection may commit between scan and mutation.
+  - Successful joins, rejoins, connections, heartbeats, and visible presence transitions are qualifying activity, while failed authentication and replay-only paths must not refresh retention.
+  - Process-local lease recovery must follow the initial retention sweep, and periodic cleanup needs recursive single-flight scheduling plus fatal supervision rather than an overlapping `setInterval`.
+- Known issues / follow-ups:
+  - Root `bun run format:check` remains blocked by unrelated untracked Lighthouse/DOM artifacts; every tracked file passes Prettier.
+  - The database-enabled aggregate Vitest run retains its known cross-file Socket.IO restart/fake-timer cascade; all affected database and Socket.IO/runtime tests pass in complete isolated suites.
+  - The unrelated `apps/web/next-env.d.ts` side effect and untracked browser-report artifacts remain untouched and will not be staged.
+- Next iteration start:
+  - If review passes, implement US-044 by authenticating GitHub CLI access, reviewing the exact private GroundsControl references, and adapting accessible UI foundations with browser verification.
+---
+
+Review remediation for US-043 at 2026-07-18 04:50:20 MST:
+- The initial `code-reviewer`, `qa-expert`, and `postgres-pro` pass produced five deduplicated in-scope medium findings plus one speculative index request and the expected pre-final-metadata file-list comment.
+- Added failing regressions proving startup drains a saturated bounded batch before grace recovery, the periodic worker does not start before listener supervision, and the lower-level token-hash path refreshes activity only when it reactivates a disconnected session.
+- Reused one bounded-drain helper for startup and periodic cleanup, moved worker creation until after `listen` succeeds, independently removed connections from the call-protection fixture, and awaited the raced cleanup promise in lock-test `finally` cleanup.
+- Did not add the suggested migration because the finding provided no concrete missing foreign-key index or failing operational threshold; an actual `EXPLAIN (ANALYZE, BUFFERS)` on the inflated local test database (15,737 lobbies and 35,940 presence generations accumulated across iterations) completed the unlocked hint scan in 112.737 ms, while per-lobby deletion remains bounded and fenced. Index work should follow measured US-060 performance evidence rather than expand this correctness story speculatively.
+- The `prd.json` inventory comment was not applied because Ralph requires the intended final metadata file to be listed before it is staged only after specialist review passes.
+- Post-fix checks: 131 PostgreSQL integration tests pass, 122 isolated Socket.IO/runtime tests pass, the normal root suite passes 456 tests with 134 database-backed skips, and typecheck, lint, tracked formatting, plus diff checks pass.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `postgres-pro` because the fixes touched every original specialist area.
+
+Targeted re-review outcome for US-043 at 2026-07-18 04:55:44 MST:
+- `code-reviewer` and `postgres-pro` returned empty actionable finding lists; the measured decision to defer speculative indexing did not leave a correctness or data-integrity blocker.
+- `qa-expert` identified one remaining medium test-harness issue: the deferred-listener startup test waits for `listenStarted` without a captured real-time bound and releases `releaseListen` only on the success path, so a failed assertion can leak unresolved startup work into later tests.
+- Per the one-targeted-re-review limit, US-043 remains `passes: false`; `prd.json` was not updated and no commit was created.
+- Next iteration start: capture real timer functions before fake timers, bound the `listenStarted` wait, and put listener release plus `starting` settlement/runtime close in `finally`; rerun the runtime, database, typecheck, lint, formatting, and isolated Socket.IO checks, then restart the complete staged review loop.
+
+## 2026-07-18 05:00:14 MST - US-043
+- What was implemented
+  - Resumed the completed inactive-lobby expiry story and fixed the remaining deferred-listener test-harness leak identified by the prior targeted QA review.
+  - Captured real timer functions before fake timers, bounded listener and runtime startup signals, and guaranteed listener release plus runtime settlement/close in `finally` so failed assertions cannot poison later tests.
+  - Preserved the previously staged repository cleanup, activity tracking, runtime scheduling, cascade deletion, observability, and guidance changes without expanding story scope.
+- Files changed: `AGENTS.md`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/runtime.test.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/database.integration.test.ts`, `packages/database/src/index.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-043 - Expire inactive lobbies`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/game-server/src/runtime.test.ts -t "starts periodic cleanup only after listener startup can supervise failures"` (pass; bounded regression)
+  - `bunx vitest run apps/game-server/src/runtime.test.ts` (pass; 20 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test:database` (pass; 131 PostgreSQL integration tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run apps/game-server/src/runtime.test.ts apps/game-server/src/socket-server.test.ts` (pass; 122 tests)
+  - `bun run test` (pass; 24 files passed, 1 database file skipped, 456 tests passed, and 134 database-backed tests skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun run format:check` (fails only on three pre-existing untracked Lighthouse/DOM artifacts)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `git diff --check && git diff --cached --check` (pass)
+- Implementation agents:
+  - Recommended: `postgres-pro`, `security-engineer`
+  - Used: no additional agents; both recommended specialists already advised this story, and this resumed iteration addressed one concrete prior-review test-harness finding
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and data-integrity specialist `postgres-pro` planned for the revised complete staged high-risk diff
+  - Findings: pending restarted staged-diff review
+- Decisions (why):
+  - Reused the established real-time signal-wait pattern from `socket-server.test.ts` because fake timers cannot bound a stalled deferred promise reliably.
+  - Put both deferred release and runtime settlement/close in `finally` because cleanup must run even when an intermediate timer or call-count assertion fails.
+  - Did not alter production code because the prior review found only a test-harness leak and both production-focused reviewers had no remaining actionable findings.
+- **Learnings for future iterations:**
+  - Deferred startup tests under fake timers must use captured real timers for timeout bounds and settle every started promise/resource in `finally`.
+  - The existing Codebase Patterns section already records this reusable fake-timer cleanup rule, so no duplicate AGENTS guidance was needed.
+- Known issues / follow-ups:
+  - Root `bun run format:check` remains blocked by unrelated untracked Lighthouse/DOM artifacts; every tracked file passes Prettier.
+  - The unrelated `apps/web/next-env.d.ts` side effect and untracked browser-report artifacts remain untouched and will not be staged.
+- Next iteration start:
+  - If the restarted specialist review passes, mark US-043 passing and commit; otherwise remediate the merged blocking findings within the one-re-review limit.
+---
+
+Review remediation for US-043 at 2026-07-18 05:08:54 MST:
+- The restarted initial `code-reviewer`, `qa-expert`, and `postgres-pro` pass produced three deduplicated in-scope medium findings: one blocked-worker test cleanup leak, missing runtime-level cleanup-failure supervision coverage, and fresh joins refreshing inactivity from pre-fence request time.
+- Wrapped the blocked cleanup worker test in `finally`, released its deferred work unconditionally, and bounded worker close with the captured-real-timer helper.
+- Added runtime-level coverage proving a periodic cleanup persistence failure terminates and drains the server, subscription, cleanup worker, and database without exposing persistence detail or scheduling another sweep.
+- Added a PostgreSQL contention regression that advances the lifecycle clock while a fresh join waits for the lobby fence, then sampled lifecycle time immediately after that fence and used it for successful join activity while retaining `issuedAt` for immutable credential/entry metadata.
+- Testing decision:
+  - Change type: bug fix and test-reliability remediation.
+  - Test-first required: yes for the fresh-join activity bug; the runtime supervision test characterizes already-correct wiring, and the blocked-worker change repairs the test harness itself.
+  - Red: `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "samples fresh join activity after acquiring the lobby fence"` failed as expected because `last_activity_at` remained the pre-fence `issuedAt`.
+  - Green: the focused database regression passed after lock-time sampling; the complete database suite passed 132 tests, the complete runtime suite passed 21 tests, and the isolated Socket.IO/runtime suites passed 123 tests.
+- Post-fix checks: `bun run test` passed 457 tests with 135 database-backed skips; `bun run typecheck`, `bun run lint`, tracked Prettier, and diff checks pass.
+- Targeted re-review: pending `qa-expert` for the two test/supervision findings and `postgres-pro` for lock-time activity sampling.
+
+Targeted re-review outcome for US-043 at 2026-07-18 05:11:14 MST:
+- `qa-expert` returned an empty actionable finding list and confirmed the blocked-worker and runtime cleanup-failure supervision remediations leave no residual risk in scope.
+- `postgres-pro` returned an empty actionable finding list and confirmed each retry resamples lifecycle time after the lobby fence, replay/failure paths do not refresh activity, `GREATEST` remains monotonic, and the contention test safely drains blocked work.
+- No in-scope critical, high, or medium findings remain; US-043 can be marked passing and committed after the final staged consistency check.

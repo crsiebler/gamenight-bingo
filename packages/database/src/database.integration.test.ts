@@ -453,6 +453,36 @@ describeDatabase("PostgreSQL durable game state", () => {
     }
   }
 
+  async function setLobbyInactivity(
+    state: DurableLobbyState,
+    status: "WAITING" | "ACTIVE" | "COMPLETED" | "ABANDONED",
+    lastActivityAt: Date,
+  ): Promise<void> {
+    await pool.query(
+      `UPDATE lobbies
+          SET status = $1,
+              created_at = $2,
+              last_activity_at = $2
+        WHERE id = $3`,
+      [status, lastActivityAt, state.lobby.id],
+    );
+  }
+
+  async function drainInactiveLobbies(
+    connection: Awaited<ReturnType<typeof connectDatabase>>,
+  ): Promise<void> {
+    while (
+      (
+        await connection.lobbyStates.expireInactiveLobbies({
+          inactivityTtlSeconds: 1_800,
+          maximum: 100,
+        })
+      ).limitReached
+    ) {
+      // Drain prior interrupted test data so aggregate cleanup counts remain deterministic.
+    }
+  }
+
   async function waitForBlockedCommandFences(
     expectedCount: number,
     timeoutMs = 5_000,
@@ -599,6 +629,352 @@ describeDatabase("PostgreSQL durable game state", () => {
 
     expect(restored).toEqual(expected);
   });
+
+  test("expires every eligible lobby at the inactivity boundary and protects active gameplay", async () => {
+    const lastActivityAt = new Date("2000-01-01T00:00:00.000Z");
+    const now = new Date("2000-01-01T00:30:00.000Z");
+    const connection = await connectWithLifecycleClock(() => now);
+    await drainInactiveLobbies(connection);
+    const waiting = createLobbyState();
+    const completed = createLobbyState();
+    const abandoned = createLobbyState();
+    const abandonedActive = createLobbyState();
+    const activeWithCalls = createLobbyState();
+    const activeWithConnections = createLobbyState();
+    const recent = createLobbyState();
+
+    for (const state of [
+      waiting,
+      completed,
+      abandoned,
+      abandonedActive,
+      activeWithCalls,
+      activeWithConnections,
+      recent,
+    ]) {
+      await createPersistedLobby(connection, state);
+    }
+    await setLobbyInactivity(waiting, "WAITING", lastActivityAt);
+    await setLobbyInactivity(completed, "COMPLETED", lastActivityAt);
+    await setLobbyInactivity(abandoned, "ABANDONED", lastActivityAt);
+    await setLobbyInactivity(abandonedActive, "ACTIVE", lastActivityAt);
+    await setLobbyInactivity(activeWithCalls, "ACTIVE", lastActivityAt);
+    await setLobbyInactivity(activeWithConnections, "ACTIVE", lastActivityAt);
+    await setLobbyInactivity(recent, "WAITING", new Date(lastActivityAt.getTime() + 1));
+    await pool.query(`DELETE FROM rounds WHERE lobby_id = $1`, [abandonedActive.lobby.id]);
+    await pool.query(
+      `UPDATE presence_generations
+          SET status = 'ABSENT',
+              connection_count = 0,
+              absent_since = changed_at
+        WHERE lobby_id = $1
+          AND ended_at IS NULL`,
+      [abandonedActive.lobby.id],
+    );
+    await pool.query(
+      `UPDATE presence_generations
+          SET status = 'ABSENT',
+              connection_count = 0,
+              absent_since = changed_at
+        WHERE lobby_id = $1
+          AND ended_at IS NULL`,
+      [activeWithCalls.lobby.id],
+    );
+    await pool.query(`DELETE FROM rounds WHERE lobby_id = $1`, [activeWithConnections.lobby.id]);
+
+    await expect(
+      connection.lobbyStates.expireInactiveLobbies({
+        inactivityTtlSeconds: 1_800,
+        maximum: 100,
+      }),
+    ).resolves.toEqual({
+      examinedCount: 4,
+      deletedCount: 4,
+      skippedCount: 0,
+      deletedByStatus: {
+        waiting: 1,
+        active: 1,
+        completed: 1,
+        abandoned: 1,
+      },
+      limitReached: false,
+    });
+    for (const state of [waiting, completed, abandoned, abandonedActive]) {
+      await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toBeNull();
+    }
+    for (const state of [activeWithCalls, activeWithConnections, recent]) {
+      await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.not.toBeNull();
+    }
+  });
+
+  test("treats join, rejoin, connection, and heartbeat as qualifying lobby activity", async () => {
+    const lastActivityAt = new Date("1997-01-01T00:00:00.000Z");
+    const now = new Date("1997-01-01T00:30:00.000Z");
+    const connection = await connectWithLifecycleClock(() => now);
+    const joinedLobby = createLobbyState();
+    const rejoinedLobby = createLobbyState();
+    const connectedLobby = createLobbyState();
+    const heartbeatLobby = createLobbyState();
+    await createPersistedLobby(connection, joinedLobby);
+    await createPersistedLobby(connection, rejoinedLobby);
+    await createPersistedLobby(connection, connectedLobby);
+    await createPersistedLobby(connection, heartbeatLobby);
+    await setLobbyInactivity(joinedLobby, "WAITING", lastActivityAt);
+    await setLobbyInactivity(rejoinedLobby, "WAITING", lastActivityAt);
+    await setLobbyInactivity(connectedLobby, "WAITING", lastActivityAt);
+    await setLobbyInactivity(heartbeatLobby, "WAITING", lastActivityAt);
+
+    await expect(
+      connection.lobbyStates.joinLobbyWithSession({
+        lobbyId: joinedLobby.lobby.id,
+        lobbyCode: joinedLobby.lobby.code,
+        participantId: `participant-activity-${randomUUID()}`,
+        sessionId: `session-activity-${randomUUID()}`,
+        commandId: `join-activity-${randomUUID()}`,
+        username: `Activity Player ${randomUUID()}`,
+        tokenHash: new Uint8Array(randomBytes(32)),
+        issuedAt: now,
+        maxPlayersPerLobby: 25,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      connection.lobbyStates.rejoinLobbyWithSession({
+        lobbyId: rejoinedLobby.lobby.id,
+        tokenHash: rejoinedLobby.sessions[0]!.tokenHash,
+        commandId: `rejoin-activity-${randomUUID()}`,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      connection.lobbyStates.registerRealtimeConnection({
+        lobbyId: connectedLobby.lobby.id,
+        participantId: connectedLobby.participants[0]!.id,
+        participantSessionId: connectedLobby.sessions[0]!.id,
+      }),
+    ).resolves.toBe(1);
+    await expect(
+      connection.lobbyStates.recordRealtimeHeartbeat({
+        lobbyId: heartbeatLobby.lobby.id,
+        participantId: heartbeatLobby.participants[0]!.id,
+        participantSessionId: heartbeatLobby.sessions[0]!.id,
+      }),
+    ).resolves.toBe(true);
+
+    await expect(
+      connection.lobbyStates.expireInactiveLobbies({
+        inactivityTtlSeconds: 1_800,
+        maximum: 100,
+      }),
+    ).resolves.toMatchObject({ examinedCount: 0, deletedCount: 0 });
+    await expect(connection.lobbyStates.findById(joinedLobby.lobby.id)).resolves.toMatchObject({
+      lobby: { lastActivityAt: now },
+    });
+    await expect(connection.lobbyStates.findById(rejoinedLobby.lobby.id)).resolves.toMatchObject({
+      lobby: { lastActivityAt: now },
+    });
+    await expect(connection.lobbyStates.findById(connectedLobby.lobby.id)).resolves.toMatchObject({
+      lobby: { lastActivityAt: now },
+    });
+    await expect(connection.lobbyStates.findById(heartbeatLobby.lobby.id)).resolves.toMatchObject({
+      lobby: { lastActivityAt: now },
+    });
+  });
+
+  test("samples fresh join activity after acquiring the lobby fence", async () => {
+    const requestedAt = new Date("1997-01-01T00:29:59.000Z");
+    let now = requestedAt;
+    const committedAt = new Date("1997-01-01T00:30:01.000Z");
+    const connection = await connectWithLifecycleClock(() => now);
+    const state = createLobbyState();
+    await createPersistedLobby(connection, state);
+    await setLobbyInactivity(state, "WAITING", new Date("1997-01-01T00:00:00.000Z"));
+    const blocker = await pool.connect();
+    let joining: ReturnType<typeof connection.lobbyStates.joinLobbyWithSession> | undefined;
+
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query(
+        `UPDATE lobbies SET last_event_sequence = last_event_sequence WHERE id = $1`,
+        [state.lobby.id],
+      );
+      joining = connection.lobbyStates.joinLobbyWithSession({
+        lobbyId: state.lobby.id,
+        lobbyCode: state.lobby.code,
+        participantId: `participant-fenced-activity-${randomUUID()}`,
+        sessionId: `session-fenced-activity-${randomUUID()}`,
+        commandId: `join-fenced-activity-${randomUUID()}`,
+        username: `Fenced Activity ${randomUUID()}`,
+        tokenHash: new Uint8Array(randomBytes(32)),
+        issuedAt: requestedAt,
+        maxPlayersPerLobby: 25,
+      });
+      await waitForBlockedCommandFence();
+      now = committedAt;
+      await blocker.query("COMMIT");
+    } finally {
+      await blocker.query("ROLLBACK");
+      blocker.release();
+      if (joining !== undefined) await Promise.allSettled([joining]);
+    }
+
+    await expect(joining).resolves.toMatchObject({ ok: true });
+    await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toMatchObject({
+      lobby: { lastActivityAt: committedAt },
+    });
+  });
+
+  test("cascades inactive lobby data and makes repeated cleanup a terminal no-op", async () => {
+    const lastActivityAt = new Date("1999-01-01T00:00:00.000Z");
+    const now = new Date("1999-01-01T00:30:00.000Z");
+    const connection = await connectWithLifecycleClock(() => now);
+    const state = createLobbyState();
+    const ticketHash = new Uint8Array(randomBytes(32));
+    await drainInactiveLobbies(connection);
+    await createPersistedLobby(connection, state);
+    await setLobbyInactivity(state, "COMPLETED", lastActivityAt);
+    await pool.query(
+      `INSERT INTO realtime_tickets (
+         token_hash, lobby_id, participant_id, participant_session_id, issued_at, expires_at
+       ) VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        Buffer.from(ticketHash),
+        state.lobby.id,
+        state.participants[0]!.id,
+        state.sessions[0]!.id,
+        lastActivityAt,
+        new Date(now.getTime() + 60_000),
+      ],
+    );
+
+    const first = await connection.lobbyStates.expireInactiveLobbies({
+      inactivityTtlSeconds: 1_800,
+      maximum: 100,
+    });
+    const second = await connection.lobbyStates.expireInactiveLobbies({
+      inactivityTtlSeconds: 1_800,
+      maximum: 100,
+    });
+    const ownedRows = await pool.query<{ table_name: string; count: number }>(
+      `SELECT 'lobbies' AS table_name, COUNT(*)::int AS count FROM lobbies WHERE id = $1
+       UNION ALL SELECT 'participants', COUNT(*)::int FROM participants WHERE lobby_id = $1
+       UNION ALL SELECT 'participant_sessions', COUNT(*)::int FROM participant_sessions WHERE lobby_id = $1
+       UNION ALL SELECT 'realtime_tickets', COUNT(*)::int FROM realtime_tickets WHERE lobby_id = $1
+       UNION ALL SELECT 'presence_generations', COUNT(*)::int FROM presence_generations WHERE lobby_id = $1
+       UNION ALL SELECT 'rounds', COUNT(*)::int FROM rounds WHERE lobby_id = $1
+       UNION ALL SELECT 'draw_positions', COUNT(*)::int FROM draw_positions WHERE round_id = $2
+       UNION ALL SELECT 'cards', COUNT(*)::int FROM cards WHERE lobby_id = $1
+       UNION ALL SELECT 'calls', COUNT(*)::int FROM calls WHERE round_id = $2
+       UNION ALL SELECT 'marks', COUNT(*)::int FROM marks WHERE round_id = $2
+       UNION ALL SELECT 'co_winners', COUNT(*)::int FROM co_winners WHERE lobby_id = $1
+       UNION ALL SELECT 'active_lobby_events', COUNT(*)::int FROM active_lobby_events WHERE lobby_id = $1
+       UNION ALL SELECT 'command_results', COUNT(*)::int FROM command_results WHERE lobby_id = $1`,
+      [state.lobby.id, state.round!.id],
+    );
+
+    expect(first).toEqual({
+      examinedCount: 1,
+      deletedCount: 1,
+      skippedCount: 0,
+      deletedByStatus: { waiting: 0, active: 0, completed: 1, abandoned: 0 },
+      limitReached: false,
+    });
+    expect(second).toEqual({
+      examinedCount: 0,
+      deletedCount: 0,
+      skippedCount: 0,
+      deletedByStatus: { waiting: 0, active: 0, completed: 0, abandoned: 0 },
+      limitReached: false,
+    });
+    expect(ownedRows.rows).toSatisfy((rows: { count: number }[]) =>
+      rows.every(({ count }) => count === 0),
+    );
+    await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toBeNull();
+    await expect(
+      connection.lobbyStates.resolveParticipantSessionByTokenHash({
+        lobbyId: state.lobby.id,
+        tokenHash: state.sessions[0]!.tokenHash,
+      }),
+    ).resolves.toBeNull();
+    await expect(connection.lobbyStates.consumeRealtimeTicket({ ticketHash })).resolves.toBeNull();
+  });
+
+  test("refreshes inactivity when token-hash rejoin activates a disconnected session", async () => {
+    let now = new Date("1996-01-01T00:00:00.000Z");
+    const connection = await connectWithLifecycleClock(() => now);
+    await drainInactiveLobbies(connection);
+    const state = createLobbyState();
+    await createPersistedLobby(connection, state);
+    await pool.query(`UPDATE lobbies SET status = 'WAITING' WHERE id = $1`, [state.lobby.id]);
+    await expect(
+      connection.lobbyStates.markParticipantSessionDisconnected({
+        lobbyId: state.lobby.id,
+        sessionId: state.sessions[0]!.id,
+        reconnectWindowSeconds: 120,
+      }),
+    ).resolves.toMatchObject({ status: "disconnected" });
+    await setLobbyInactivity(state, "WAITING", new Date("1995-12-31T23:30:00.000Z"));
+    now = new Date("1996-01-01T00:01:00.000Z");
+
+    await expect(
+      connection.lobbyStates.rejoinParticipantSessionByTokenHash({
+        lobbyId: state.lobby.id,
+        tokenHash: state.sessions[0]!.tokenHash,
+      }),
+    ).resolves.toMatchObject({ status: "active" });
+    await expect(
+      connection.lobbyStates.expireInactiveLobbies({
+        inactivityTtlSeconds: 1_800,
+        maximum: 100,
+      }),
+    ).resolves.toMatchObject({ examinedCount: 0, deletedCount: 0 });
+    await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toMatchObject({
+      lobby: { lastActivityAt: now },
+    });
+  });
+
+  test("retries cleanup behind qualifying activity and preserves the refreshed lobby", async () => {
+    const lastActivityAt = new Date("1998-01-01T00:00:00.000Z");
+    const now = new Date("1998-01-01T00:30:00.000Z");
+    const retryEvents: TransactionRetryEvent[] = [];
+    const connection = await connectDatabase(testDatabaseUrl!, {
+      lifecycleClock: () => now,
+      transactionRetry: { observer: (event) => retryEvents.push(event) },
+    });
+    connections.push(connection);
+    const state = createLobbyState();
+    await drainInactiveLobbies(connection);
+    retryEvents.length = 0;
+    await createPersistedLobby(connection, state);
+    await setLobbyInactivity(state, "WAITING", lastActivityAt);
+    const blocker = await pool.connect();
+    let cleanup: ReturnType<typeof connection.lobbyStates.expireInactiveLobbies> | undefined;
+
+    try {
+      await blocker.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+      await blocker.query(`UPDATE lobbies SET last_activity_at = last_activity_at WHERE id = $1`, [
+        state.lobby.id,
+      ]);
+      cleanup = connection.lobbyStates.expireInactiveLobbies({
+        inactivityTtlSeconds: 1_800,
+        maximum: 100,
+      });
+      await waitForBlockedCommandFence();
+      await blocker.query(`UPDATE lobbies SET last_activity_at = $1 WHERE id = $2`, [
+        now,
+        state.lobby.id,
+      ]);
+      await blocker.query("COMMIT");
+    } finally {
+      await blocker.query("ROLLBACK");
+      blocker.release();
+      if (cleanup !== undefined) await Promise.allSettled([cleanup]);
+    }
+
+    await expect(cleanup).resolves.toMatchObject({ deletedCount: 0, skippedCount: 1 });
+    expect(retryEvents.some((event) => event.kind === "retry")).toBe(true);
+    await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toMatchObject({
+      lobby: { lastActivityAt: now },
+    });
+  }, 15_000);
 
   test("enforces aggregate scoped uniqueness", async () => {
     const connection = await connect();
