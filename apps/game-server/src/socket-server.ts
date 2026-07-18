@@ -24,6 +24,8 @@ import {
 } from "@gamenight-bingo/contracts";
 import { Server } from "socket.io";
 
+import type { AutomaticCallExecutionResult, AutomaticCallLease } from "@gamenight-bingo/database";
+
 import { consumeRealtimeTicketCredential, type RealtimeTicketConsumer } from "./realtime-ticket.js";
 
 export interface AuthenticatedRealtimeIdentity {
@@ -81,11 +83,17 @@ export interface GameServerOptions {
     ): Promise<RealtimePresenceGraceExpiryResult>;
   };
   readonly initialPresenceGracePeriods?: readonly RealtimePresenceGracePeriod[];
+  readonly automaticCallLifecycle: {
+    findAutomaticCallLeases(): Promise<readonly AutomaticCallLease[]>;
+    findAutomaticCallLease(lobbyId: string): Promise<AutomaticCallLease | null>;
+    executeAutomaticCall(lease: AutomaticCallLease): Promise<AutomaticCallExecutionResult>;
+  };
   readonly limits?: {
     readonly connectionsPerMinute?: number;
     readonly commandsPerMinute?: number;
     readonly maximumConnections?: number;
     readonly connectionsPerSession?: number;
+    readonly maximumQueuedAutomaticCalls?: number;
   };
 }
 
@@ -131,6 +139,8 @@ interface SocketData {
 
 const MAXIMUM_PENDING_SYNCHRONIZATION_EVENTS = 256;
 const MAXIMUM_CONCURRENT_PRESENCE_GRACE_EXPIRATIONS = 8;
+const MAXIMUM_CONCURRENT_AUTOMATIC_CALLS = 8;
+const DEFAULT_MAXIMUM_QUEUED_AUTOMATIC_CALLS = 2_500;
 
 const errorMessages = {
   INVALID_PAYLOAD: "The request payload is invalid.",
@@ -264,6 +274,8 @@ export function createGameServer(options: GameServerOptions): GameServer {
   const commandLimit = options.limits?.commandsPerMinute ?? 120;
   const maximumConnections = options.limits?.maximumConnections ?? 10_000;
   const connectionsPerSession = options.limits?.connectionsPerSession ?? 8;
+  const maximumQueuedAutomaticCalls =
+    options.limits?.maximumQueuedAutomaticCalls ?? DEFAULT_MAXIMUM_QUEUED_AUTOMATIC_CALLS;
   if (!Number.isSafeInteger(connectionLimit) || connectionLimit < 1) {
     throw new RangeError("The connection rate limit must be a positive integer.");
   }
@@ -275,6 +287,9 @@ export function createGameServer(options: GameServerOptions): GameServer {
   }
   if (!Number.isSafeInteger(connectionsPerSession) || connectionsPerSession < 1) {
     throw new RangeError("The per-session connection limit must be a positive integer.");
+  }
+  if (!Number.isSafeInteger(maximumQueuedAutomaticCalls) || maximumQueuedAutomaticCalls < 1) {
+    throw new RangeError("The automatic call queue limit must be a positive integer.");
   }
   const connectionRateLimiter = new BoundedFixedWindowRateLimiter(10_000);
   const authenticationRateLimiter = new BoundedFixedWindowRateLimiter(10_000);
@@ -308,11 +323,23 @@ export function createGameServer(options: GameServerOptions): GameServer {
       callback(null, accepted);
     },
   });
-  const pendingPresenceTasks = new Set<Promise<void>>();
+  const pendingAuthorityTasks = new Set<Promise<void>>();
   const presenceGraceTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const queuedPresenceGraceExpirations: RealtimePresenceGracePeriod[] = [];
+  const automaticCallTimers = new Map<
+    string,
+    { readonly lease: AutomaticCallLease; readonly timer: ReturnType<typeof setTimeout> }
+  >();
+  const queuedAutomaticCalls = new Map<string, AutomaticCallLease>();
+  const activeAutomaticCallLeases = new Map<string, AutomaticCallLease>();
+  const automaticCallReconciliations = new Map<string, object>();
   let activePresenceGraceExpirations = 0;
+  let activeAutomaticCalls = 0;
   let presenceGraceExpiryFailed = false;
+  let automaticCallFailed = false;
+  let authorityFailed = false;
+  let automaticCallRecoveryInProgress = false;
+  const automaticCallRecoveryDirtyLobbies = new Set<string>();
   let fatalPresenceClose: Promise<void> | null = null;
   let closed = false;
   let failureReported = false;
@@ -321,41 +348,55 @@ export function createGameServer(options: GameServerOptions): GameServer {
     rejectFailure = reject;
   });
   void failure.catch(() => {});
-  const stopPresenceGraceWork = () => {
+  const stopAuthorityWork = () => {
     for (const timer of presenceGraceTimers.values()) clearTimeout(timer);
     presenceGraceTimers.clear();
     queuedPresenceGraceExpirations.length = 0;
+    for (const { timer } of automaticCallTimers.values()) clearTimeout(timer);
+    automaticCallTimers.clear();
+    queuedAutomaticCalls.clear();
+    automaticCallReconciliations.clear();
   };
-  const trackPresenceTask = (task: Promise<void>) => {
+  const reportAuthorityFailure = () => {
+    authorityFailed = true;
+    stopAuthorityWork();
+    if (!failureReported) {
+      failureReported = true;
+      rejectFailure(new Error("Game server authority failed."));
+    }
+    fatalPresenceClose ??= new Promise<void>((resolve) => io.close(() => resolve()));
+  };
+  const trackAuthorityTask = (task: Promise<void>) => {
     const observed = task.catch(() => {
-      if (!failureReported) {
-        failureReported = true;
-        stopPresenceGraceWork();
-        rejectFailure(new Error("Game server authority failed."));
-      }
-      fatalPresenceClose ??= new Promise<void>((resolve) => io.close(() => resolve()));
+      reportAuthorityFailure();
     });
-    pendingPresenceTasks.add(observed);
-    void observed.finally(() => pendingPresenceTasks.delete(observed));
+    pendingAuthorityTasks.add(observed);
+    void observed.finally(() => pendingAuthorityTasks.delete(observed));
   };
   const drainPresenceGraceExpirations = () => {
     while (
       !closed &&
+      !authorityFailed &&
       !presenceGraceExpiryFailed &&
       activePresenceGraceExpirations < MAXIMUM_CONCURRENT_PRESENCE_GRACE_EXPIRATIONS
     ) {
       const grace = queuedPresenceGraceExpirations.shift();
       if (grace === undefined) return;
       activePresenceGraceExpirations += 1;
-      trackPresenceTask(
+      trackAuthorityTask(
         options.presenceLifecycle
           .expireGracePeriod(grace)
+          .catch((error: unknown) => {
+            presenceGraceExpiryFailed = true;
+            reportAuthorityFailure();
+            throw error;
+          })
           .then((result) => {
             if (result === "too-early" && !closed) schedulePresenceGrace(grace);
           })
           .catch((error: unknown) => {
             presenceGraceExpiryFailed = true;
-            stopPresenceGraceWork();
+            reportAuthorityFailure();
             throw error;
           })
           .finally(() => {
@@ -366,13 +407,13 @@ export function createGameServer(options: GameServerOptions): GameServer {
     }
   };
   const schedulePresenceGrace = (grace: RealtimePresenceGracePeriod) => {
-    if (closed) return;
+    if (closed || authorityFailed) return;
     if (
       !Number.isSafeInteger(grace.presenceGeneration) ||
       grace.presenceGeneration < 1 ||
       !Number.isFinite(grace.graceEndsAt.getTime())
     ) {
-      trackPresenceTask(Promise.reject(new Error("Invalid persisted presence grace period.")));
+      trackAuthorityTask(Promise.reject(new Error("Invalid persisted presence grace period.")));
       return;
     }
     const key = JSON.stringify([grace.lobbyId, grace.participantId, grace.presenceGeneration]);
@@ -389,6 +430,143 @@ export function createGameServer(options: GameServerOptions): GameServer {
     presenceGraceTimers.set(key, timer);
   };
   options.initialPresenceGracePeriods?.forEach(schedulePresenceGrace);
+
+  const automaticCallKey = (lease: AutomaticCallLease) =>
+    JSON.stringify([lease.roundId, lease.deadline.toISOString()]);
+  const clearAutomaticCall = (lobbyId: string) => {
+    const existing = automaticCallTimers.get(lobbyId);
+    if (existing !== undefined) clearTimeout(existing.timer);
+    automaticCallTimers.delete(lobbyId);
+    queuedAutomaticCalls.delete(lobbyId);
+  };
+  const drainAutomaticCalls = () => {
+    while (
+      !closed &&
+      !authorityFailed &&
+      !automaticCallFailed &&
+      activeAutomaticCalls < MAXIMUM_CONCURRENT_AUTOMATIC_CALLS
+    ) {
+      const queued = [...queuedAutomaticCalls.entries()].find(
+        ([lobbyId]) => !activeAutomaticCallLeases.has(lobbyId),
+      );
+      if (queued === undefined) return;
+      const [lobbyId, lease] = queued;
+      queuedAutomaticCalls.delete(lobbyId);
+      activeAutomaticCallLeases.set(lobbyId, lease);
+      activeAutomaticCalls += 1;
+      trackAuthorityTask(
+        options.automaticCallLifecycle
+          .executeAutomaticCall(lease)
+          .catch((error: unknown) => {
+            automaticCallFailed = true;
+            reportAuthorityFailure();
+            throw error;
+          })
+          .then(async (result) => {
+            if (closed || authorityFailed) return;
+            if (activeAutomaticCallLeases.get(lobbyId) === lease) {
+              activeAutomaticCallLeases.delete(lobbyId);
+            }
+            if (result === "too-early") {
+              await reconcileAutomaticCall(lease.lobbyId);
+            } else if (result === "called" || result === "stale") {
+              await reconcileAutomaticCall(lease.lobbyId);
+            }
+          })
+          .catch((error: unknown) => {
+            automaticCallFailed = true;
+            reportAuthorityFailure();
+            throw error;
+          })
+          .finally(() => {
+            if (activeAutomaticCallLeases.get(lobbyId) === lease) {
+              activeAutomaticCallLeases.delete(lobbyId);
+            }
+            activeAutomaticCalls -= 1;
+            drainAutomaticCalls();
+          }),
+      );
+    }
+  };
+  const scheduleAutomaticCall = (lease: AutomaticCallLease) => {
+    if (closed || authorityFailed) return;
+    if (
+      lease.lobbyId.length === 0 ||
+      lease.roundId.length === 0 ||
+      !Number.isFinite(lease.deadline.getTime())
+    ) {
+      trackAuthorityTask(Promise.reject(new Error("Invalid persisted automatic call lease.")));
+      return;
+    }
+    const existing = automaticCallTimers.get(lease.lobbyId);
+    if (existing !== undefined) {
+      if (automaticCallKey(existing.lease) === automaticCallKey(lease)) return;
+      clearTimeout(existing.timer);
+    }
+    const queued = queuedAutomaticCalls.get(lease.lobbyId);
+    if (queued !== undefined) {
+      if (automaticCallKey(queued) === automaticCallKey(lease)) return;
+      queuedAutomaticCalls.delete(lease.lobbyId);
+    }
+    const timer = setTimeout(
+      () => {
+        const current = automaticCallTimers.get(lease.lobbyId);
+        if (current === undefined || automaticCallKey(current.lease) !== automaticCallKey(lease)) {
+          return;
+        }
+        automaticCallTimers.delete(lease.lobbyId);
+        if (
+          !queuedAutomaticCalls.has(lease.lobbyId) &&
+          queuedAutomaticCalls.size >= maximumQueuedAutomaticCalls
+        ) {
+          trackAuthorityTask(
+            Promise.reject(new Error("The automatic call queue limit was exceeded.")),
+          );
+          return;
+        }
+        queuedAutomaticCalls.set(lease.lobbyId, lease);
+        drainAutomaticCalls();
+      },
+      Math.max(0, lease.deadline.getTime() - options.clock().getTime()),
+    );
+    automaticCallTimers.set(lease.lobbyId, { lease, timer });
+  };
+  const reconcileAutomaticCall = async (lobbyId: string): Promise<void> => {
+    if (closed || authorityFailed) return;
+    if (automaticCallRecoveryInProgress) {
+      automaticCallRecoveryDirtyLobbies.add(lobbyId);
+      return;
+    }
+    const reconciliation = {};
+    automaticCallReconciliations.set(lobbyId, reconciliation);
+    try {
+      const lease = await options.automaticCallLifecycle.findAutomaticCallLease(lobbyId);
+      if (closed || automaticCallReconciliations.get(lobbyId) !== reconciliation) return;
+      if (lease === null) clearAutomaticCall(lobbyId);
+      else scheduleAutomaticCall(lease);
+    } catch (error) {
+      reportAuthorityFailure();
+      throw error;
+    } finally {
+      if (automaticCallReconciliations.get(lobbyId) === reconciliation) {
+        automaticCallReconciliations.delete(lobbyId);
+      }
+    }
+  };
+  const recoverAutomaticCalls = async (): Promise<void> => {
+    automaticCallRecoveryInProgress = true;
+    try {
+      const leases = await options.automaticCallLifecycle.findAutomaticCallLeases();
+      for (const lease of leases) {
+        if (!automaticCallRecoveryDirtyLobbies.has(lease.lobbyId)) scheduleAutomaticCall(lease);
+      }
+    } finally {
+      automaticCallRecoveryInProgress = false;
+    }
+    const dirtyLobbies = [...automaticCallRecoveryDirtyLobbies];
+    automaticCallRecoveryDirtyLobbies.clear();
+    await Promise.all(dirtyLobbies.map(reconcileAutomaticCall));
+  };
 
   io.use(async (socket, next) => {
     let transportClosed = socket.conn.readyState !== "open";
@@ -661,6 +839,7 @@ export function createGameServer(options: GameServerOptions): GameServer {
   const emitLobbyEvent = async (lobbyId: string, event: ActiveLobbyEvent): Promise<void> => {
     const parsed = ActiveLobbyEventSchema.parse(event);
     await enqueueLobbyDelivery(lobbyId, parsed.eventSequence, async () => parsed);
+    await reconcileAutomaticCall(lobbyId);
   };
 
   const emitParticipantEvent = async (
@@ -774,13 +953,25 @@ export function createGameServer(options: GameServerOptions): GameServer {
       const presenceGeneration = await registration;
       if (presenceGeneration === null || presenceReleased) return;
       presenceReleased = true;
-      const grace = await options.presenceLifecycle.unregisterConnection(
-        identity,
-        presenceGeneration,
-      );
+      let unregisterConnection: ReturnType<
+        GameServerOptions["presenceLifecycle"]["unregisterConnection"]
+      >;
+      try {
+        unregisterConnection = options.presenceLifecycle.unregisterConnection(
+          identity,
+          presenceGeneration,
+        );
+      } catch (error) {
+        reportAuthorityFailure();
+        throw error;
+      }
+      const grace = await unregisterConnection.catch((error: unknown) => {
+        reportAuthorityFailure();
+        throw error;
+      });
       if (grace !== null) schedulePresenceGrace(grace);
     };
-    socket.once("disconnect", () => trackPresenceTask(releasePresence()));
+    socket.once("disconnect", () => trackAuthorityTask(releasePresence()));
     const initialization = (async () => {
       try {
         const presenceGeneration = await registration;
@@ -911,22 +1102,25 @@ export function createGameServer(options: GameServerOptions): GameServer {
   return {
     failure,
     async listen({ host, port }) {
+      await recoverAutomaticCalls();
+      if (closed || authorityFailed) throw new Error("Game server authority is closed.");
       const address = await listen(httpServer, host, port);
       return { host: address.address, port: address.port };
     },
     async close() {
       if (closed) return Promise.resolve();
       closed = true;
-      stopPresenceGraceWork();
+      stopAuthorityWork();
       fatalPresenceClose ??= new Promise<void>((resolve) => io.close(() => resolve()));
       await fatalPresenceClose;
-      await Promise.all([...pendingPresenceTasks]);
+      await Promise.all([...pendingAuthorityTasks]);
     },
     publishLobbyEvent(lobbyId, event) {
       return emitLobbyEvent(lobbyId, event);
     },
-    publishLobbyEventFromSource(lobbyId, sequence, loadEvent) {
-      return enqueueLobbyDelivery(lobbyId, sequence, loadEvent);
+    async publishLobbyEventFromSource(lobbyId, sequence, loadEvent) {
+      await enqueueLobbyDelivery(lobbyId, sequence, loadEvent);
+      await reconcileAutomaticCall(lobbyId);
     },
     publishParticipantEvent(participantId, event) {
       return emitParticipantEvent(participantId, event);

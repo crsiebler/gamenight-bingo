@@ -136,6 +136,15 @@ invalid counts, timestamps, or durations.
   once after rolled-back conflicts, so they must not perform external effects.
   Only a freshly committed active-lobby command returns an event to broadcast;
   replays and participant-private commits return no broadcastable event.
+- Treat automatic-call timers as bounded process-local wakeups for an exact
+  persisted lobby, round, and deadline lease. Revalidate that lease under the
+  same lobby fence used by manual calls, reconcile the next lease after every
+  committed lobby event, and fail the authority if timer persistence fails.
+  Generation-fence overlapping lease reads, permit at most one persistence
+  execution per lobby, and retain only that lobby's latest queued replacement
+  so stale reads cannot replace current work or monopolize bounded workers.
+  Latch scheduler failures as terminal before draining or reconciling more work,
+  and recheck terminal/closed state after asynchronous recovery before binding.
 - Assign active-lobby events a monotonic sequence. Clients apply sequences
   idempotently and request resynchronization when continuity is uncertain.
 - Put active-lobby sequences only on messages delivered to every authorized
@@ -270,8 +279,10 @@ invalid counts, timestamps, or durations.
   Bind disconnect cleanup to the registered presence generation, consolidate
   sibling sessions, and disconnect the participant's canonical active session
   when the final connection belongs to an older departed sibling. Treat cleanup
-  persistence failure as fatal: stop accepting work, settle runtime completion,
-  and drain the event subscription and database for supervisor restart.
+  persistence failure as fatal and latch it on the original persistence promise
+  before sibling authority continuations can run: stop accepting work, settle
+  runtime completion, and drain the event subscription and database for
+  supervisor restart.
 
 ## Test-Driven Development
 
@@ -304,7 +315,9 @@ then refactor while green.
 - Use React Testing Library for component behavior and Playwright for browser
   journeys. Frontend stories also require manual browser verification.
 - Use fake timers for reconnect, pause grace, automatic calling, co-winner, and
-  inactivity behavior; avoid wall-clock-dependent tests.
+  inactivity behavior; avoid wall-clock-dependent tests. Bound deferred
+  coordination with timer functions captured before fake timers are installed,
+  and release plus await every in-flight blocker in `finally` cleanup.
 - Run the narrow affected suite while developing and all available root checks
   before committing.
 - Pattern catalog changes must pass the complete audit that joins every source

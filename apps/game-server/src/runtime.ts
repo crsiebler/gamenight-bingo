@@ -252,15 +252,19 @@ export async function startGameServerRuntime(
       registerConnection: (identity) =>
         database.lobbyStates.registerRealtimeConnection({ ...identity }),
       recordHeartbeat: (identity) => database.lobbyStates.recordRealtimeHeartbeat({ ...identity }),
-      unregisterConnection: async (identity, presenceGeneration) => {
-        return database.lobbyStates.unregisterRealtimeConnection({
+      unregisterConnection: (identity, presenceGeneration) =>
+        database.lobbyStates.unregisterRealtimeConnection({
           ...identity,
           presenceGeneration,
           reconnectWindowSeconds: runtimeConfiguration.playerReconnectWindowSeconds,
           disconnectPauseGraceSeconds: runtimeConfiguration.disconnectPauseGraceSeconds,
-        });
-      },
+        }),
       expireGracePeriod: (grace) => database.lobbyStates.expireRealtimePresenceGrace(grace),
+    },
+    automaticCallLifecycle: {
+      findAutomaticCallLeases: () => database.roundCommands.findAutomaticCallLeases(),
+      findAutomaticCallLease: (lobbyId) => database.roundCommands.findAutomaticCallLease(lobbyId),
+      executeAutomaticCall: (lease) => database.roundCommands.executeAutomaticCall(lease),
     },
   });
 

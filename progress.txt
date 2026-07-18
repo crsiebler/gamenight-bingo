@@ -47,8 +47,10 @@ Next story: US-001
 - Socket.IO accepts only strict versioned handshake auth from the configured exact browser origin, burns any canonical ticket reaching auth even in an invalid envelope, discards handshake plaintext, stores only persistence-returned identity in `socket.data`, and revalidates that identity inside command/snapshot lobby fences and before later room delivery. Engine.IO admission and namespace authentication have separate bounded direct-peer limits; mark a rejected transport terminal before awaiting its bounded ticket burn, close it, cap authenticated sockets globally and per session, and recheck both transport closure and transport-wide rejection after ticket consumption before reserving capacity or calling `next()`. Every command attempt is charged before the one-in-flight guard, and per-lobby delivery queues preserve committed sequence order through asynchronous authorization while authorizing each unique persisted identity once per delivery. Active-lobby commits emit a transaction-scoped PostgreSQL notification; the separate game-server process serially reloads and validates each committed event before sequence-deduplicated publication, so HTTP fallback mutations reach connected clients without pre-commit effects. Validate every successful acknowledgement's command ID against the incoming mutation before any delivery; fresh committed lobby events broadcast before requester acknowledgements, replays do not rebroadcast, eventless replay tombstones can acknowledge either delivery scope, and replayed private results return only to the requesting socket. Disconnect sockets on terminal command-time identity outcomes (`UNAUTHORIZED`, inactive/deleted-lobby `NOT_FOUND`, or `LOBBY_EXPIRED`) so stale clients cannot retain rooms or capacity.
 - Active-event subscription, malformed dedicated-channel notification, durable reload, or relay failure is fatal to the game-server runtime because `LISTEN` recovery cannot prove continuity without a durable cursor. Stop Socket.IO before awaiting subscription/database drain so a stalled delivery cannot keep a continuity-lost authority serving, and settle runtime completion with a safe failure if cleanup fails. Exact direct/notification echoes are idempotent only when their canonical event identity matches bounded recent delivery history; same-sequence conflicts and unknown stale deliveries fail closed.
 - Authenticated sockets establish an actor-scoped snapshot baseline before live delivery: join authorized rooms first, buffer a bounded combined set of lobby/private events during the query, emit the snapshot, discard buffered lobby sequences at or below its baseline, then release newer events; every ready-state lobby delivery must also suppress sequences at or below that baseline even when it was queued before synchronization but began socket delivery afterward. Explicit resync uses the same boundary and restores the prior safe baseline plus buffered deliveries after transient query failure; failed initialization disconnects and executes no commands.
-- Realtime presence uses the lobby fence and durable participant connection count: the first socket ends the prior absence and creates a connected generation plus sequenced event, extra tabs update only the count, and non-final closes decrement only the count. The final close disconnects the canonical active session, fixes its rejoin deadline, invalidates tickets, and commits a configured durable grace lease; the authority restores a fail-closed bounded lease set after restart and limits concurrent expiry transactions. Generation-fenced expiry returns `expired`, `too-early`, or `stale`, retries only the persistence-authoritative early result, and commits absence before any required pause event. Reconnect or participant departure retires old leases without resuming, host absence takes pause-reason precedence, and resume stays blocked while a current non-overridden absence remains. Cleanup or timer persistence failure is fatal to the supervised authority.
+- Realtime presence uses the lobby fence and durable participant connection count: the first socket ends the prior absence and creates a connected generation plus sequenced event, extra tabs update only the count, and non-final closes decrement only the count. The final close disconnects the canonical active session, fixes its rejoin deadline, invalidates tickets, and commits a configured durable grace lease; the authority restores a fail-closed bounded lease set after restart and limits concurrent expiry transactions. Generation-fenced expiry returns `expired`, `too-early`, or `stale`, retries only the persistence-authoritative early result, and commits absence before any required pause event. Reconnect or participant departure retires old leases without resuming, host absence takes pause-reason precedence, and resume stays blocked while a current non-overridden absence remains. Cleanup or timer persistence failure is fatal to the supervised authority and must latch on the original persistence promise before sibling authority continuations can run.
 - Active-round joins persist as waiting participants with no current card or marks and retain authorized presence/snapshot visibility; their absence does not pause or block current play until replacement-round creation atomically promotes eligible participants to playing and assigns new cards.
+- Automatic-call timers are bounded process-local wakeups for exact persisted `(lobbyId, roundId, deadline)` leases; timer and host calls share the Serializable lobby fence and call-commit primitive, every committed lobby event reconciles the next lease, and restart recovery subscribes to durable events before loading leases so stale callbacks cannot repeat a draw position. Generation-fence overlapping per-lobby lease reads, run at most one persistence execution per lobby, retain only its latest queued replacement so stale completions cannot replace current work or starve other lobbies, latch scheduler failures as terminal before draining or reconciling more work, and recheck terminal/closed state after asynchronous recovery before binding.
+- Fake-timer race tests must bound deferred coordination with real timer functions captured before fake timers are installed, release every blocker in `finally`, and await in-flight harness/publication cleanup so a failed synchronization assertion cannot hang or poison later tests.
 
 Append-only iteration log
 -------------------------
@@ -3463,3 +3465,222 @@ Targeted re-review outcome for US-036 at 2026-07-17 22:15:41 MST:
 - `qa-expert` reviewed the revised complete staged diff and returned an empty actionable finding list.
 - The exact-deadline fresh join now proves prior credential rejection, waiting/no-card/no-mark state, mark rejection, departed-slot exclusion, and next-round promotion through production repository paths.
 - Code review had already returned an empty finding list. No in-scope critical, high, or medium findings remain; US-036 can be marked passing and committed after the final consistency check.
+
+## 2026-07-17 22:34:17 MST - US-037
+- What was implemented
+  - Added durable automatic-call lease discovery and exact lease execution under the same Serializable lobby fence and shared draw-commit primitive used by host `Call Next`.
+  - Added bounded process-local scheduling with restart recovery, persisted-deadline revalidation, event-driven lease reconciliation, wall-clock rollback handling, and fatal persistence-failure supervision.
+  - Cleared scheduling after the 75th call and covered manual/timer races, stale leases, blocked stages, commit notification, no-repeat behavior, restart recovery, bounded concurrency, and manual-mode inactivity.
+- Files changed: `AGENTS.md`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/runtime.test.ts`, `apps/game-server/src/socket-server.ts`, `apps/game-server/src/socket-server.test.ts`, `packages/database/src/index.ts`, `packages/database/src/round-command-executor.ts`, `packages/database/src/database.integration.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-037 - Call balls manually and automatically`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts -t "automatic call|automatic calling"` (expected fail before implementation because no automatic scheduler ran; pass after implementation with 6 focused tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t 'automatic call leases|final draw position'` (expected fail before implementation because the lease API was absent and the 75th call retained a deadline; pass after implementation)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test:database` (pass; 116 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass; typecheck, 25 files, and 544 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `backend-developer`, `test-automator`
+  - Used: `backend-developer`, `test-automator` for lease architecture, restart/race risks, and focused test strategy
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and `security-engineer` planned for the complete staged high-risk realtime/persistence diff
+  - Findings: fixed stale early-result reconciliation, per-lobby queue deduplication/bounds, live event reconciliation coverage, and persisted two-authority restart coverage before targeted re-review
+- Decisions (why):
+  - Reused `rounds.next_call_at` rather than adding schema because it already stores the authoritative deadline required for restart recovery.
+  - Put automatic execution on the round-command repository and shared the call mutation because host and timer calls must serialize on one lobby fence and cannot maintain independent draw logic.
+  - Reconcile timers from committed lobby events because Socket.IO commands, HTTP fallback commands, presence pauses, and automatic calls can all change the durable lease.
+  - Subscribe to PostgreSQL events before `listen()` loads restart leases so no commit can fall into a recovery/listener gap.
+- **Learnings for future iterations:**
+  - A process timer is only a wakeup hint; exact persisted round/deadline matching decides whether it remains current after manual calls, pause/resume, replacement rounds, or restart.
+  - Forced PostgreSQL lock ordering is required to prove timer/manual races; `Promise.all` alone does not establish transaction overlap.
+  - The final draw position must clear `nextCallAt` or an automatic authority can enter a zero-progress exhausted wakeup loop.
+- Known issues / follow-ups:
+  - The unrelated `apps/web/next-env.d.ts` side effect and untracked browser-report artifacts remain untouched and unstaged.
+- Next iteration start:
+  - If review passes, implement US-038 authoritative daub validation and persistence; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-037 at 2026-07-17 22:49:44 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass identified four deduplicated medium blockers: delayed `too-early` results could replace newer timers, queued leases were not bounded/deduplicated per lobby, live committed-event reconciliation lacked coverage, and restart recovery was not exercised through two authorities over one persisted round.
+- Added failing regressions for delayed early-result replacement and queue overflow, then changed early handling to reload the current persisted lease and replaced the array queue with a bounded per-lobby latest-lease map plus in-flight tracking.
+- Added all-interval live-event scheduling, external pause cancellation, busy-lobby latest-lease, queue-overflow, and PostgreSQL-backed two-authority restart tests.
+- Post-fix checks: the PostgreSQL-backed Socket.IO suite passes all 78 tests, the root suite passes typecheck with 25 files and 544 tests, lint and tracked formatting pass, and staged/unstaged whitespace checks pass.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` because fixes touched each original specialist area.
+
+Targeted re-review outcome for US-037 at 2026-07-17 22:52:51 MST:
+- `qa-expert` returned no actionable findings after the live-event and persisted restart coverage was added.
+- `code-reviewer` and `security-engineer` identified two remaining medium liveness root causes: overlapping per-lobby lease reads can apply out of completion order and clear/replace a newer timer, and the drain can start a second lease for a lobby that already has an in-flight execution while an older completion can delete newer active tracking.
+- These findings are in scope because they can stop automatic calling, let one lobby consume all eight workers, or delay unrelated lobbies even though the PostgreSQL fence still prevents duplicate draw positions.
+- Per the one-targeted-re-review limit, US-037 remains `passes: false`; no commit was created and `prd.json` was not updated.
+- Next iteration start: add failing reverse-completion lease-read regressions and an active-lobby supersession/fairness regression; serialize or generation-fence reconciliation per lobby, enforce one in-flight execution per lobby while retaining only its latest queued replacement, rerun all US-037 checks, and restart the complete staged review loop.
+
+## 2026-07-17 23:00:13 MST - US-037
+- What was implemented
+  - Resumed the blocked automatic-calling story and fixed both liveness defects from the prior targeted review.
+  - Generation-fenced overlapping per-lobby lease reads so a stale reverse-order completion cannot reinstall an old lease or undo a newer cancellation.
+  - Enforced one persistence execution per lobby while retaining its latest queued replacement and allowing unrelated lobbies to use the remaining bounded workers.
+  - Preserved wall-clock rollback rescheduling by releasing a lobby's active slot only after its persistence execution resolves, with identity-guarded cleanup that cannot delete newer tracking.
+- Files changed: `AGENTS.md`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/socket-server.ts`, `apps/game-server/src/socket-server.test.ts`, `packages/database/src/index.ts`, `packages/database/src/round-command-executor.ts`, `packages/database/src/database.integration.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-037 - Call balls manually and automatically`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts -t "keeps a newer lease|runs at most one automatic call"` (expected fail before implementation with 3 race/fairness failures; pass after implementation)
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts -t "reschedules an automatic call|keeps a newer lease|runs at most one automatic call"` (pass; 4 focused tests)
+  - PostgreSQL-backed `bunx vitest run apps/game-server/src/runtime.test.ts apps/game-server/src/socket-server.test.ts` (pass after review remediation; 99 tests)
+  - PostgreSQL-backed `bun run test:database` (pass; 116 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - PostgreSQL-backed `bun run test` (pass after review remediation; typecheck, 25 files, and 549 tests)
+  - PostgreSQL-backed `bun run test:e2e` (pass; 2 Playwright tests)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+- Implementation agents:
+  - Recommended: `backend-developer`, `test-automator`
+  - Used: skipped in this resumed iteration because both recommended agents already advised US-037 and the remaining work directly addressed two concrete prior-review findings
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and scheduler/persistence-triggered `security-engineer` planned for the complete restaged high-risk diff
+  - Findings: fixed nonterminal scheduler failure, live lease-read failure supervision, and subscribe-before-recovery overlap coverage; targeted re-review pending
+- Decisions (why):
+  - Used per-read identity tokens instead of serializing database reads because newer committed events can reconcile immediately while stale completions become harmless, without cross-lobby blocking.
+  - Kept the queue deduplicated by lobby and selected only runnable entries because a queued replacement for an active lobby must not block unrelated work behind it.
+  - Released active-lobby tracking after the persistence promise resolves, not before, so true executions never overlap while authoritative `too-early` results can reinstall the same deadline.
+- **Learnings for future iterations:**
+  - Async lease reads need generation fencing even when the underlying mutation is transactionally fenced; read completion order can otherwise corrupt process-local scheduling state.
+  - A global concurrency limit does not guarantee fairness: the drain must also enforce one in-flight persistence operation per lobby and skip blocked queue entries.
+  - Identity-guarded finalizers are required whenever newer work can supersede an older asynchronous operation using the same map key.
+- Known issues / follow-ups:
+  - The unrelated `apps/web/next-env.d.ts` side effect and untracked browser-report artifacts remain untouched and unstaged.
+- Next iteration start:
+  - If review passes, implement US-038 authoritative daub validation and persistence; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for resumed US-037 at 2026-07-17 23:14:22 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced three deduplicated blocking findings; security returned no additional actionable findings.
+- Added failing regressions proving queue-overflow failure previously allowed eight replacement executions and a live lease-read failure left `server.failure` pending.
+- Centralized a terminal authority-failure latch, stopped all timer/reconciliation entry points after failure, and routed live lease-read errors through supervised failure before rethrowing to the safe caller boundary.
+- Added delayed-listen recovery coverage proving a committed event delivered during startup recovery supersedes a stale recovered lease, and strengthened runtime wiring coverage to prove event subscription precedes `listen()` recovery. Retained the stable PostgreSQL two-authority no-repeat test separately.
+- Post-fix checks: focused fail-closed and recovery tests pass; PostgreSQL-backed runtime/Socket.IO suites pass 99 tests; the root suite passes typecheck with 25 files and 549 tests; lint, tracked formatting, and whitespace checks pass.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` because the substantive fixes affect every initial specialist area.
+
+Targeted re-review outcome for resumed US-037 at 2026-07-17 23:18:33 MST:
+- `code-reviewer` returned an empty actionable finding list; `qa-expert` and `security-engineer` identified three deduplicated in-scope medium blockers.
+- An automatic execution rejection sets `automaticCallFailed` before the shared terminal latch reaches `authorityFailed`, so a concurrently successful worker can begin a lease read or timer reconciliation during that gap. The next iteration must latch `reportAuthorityFailure()` directly in the execution error path and add a deterministic concurrent success/failure regression.
+- A committed event that clears blocking presence can reconcile the same persisted lease while its prior execution is active; `scheduleAutomaticCall` drops that same-key replacement, and a later `blocked` result performs no reconciliation, losing the only wakeup. The next iteration must retain the newer same-key replacement or safely reconcile `blocked` without a retry loop, with a deterministic event/blocked-completion ordering test.
+- Several new scheduler race tests await unbounded deferred signals. If a regression prevents a signal, Vitest can time out before their `finally` cleanup releases in-flight harness/publication work. The next iteration must add bounded event-driven waits that remain independent of fake timers and explicitly settle in-flight promises during cleanup.
+- Per the one-targeted-re-review limit, no further substantive fixes or specialist review are permitted in this iteration. `US-037` remains `passes: false`, `prd.json` remains unchanged, and no commit was created.
+- Next iteration start: add the three failing regressions/cleanup safeguards above, implement the two scheduler fixes, rerun all US-037 checks, and restart the complete staged review loop.
+
+## 2026-07-17 23:31:34 MST - US-037
+- What was implemented
+  - Resumed the blocked automatic-calling story and closed the remaining terminal-failure and same-key blocked-wakeup races from the prior targeted review.
+  - Latched an execution rejection directly on the persistence promise before any concurrent successful worker can reconcile, and prevented successful continuations from starting work after the authority is terminal.
+  - Retained a reconciled exact lease behind its active per-lobby execution so a presence-unblocking event is not lost when the older execution returns `blocked`, without creating a self-rescheduling blocked loop.
+  - Made deferred scheduler coordination use real bounded waits under fake timers and explicitly released and settled recovery/reconciliation work during cleanup.
+- Files changed: `AGENTS.md`, `apps/game-server/src/runtime.test.ts`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/socket-server.test.ts`, `apps/game-server/src/socket-server.ts`, `packages/database/src/database.integration.test.ts`, `packages/database/src/index.ts`, `packages/database/src/round-command-executor.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-037 - Call balls manually and automatically`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts -t "latches an automatic execution rejection|retains a same-key lease"` (expected fail before implementation: concurrent success read `lobby_beta` after rejection and retained wakeup timed out; pass after implementation with 2 tests)
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts` (pass without database; 82 passed, 3 skipped)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run apps/game-server/src/socket-server.test.ts` (pass; 85 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test:database` (pass; 116 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (initial run failed when the restart notification wait timed out and fake timers cascaded into later tests; pass after bounded cleanup hardening with typecheck, 25 files, and 551 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `git diff --check && git diff --cached --check` (pass before final staging)
+- Implementation agents:
+  - Recommended: `backend-developer`, `test-automator`
+  - Used: `backend-developer`, `test-automator` for the exact failure-latch ordering, same-key replacement state transition, deterministic regression design, and bounded cleanup guidance
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and scheduler/persistence-triggered `security-engineer` planned for the complete restaged high-risk diff
+  - Findings: pending staged-diff review
+- Decisions (why):
+  - Attached the terminal latch directly to the execution promise because a downstream catch observes rejection one promise reaction too late and permits concurrent success reconciliation in that gap.
+  - Retained the same exact lease as queued replacement instead of reconciling every `blocked` result because the committed event is the evidence that blocking state changed, while unconditional blocked retries could spin forever.
+  - Kept the Serializable database fence as the duplicate-call authority; process-local deduplication provides liveness and fairness but does not replace persisted lease validation.
+- **Learnings for future iterations:**
+  - Promise-chain placement is part of scheduler correctness: terminal state must latch on the rejected external operation before sibling success continuations run.
+  - An exact active lease can still represent newer wakeup intent when a committed event reconciles it; deduplicating it away loses liveness if the active attempt was based on older blocking state.
+  - Fake timer tests need real bounded synchronization timeouts and awaited cleanup, or one missed signal can leave patched globals and in-flight authority tasks affecting unrelated tests.
+- Known issues / follow-ups:
+  - The unrelated `apps/web/next-env.d.ts` side effect and untracked browser-report artifacts remain untouched and unstaged.
+- Next iteration start:
+  - If review passes, implement US-038 authoritative daub validation and persistence; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for resumed US-037 at 2026-07-17 23:42:21 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced four deduplicated medium blockers; security returned no separate actionable finding.
+- Added a failing concurrent grace-rejection/automatic-success regression, then latched grace persistence failure directly on the original operation so sibling automatic success cannot reconcile after authority failure.
+- Replaced remaining direct scheduler publication waits with real-time bounded waits, retained in-flight publications, and closed servers after releasing blockers so fake-timer cleanup awaits every authority task.
+- Extended PostgreSQL coverage to start manual and all five automatic configurations through production commands and verify exact lease absence/deadlines.
+- Changed the final-position regression to execute and replay the persisted automatic lease, proving the 75th call emits once, clears lease discovery, and cannot create a 76th call.
+- Post-fix checks: focused scheduler tests pass 18 tests; focused PostgreSQL lease tests pass 7 tests; the PostgreSQL-backed root suite passes typecheck with 25 files and 552 tests; the database suite passes 116 tests; lint and tracked formatting pass.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` because the fixes affect scheduler terminal behavior, deterministic test reliability, PostgreSQL lease generation, and automatic final-position integrity.
+
+Targeted re-review outcome for resumed US-037 at 2026-07-17 23:47:17 MST:
+- `code-reviewer` returned an empty actionable finding list; `qa-expert` and `security-engineer` identified two remaining in-scope medium blockers.
+- Scheduler test cleanup awaits bounded promises before `vi.useRealTimers()` in the same `finally`; if cleanup itself times out, timer restoration is skipped and later tests can inherit fake timers. The next iteration must use nested `try`/`finally` cleanup so timer restoration is unconditional while blockers, publications, and servers are still released and settled where possible.
+- Final-disconnect `unregisterConnection` persistence rejection is still observed only by the downstream `trackAuthorityTask` catch, allowing concurrent automatic success reconciliation before the authority latch. The next iteration must attach terminal failure reporting directly to that persistence rejection and add deterministic concurrent disconnect-failure/automatic-success coverage.
+- Per the one-targeted-re-review limit, no further substantive fixes or specialist review are permitted in this iteration. `US-037` remains `passes: false`, `prd.json` remains unchanged, and no commit was created.
+- Next iteration start: add the disconnect-failure race regression, latch final-disconnect persistence failure on the original operation, make fake-timer restoration unconditional in nested cleanup, rerun all US-037 checks, and restart the complete staged review loop.
+
+## 2026-07-17 23:56:39 MST - US-037
+- What was implemented
+  - Resumed the blocked automatic-calling story and closed the final two blockers from the prior targeted review.
+  - Latched final-disconnect persistence failure directly on the original `unregisterConnection` operation, including synchronous adapter failure, before a concurrent successful automatic worker can reconcile another lease.
+  - Added a deterministic disconnect-failure/automatic-success race regression and made fake-timer restoration unconditional when bounded scheduler cleanup itself fails.
+- Files changed: `AGENTS.md`, `apps/game-server/src/runtime.test.ts`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/socket-server.test.ts`, `apps/game-server/src/socket-server.ts`, `packages/database/src/database.integration.test.ts`, `packages/database/src/index.ts`, `packages/database/src/round-command-executor.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-037 - Call balls manually and automatically`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts -t "latches a final disconnect rejection"` (expected fail before implementation because a successful worker read `lobby_beta`; pass after implementation)
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts` (pass; 84 passed, 3 database-backed tests skipped)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test:database` (pass; 116 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (first attempt exceeded the 120-second command timeout; bounded retry passed with typecheck, 25 files, and 553 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `bun run format:check` (blocked only by unrelated untracked browser-report artifacts)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass; 2 Playwright tests)
+  - `bun install --frozen-lockfile` (pass; 392 installs checked with no changes)
+  - `git diff --check && git diff --cached --check` (pass before restaging)
+- Implementation agents:
+  - Recommended: `backend-developer`, `test-automator`
+  - Used: skipped because both recommended agents already advised US-037 and this resumed iteration implemented two concrete prior-review findings
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and scheduler/persistence-triggered `security-engineer` planned for the complete restaged high-risk diff
+  - Findings: pending staged-diff review
+- Decisions (why):
+  - Attached the terminal latch to the exact disconnect persistence operation rather than relying on the outer tracked task because promise reaction ordering otherwise lets a sibling success continuation run first.
+  - Used nested cleanup `try`/`finally` blocks instead of suppressing bounded cleanup failures so test failures remain visible while real timers are always restored.
+  - Kept unrelated untracked browser reports and the `apps/web/next-env.d.ts` side effect untouched and unstaged.
+- **Learnings for future iterations:**
+  - Fatal async operation handling must attach at the authority boundary that owns the original promise; observing only an enclosing async function can be one promise reaction too late.
+  - Fake-timer cleanup needs its own inner `finally` for timer restoration because even bounded cleanup can reject or time out.
+- Known issues / follow-ups:
+  - Root `bun run format:check` remains blocked by unrelated untracked Lighthouse/browser artifacts; the complete tracked tree passes Prettier.
+- Next iteration start:
+  - If review passes, implement US-038 authoritative daub validation and persistence; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for resumed US-037 at 2026-07-18 00:07:12 MST:
+- The initial `code-reviewer`, `qa-expert`, and `security-engineer` pass produced three deduplicated medium blockers: shutdown during blocked startup recovery could later bind an orphan listener, the runtime adapter added a promise-reaction hop around final-disconnect persistence, and direct manual host-only/exhaustion coverage was incomplete.
+- Added failing regressions proving blocked recovery still bound after shutdown and the runtime returned a wrapped disconnect promise, then rechecked terminal state before binding and returned the repository persistence promise directly.
+- Added PostgreSQL production-path assertions that player `Call Next` is forbidden in manual mode, host `Call Next` advances exactly once without installing a timer, and host `Call Next` after the 75th ball changes no calls, events, or command results.
+- Post-fix checks: runtime/Socket.IO suites pass 101 tests with 3 database skips; focused manual/exhaustion coverage passes all 7 configurations; the database suite passes 116 tests; the PostgreSQL-backed root suite passes typecheck with 25 files and 554 tests; lint and tracked formatting pass.
+- Targeted re-review: pending `code-reviewer`, `qa-expert`, and `security-engineer` because the fixes address each original specialist area.
+
+Targeted re-review outcome for resumed US-037 at 2026-07-18 00:07:12 MST:
+- `code-reviewer`, `qa-expert`, and `security-engineer` reviewed the revised complete staged diff and returned empty actionable finding lists.
+- The startup recovery shutdown fence, direct runtime disconnect-promise wiring, final-disconnect failure ordering, manual host-only advance, and exhausted host-call coverage are resolved.
+- Residual risk is limited to compositionally testing the full runtime disconnect race and using the shared closed/terminal bind guard for both explicit close and authority failure; no in-scope critical, high, or medium finding remains.
+- US-037 can be marked passing and committed after the final consistency check.

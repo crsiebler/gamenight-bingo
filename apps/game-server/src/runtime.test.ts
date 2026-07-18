@@ -15,7 +15,7 @@ import {
 import type { GameServer, GameServerOptions } from "./socket-server.js";
 
 describe("game-server runtime configuration", () => {
-  test("loads persisted grace leases into the authority during runtime startup", async () => {
+  test("loads grace leases and preserves the disconnect persistence promise", async () => {
     const grace = {
       lobbyId: "lobby_alpha",
       participantId: "participant_player",
@@ -24,6 +24,8 @@ describe("game-server runtime configuration", () => {
     };
     let serverOptions: GameServerOptions | undefined;
     let databaseDisconnected = false;
+    const disconnectPersistence = Promise.resolve(null);
+    const startupOrder: string[] = [];
     const eventSubscription = {
       completion: new Promise<void>(() => {}),
       close: async () => {},
@@ -31,10 +33,14 @@ describe("game-server runtime configuration", () => {
     const database = {
       lobbyStates: {
         findRealtimePresenceGracePeriods: async () => [grace],
+        unregisterRealtimeConnection: () => disconnectPersistence,
       },
       roundCommands: {},
       activeLobbyEvents: {
-        subscribe: async () => eventSubscription,
+        subscribe: async () => {
+          startupOrder.push("subscribe");
+          return eventSubscription;
+        },
       },
       disconnect: async () => {
         databaseDisconnected = true;
@@ -42,7 +48,10 @@ describe("game-server runtime configuration", () => {
     };
     const server: GameServer = {
       failure: new Promise<never>(() => {}),
-      listen: async ({ host, port }) => ({ host, port }),
+      listen: async ({ host, port }) => {
+        startupOrder.push("listen");
+        return { host, port };
+      },
       close: async () => {},
       publishLobbyEvent: async () => {},
       publishLobbyEventFromSource: async () => {},
@@ -71,6 +80,17 @@ describe("game-server runtime configuration", () => {
     );
 
     expect(serverOptions?.initialPresenceGracePeriods).toEqual([grace]);
+    expect(
+      serverOptions?.presenceLifecycle.unregisterConnection(
+        {
+          lobbyId: "lobby_alpha",
+          participantId: "participant_alpha",
+          participantSessionId: "session_alpha",
+        },
+        3,
+      ),
+    ).toBe(disconnectPersistence);
+    expect(startupOrder).toEqual(["subscribe", "listen"]);
     await running.close();
     expect(databaseDisconnected).toBe(true);
   });

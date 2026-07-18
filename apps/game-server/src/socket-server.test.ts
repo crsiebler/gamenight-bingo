@@ -22,6 +22,7 @@ import {
   createGameServer,
   type AuthenticatedRealtimeIdentity,
   type GameServer,
+  type GameServerOptions,
   type RealtimeCommandExecutionResult,
 } from "./socket-server.js";
 import { subscribeGameServerToActiveLobbyEvents } from "./runtime.js";
@@ -31,6 +32,8 @@ const NOW = "2026-07-17T20:00:00.000Z";
 const LATER = "2026-07-17T20:00:02.000Z";
 const testDatabaseUrl = process.env["TEST_DATABASE_URL"];
 const testDatabase = testDatabaseUrl === undefined ? test.skip : test;
+const realSetTimeout = globalThis.setTimeout.bind(globalThis);
+const realClearTimeout = globalThis.clearTimeout.bind(globalThis);
 
 const identities = {
   host: {
@@ -645,22 +648,27 @@ function expectNoEvent(socket: Socket, event: string): Promise<void> {
 
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((promiseResolve) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
     resolve = promiseResolve;
+    reject = promiseReject;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function waitForSignal<T>(promise: Promise<T>, label: string): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error(`Timed out waiting for ${label}.`)), 2_000);
+    const timeout = realSetTimeout(
+      () => reject(new Error(`Timed out waiting for ${label}.`)),
+      2_000,
+    );
     promise.then(
       (value) => {
-        clearTimeout(timeout);
+        realClearTimeout(timeout);
         resolve(value);
       },
       (error: unknown) => {
-        clearTimeout(timeout);
+        realClearTimeout(timeout);
         reject(error);
       },
     );
@@ -700,11 +708,24 @@ interface HarnessOptions {
     readonly presenceGeneration: number;
     readonly graceEndsAt: Date;
   }[];
+  readonly findAutomaticCallLeases?: () => Promise<
+    readonly { lobbyId: string; roundId: string; deadline: Date }[]
+  >;
+  readonly findAutomaticCallLease?: (
+    lobbyId: string,
+  ) => Promise<{ lobbyId: string; roundId: string; deadline: Date } | null>;
+  readonly executeAutomaticCall?: (lease: {
+    lobbyId: string;
+    roundId: string;
+    deadline: Date;
+  }) => Promise<"called" | "stale" | "too-early" | "blocked" | "exhausted">;
+  readonly beforeListen?: (server: GameServer) => Promise<void>;
   readonly limits?: {
     readonly connectionsPerMinute?: number;
     readonly commandsPerMinute?: number;
     readonly maximumConnections?: number;
     readonly connectionsPerSession?: number;
+    readonly maximumQueuedAutomaticCalls?: number;
   };
 }
 
@@ -725,7 +746,7 @@ async function createHarness(options: HarnessOptions = {}) {
     identity: AuthenticatedRealtimeIdentity;
     command: MutationCommand;
   }> = [];
-  const server = createGameServer({
+  const serverOptions = {
     allowedOrigin: ORIGIN,
     clock: options.clock ?? (() => new Date(NOW)),
     ...(options.initialPresenceGracePeriods === undefined
@@ -774,12 +795,21 @@ async function createHarness(options: HarnessOptions = {}) {
     presenceLifecycle: {
       registerConnection: async (identity) => options.registerPresence?.(identity) ?? 1,
       recordHeartbeat: async (identity) => options.recordHeartbeat?.(identity) ?? true,
-      unregisterConnection: async (identity, presenceGeneration) =>
-        options.unregisterPresence?.(identity, presenceGeneration) ?? null,
+      unregisterConnection: (identity, presenceGeneration) =>
+        options.unregisterPresence?.(identity, presenceGeneration) ?? Promise.resolve(null),
       expireGracePeriod: async (grace) => options.expirePresenceGrace?.(grace) ?? "stale",
     },
-  });
+    automaticCallLifecycle: {
+      findAutomaticCallLeases: async () => options.findAutomaticCallLeases?.() ?? [],
+      findAutomaticCallLease: async (lobbyId: string) =>
+        options.findAutomaticCallLease?.(lobbyId) ?? null,
+      executeAutomaticCall: (lease: { lobbyId: string; roundId: string; deadline: Date }) =>
+        options.executeAutomaticCall?.(lease) ?? Promise.resolve("stale"),
+    },
+  } as GameServerOptions;
+  const server = createGameServer(serverOptions);
   servers.push(server);
+  await options.beforeListen?.(server);
   const address = await server.listen({ host: "127.0.0.1", port: 0 });
 
   return {
@@ -839,6 +869,820 @@ async function createHarness(options: HarnessOptions = {}) {
 }
 
 describe("authenticated Socket.IO authority", () => {
+  test("recovers automatic calling and schedules each persisted deadline once", async () => {
+    const first = {
+      lobbyId: identities.host.lobbyId,
+      roundId: "round-automatic",
+      deadline: new Date(Date.parse(NOW) + 30_000),
+    };
+    const second = { ...first, deadline: new Date(Date.parse(NOW) + 60_000) };
+    const attempts: unknown[] = [];
+    let currentLease: typeof first | null = first;
+    vi.useFakeTimers({ now: new Date(NOW) });
+
+    try {
+      await createHarness({
+        clock: () => new Date(),
+        findAutomaticCallLeases: async () => [first],
+        findAutomaticCallLease: async () => currentLease,
+        executeAutomaticCall: async (lease) => {
+          attempts.push(lease);
+          currentLease = attempts.length === 1 ? second : null;
+          return "called";
+        },
+      });
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(attempts).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(attempts).toEqual([first]);
+      await vi.advanceTimersByTimeAsync(0);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(attempts).toEqual([first, second]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("reconciles a committed event delivered during startup recovery", async () => {
+    const oldLease = {
+      lobbyId: identities.host.lobbyId,
+      roundId: "round-recovery-old",
+      deadline: new Date(Date.parse(NOW) + 5_000),
+    };
+    const newLease = {
+      lobbyId: identities.host.lobbyId,
+      roundId: "round-recovery-new",
+      deadline: new Date(Date.parse(NOW) + 10_000),
+    };
+    const recoveryStarted = deferred();
+    const releaseRecovery = deferred();
+    const serverReady = deferred<GameServer>();
+    const attempts: unknown[] = [];
+    let currentLease: typeof oldLease | null = oldLease;
+    vi.useFakeTimers({ now: new Date(NOW) });
+
+    let harnessPromise: ReturnType<typeof createHarness> | undefined;
+    let publication: Promise<void> | undefined;
+    try {
+      harnessPromise = createHarness({
+        clock: () => new Date(),
+        beforeListen: async (server) => serverReady.resolve(server),
+        findAutomaticCallLeases: async () => {
+          recoveryStarted.resolve();
+          await releaseRecovery.promise;
+          return [oldLease];
+        },
+        findAutomaticCallLease: async () => currentLease,
+        executeAutomaticCall: async (lease) => {
+          attempts.push(lease);
+          currentLease = null;
+          return "exhausted";
+        },
+      });
+      await waitForSignal(recoveryStarted.promise, "automatic call recovery to start");
+      currentLease = newLease;
+      publication = (
+        await waitForSignal(serverReady.promise, "the recovering game server")
+      ).publishLobbyEvent(identities.host.lobbyId, stageEvent);
+      await vi.advanceTimersByTimeAsync(0);
+      await waitForSignal(publication, "the recovery-time event publication");
+      releaseRecovery.resolve();
+      await waitForSignal(harnessPromise, "automatic call recovery to finish");
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(attempts).toEqual([]);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(attempts).toEqual([newLease]);
+    } finally {
+      releaseRecovery.resolve();
+      try {
+        const pending: Promise<unknown>[] = [];
+        if (publication !== undefined) pending.push(publication);
+        if (harnessPromise !== undefined) pending.push(harnessPromise);
+        await waitForSignal(Promise.allSettled(pending), "recovery test cleanup");
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  });
+
+  test("does not bind after shutdown begins during automatic call recovery", async () => {
+    const recoveryStarted = deferred();
+    const releaseRecovery = deferred();
+    const serverReady = deferred<GameServer>();
+    let harnessPromise: ReturnType<typeof createHarness> | undefined;
+
+    try {
+      harnessPromise = createHarness({
+        beforeListen: async (server) => serverReady.resolve(server),
+        findAutomaticCallLeases: async () => {
+          recoveryStarted.resolve();
+          await releaseRecovery.promise;
+          return [];
+        },
+      });
+      const server = await waitForSignal(serverReady.promise, "the recovering authority");
+      await waitForSignal(recoveryStarted.promise, "the blocked automatic call recovery");
+      const closed = server.close();
+      releaseRecovery.resolve();
+
+      await waitForSignal(closed, "authority shutdown during recovery");
+      await expect(
+        waitForSignal(harnessPromise, "the cancelled automatic call recovery"),
+      ).rejects.toThrow("closed");
+    } finally {
+      releaseRecovery.resolve();
+      if (harnessPromise !== undefined) {
+        await waitForSignal(Promise.allSettled([harnessPromise]), "shutdown recovery test cleanup");
+      }
+    }
+  });
+
+  test("never schedules automatic calls when recovery finds only manual rounds", async () => {
+    const attempts: unknown[] = [];
+    vi.useFakeTimers({ now: new Date(NOW) });
+
+    try {
+      await createHarness({
+        findAutomaticCallLeases: async () => [],
+        executeAutomaticCall: async (lease) => {
+          attempts.push(lease);
+          return "called";
+        },
+      });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(attempts).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("reschedules an automatic call when persistence says its deadline is still early", async () => {
+    let now = new Date(NOW);
+    const lease = {
+      lobbyId: identities.host.lobbyId,
+      roundId: "round-automatic",
+      deadline: new Date(Date.parse(NOW) + 30_000),
+    };
+    const attempts: unknown[] = [];
+    let currentLease: typeof lease | null = lease;
+    vi.useFakeTimers({ now });
+
+    try {
+      await createHarness({
+        clock: () => now,
+        findAutomaticCallLeases: async () => [lease],
+        findAutomaticCallLease: async () => currentLease,
+        executeAutomaticCall: async (attempted) => {
+          attempts.push(attempted);
+          if (attempts.length === 1) return "too-early";
+          currentLease = null;
+          return "called";
+        },
+      });
+      now = new Date(Date.parse(NOW) + 20_000);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(attempts).toEqual([lease]);
+
+      now = lease.deadline;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(attempts).toEqual([lease, lease]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("does not let a delayed early result replace a newer persisted lease", async () => {
+    const oldLease = {
+      lobbyId: identities.host.lobbyId,
+      roundId: "round-automatic",
+      deadline: new Date(NOW),
+    };
+    const newLease = { ...oldLease, deadline: new Date(Date.parse(NOW) + 5_000) };
+    const firstResult = deferred<"too-early">();
+    const attempts: unknown[] = [];
+    let currentLease: typeof oldLease | null = oldLease;
+    vi.useFakeTimers({ now: new Date(NOW) });
+
+    let harness: Awaited<ReturnType<typeof createHarness>> | undefined;
+    let publication: Promise<void> | undefined;
+    try {
+      harness = await createHarness({
+        clock: () => new Date(),
+        findAutomaticCallLeases: async () => [oldLease],
+        findAutomaticCallLease: async () => currentLease,
+        executeAutomaticCall: async (lease) => {
+          attempts.push(lease);
+          if (lease.deadline.getTime() === oldLease.deadline.getTime()) {
+            return firstResult.promise;
+          }
+          currentLease = null;
+          return "called";
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(attempts).toEqual([oldLease]);
+
+      currentLease = newLease;
+      publication = harness.server.publishLobbyEvent(identities.host.lobbyId, stageEvent);
+      await vi.advanceTimersByTimeAsync(0);
+      await waitForSignal(publication, "the newer persisted lease publication");
+      firstResult.resolve("too-early");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(attempts).toEqual([oldLease]);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(attempts).toEqual([oldLease, newLease]);
+    } finally {
+      currentLease = null;
+      firstResult.resolve("too-early");
+      try {
+        if (publication !== undefined) {
+          await waitForSignal(Promise.allSettled([publication]), "delayed result test cleanup");
+        }
+        if (harness !== undefined) {
+          await waitForSignal(harness.server.close(), "delayed result server cleanup");
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  });
+
+  test.each(["replace", "clear"] as const)(
+    "keeps a newer lease %s when an older reconciliation finishes last",
+    async (newerAction) => {
+      const lobbyId = identities.host.lobbyId;
+      const oldLease = {
+        lobbyId,
+        roundId: "round-automatic-old",
+        deadline: new Date(NOW),
+      };
+      const newLease = {
+        lobbyId,
+        roundId: "round-automatic-new",
+        deadline: new Date(NOW),
+      };
+      const firstRead = deferred<typeof oldLease | null>();
+      const secondRead = deferred<typeof oldLease | null>();
+      const firstReadStarted = deferred();
+      const secondReadStarted = deferred();
+      const attempts: unknown[] = [];
+      let reads = 0;
+      vi.useFakeTimers({ now: new Date(NOW) });
+
+      let firstPublication: Promise<void> | undefined;
+      let secondPublication: Promise<void> | undefined;
+      try {
+        const harness = await createHarness({
+          clock: () => new Date(),
+          findAutomaticCallLeases: async () => [],
+          findAutomaticCallLease: async () => {
+            reads += 1;
+            if (reads === 1) {
+              firstReadStarted.resolve();
+              return firstRead.promise;
+            }
+            secondReadStarted.resolve();
+            return secondRead.promise;
+          },
+          executeAutomaticCall: async (lease) => {
+            attempts.push(lease);
+            return "exhausted";
+          },
+        });
+        firstPublication = harness.server.publishLobbyEvent(lobbyId, stageEvent);
+        await vi.advanceTimersByTimeAsync(0);
+        await waitForSignal(firstReadStarted.promise, "the first automatic lease read");
+        secondPublication = harness.server.publishLobbyEvent(
+          lobbyId,
+          ActiveLobbyEventSchema.parse({ ...stageEvent, eventSequence: 2 }),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        await waitForSignal(secondReadStarted.promise, "the second automatic lease read");
+
+        secondRead.resolve(newerAction === "replace" ? newLease : null);
+        await waitForSignal(secondPublication, "the newer automatic lease reconciliation");
+        firstRead.resolve(oldLease);
+        await waitForSignal(firstPublication, "the stale automatic lease reconciliation");
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(attempts).toEqual(newerAction === "replace" ? [newLease] : []);
+      } finally {
+        firstRead.resolve(null);
+        secondRead.resolve(null);
+        try {
+          const pending: Promise<unknown>[] = [];
+          if (firstPublication !== undefined) pending.push(firstPublication);
+          if (secondPublication !== undefined) pending.push(secondPublication);
+          await waitForSignal(Promise.allSettled(pending), "lease reconciliation test cleanup");
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+    },
+  );
+
+  test("runs at most one automatic call per lobby without starving another lobby", async () => {
+    const targetLobbyId = identities.host.lobbyId;
+    const otherLobbyId = identities.otherLobby.lobbyId;
+    const firstTargetLease = {
+      lobbyId: targetLobbyId,
+      roundId: "round-target-first",
+      deadline: new Date(NOW),
+    };
+    const replacementTargetLease = {
+      lobbyId: targetLobbyId,
+      roundId: "round-target-replacement",
+      deadline: new Date(NOW),
+    };
+    const otherLease = {
+      lobbyId: otherLobbyId,
+      roundId: "round-other",
+      deadline: new Date(NOW),
+    };
+    const releaseFirstTarget = deferred();
+    const firstTargetStarted = deferred();
+    const otherStarted = deferred();
+    const replacementTargetStarted = deferred();
+    const attempts: Array<{ lobbyId: string; roundId: string; deadline: Date }> = [];
+    const currentLeases = new Map<
+      string,
+      { lobbyId: string; roundId: string; deadline: Date } | null
+    >([
+      [targetLobbyId, firstTargetLease],
+      [otherLobbyId, null],
+    ]);
+    let harness: Awaited<ReturnType<typeof createHarness>> | undefined;
+    let firstPublication: Promise<void> | undefined;
+    let secondPublication: Promise<void> | undefined;
+    try {
+      harness = await createHarness({
+        clock: () => new Date(NOW),
+        findAutomaticCallLeases: async () => [firstTargetLease],
+        findAutomaticCallLease: async (lobbyId) => currentLeases.get(lobbyId) ?? null,
+        executeAutomaticCall: async (lease) => {
+          attempts.push(lease);
+          if (lease === firstTargetLease) {
+            firstTargetStarted.resolve();
+            await releaseFirstTarget.promise;
+          }
+          if (lease === otherLease) otherStarted.resolve();
+          if (lease === replacementTargetLease) replacementTargetStarted.resolve();
+          return "exhausted";
+        },
+      });
+      await waitForSignal(firstTargetStarted.promise, "the first target automatic call");
+
+      currentLeases.set(targetLobbyId, replacementTargetLease);
+      firstPublication = harness.server.publishLobbyEvent(targetLobbyId, stageEvent);
+      await waitForSignal(firstPublication, "the target replacement publication");
+      currentLeases.set(otherLobbyId, otherLease);
+      secondPublication = harness.server.publishLobbyEvent(otherLobbyId, stageEvent);
+      await waitForSignal(secondPublication, "the unrelated lobby publication");
+      await waitForSignal(otherStarted.promise, "the other lobby automatic call");
+
+      expect(attempts).toEqual([firstTargetLease, otherLease]);
+      releaseFirstTarget.resolve();
+      await waitForSignal(replacementTargetStarted.promise, "the replacement automatic call");
+      expect(attempts).toEqual([firstTargetLease, otherLease, replacementTargetLease]);
+    } finally {
+      releaseFirstTarget.resolve();
+      const pending: Promise<unknown>[] = [];
+      if (firstPublication !== undefined) pending.push(firstPublication);
+      if (secondPublication !== undefined) pending.push(secondPublication);
+      await waitForSignal(Promise.allSettled(pending), "per-lobby fairness test cleanup");
+      if (harness !== undefined) {
+        await waitForSignal(harness.server.close(), "per-lobby fairness server cleanup");
+      }
+    }
+  });
+
+  test("latches an automatic execution rejection before concurrent success reconciliation", async () => {
+    const failedLease = {
+      lobbyId: identities.host.lobbyId,
+      roundId: "round-failed",
+      deadline: new Date(NOW),
+    };
+    const successfulLease = {
+      lobbyId: identities.otherLobby.lobbyId,
+      roundId: "round-successful",
+      deadline: new Date(NOW),
+    };
+    const failedResult = deferred<"called">();
+    const successfulResult = deferred<"called">();
+    const failedStarted = deferred();
+    const successfulStarted = deferred();
+    const leaseReads: string[] = [];
+
+    try {
+      const harness = await createHarness({
+        clock: () => new Date(NOW),
+        findAutomaticCallLeases: async () => [failedLease, successfulLease],
+        findAutomaticCallLease: async (lobbyId) => {
+          leaseReads.push(lobbyId);
+          return null;
+        },
+        executeAutomaticCall: async (lease) => {
+          if (lease === failedLease) {
+            failedStarted.resolve();
+            return failedResult.promise;
+          }
+          successfulStarted.resolve();
+          return successfulResult.promise;
+        },
+      });
+      const authorityFailure = harness.server.failure.catch((error: unknown) => error);
+      await Promise.all([
+        waitForSignal(failedStarted.promise, "the failing automatic call"),
+        waitForSignal(successfulStarted.promise, "the successful automatic call"),
+      ]);
+
+      failedResult.reject(new Error("private automatic call persistence detail"));
+      successfulResult.resolve("called");
+
+      await expect(
+        waitForSignal(authorityFailure, "the terminal automatic call failure"),
+      ).resolves.toMatchObject({ message: "Game server authority failed." });
+      await waitForSignal(
+        new Promise<void>((resolve) => setImmediate(resolve)),
+        "promise reactions",
+      );
+      expect(leaseReads).toEqual([]);
+    } finally {
+      failedResult.resolve("called");
+      successfulResult.resolve("called");
+    }
+  });
+
+  test("retains a same-key lease reconciled while active after execution returns blocked", async () => {
+    const lease = {
+      lobbyId: identities.host.lobbyId,
+      roundId: "round-presence-blocked",
+      deadline: new Date(NOW),
+    };
+    const firstResult = deferred<"blocked">();
+    const firstStarted = deferred();
+    const leaseRead = deferred();
+    const secondStarted = deferred();
+    const attempts: Array<{ lobbyId: string; roundId: string; deadline: Date }> = [];
+    let currentLease: typeof lease | null = lease;
+    let publication: Promise<void> | undefined;
+
+    try {
+      const harness = await createHarness({
+        clock: () => new Date(NOW),
+        findAutomaticCallLeases: async () => [lease],
+        findAutomaticCallLease: async () => {
+          leaseRead.resolve();
+          return currentLease;
+        },
+        executeAutomaticCall: async (attempted) => {
+          attempts.push(attempted);
+          if (attempts.length === 1) {
+            firstStarted.resolve();
+            return firstResult.promise;
+          }
+          currentLease = null;
+          secondStarted.resolve();
+          return "exhausted";
+        },
+      });
+      await waitForSignal(firstStarted.promise, "the blocked automatic call");
+
+      publication = harness.server.publishLobbyEvent(lease.lobbyId, stageEvent);
+      await waitForSignal(leaseRead.promise, "the same-key automatic lease read");
+      await waitForSignal(publication, "the same-key automatic lease reconciliation");
+      firstResult.resolve("blocked");
+
+      await waitForSignal(secondStarted.promise, "the retained automatic call");
+      expect(attempts).toEqual([lease, lease]);
+    } finally {
+      currentLease = null;
+      firstResult.resolve("blocked");
+      if (publication !== undefined) {
+        await waitForSignal(Promise.allSettled([publication]), "same-key test cleanup");
+      }
+    }
+  });
+
+  test.each([5, 10, 30, 60, 120] as const)(
+    "installs a live %i-second automatic lease from a committed lobby event",
+    async (intervalSeconds) => {
+      const lease = {
+        lobbyId: identities.host.lobbyId,
+        roundId: `round-live-${intervalSeconds}`,
+        deadline: new Date(Date.parse(NOW) + intervalSeconds * 1_000),
+      };
+      const attempts: unknown[] = [];
+      let currentLease: typeof lease | null = null;
+      vi.useFakeTimers({ now: new Date(NOW) });
+
+      let harness: Awaited<ReturnType<typeof createHarness>> | undefined;
+      let publication: Promise<void> | undefined;
+      try {
+        harness = await createHarness({
+          clock: () => new Date(),
+          findAutomaticCallLeases: async () => [],
+          findAutomaticCallLease: async () => currentLease,
+          executeAutomaticCall: async (attempted) => {
+            attempts.push(attempted);
+            currentLease = null;
+            return "called";
+          },
+        });
+        currentLease = lease;
+        publication = harness.server.publishLobbyEvent(identities.host.lobbyId, stageEvent);
+        await vi.advanceTimersByTimeAsync(0);
+        await waitForSignal(publication, `the ${intervalSeconds}-second lease publication`);
+
+        await vi.advanceTimersByTimeAsync(intervalSeconds * 1_000 - 1);
+        expect(attempts).toEqual([]);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(attempts).toEqual([lease]);
+      } finally {
+        currentLease = null;
+        try {
+          if (publication !== undefined) {
+            await waitForSignal(Promise.allSettled([publication]), "interval test cleanup");
+          }
+          if (harness !== undefined) {
+            await waitForSignal(harness.server.close(), "interval test server cleanup");
+          }
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+    },
+  );
+
+  test("cancels a live automatic lease after an externally committed pause event", async () => {
+    const lease = {
+      lobbyId: identities.host.lobbyId,
+      roundId: "round-live-cancelled",
+      deadline: new Date(Date.parse(NOW) + 30_000),
+    };
+    const attempts: unknown[] = [];
+    let currentLease: typeof lease | null = null;
+    vi.useFakeTimers({ now: new Date(NOW) });
+
+    let harness: Awaited<ReturnType<typeof createHarness>> | undefined;
+    const publications: Promise<void>[] = [];
+    try {
+      harness = await createHarness({
+        clock: () => new Date(),
+        findAutomaticCallLeases: async () => [],
+        findAutomaticCallLease: async () => currentLease,
+        executeAutomaticCall: async (attempted) => {
+          attempts.push(attempted);
+          return "called";
+        },
+      });
+      currentLease = lease;
+      let publication = harness.server.publishLobbyEvent(identities.host.lobbyId, stageEvent);
+      publications.push(publication);
+      await vi.advanceTimersByTimeAsync(0);
+      await waitForSignal(publication, "the live automatic lease publication");
+
+      currentLease = null;
+      publication = harness.server.publishLobbyEventFromSource(
+        identities.host.lobbyId,
+        2,
+        async () => ActiveLobbyEventSchema.parse({ ...stageEvent, eventSequence: 2 }),
+      );
+      publications.push(publication);
+      await vi.advanceTimersByTimeAsync(0);
+      await waitForSignal(publication, "the automatic lease cancellation publication");
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(attempts).toEqual([]);
+    } finally {
+      currentLease = null;
+      try {
+        await waitForSignal(Promise.allSettled(publications), "lease cancellation test cleanup");
+        if (harness !== undefined) {
+          await waitForSignal(harness.server.close(), "lease cancellation server cleanup");
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  });
+
+  test("keeps only the latest queued automatic lease for a busy lobby", async () => {
+    const release = deferred();
+    const blockerLeases = Array.from({ length: 8 }, (_, index) => ({
+      lobbyId: `blocking-lobby-${index}`,
+      roundId: `blocking-round-${index}`,
+      deadline: new Date(NOW),
+    }));
+    const attempts: Array<{ lobbyId: string; roundId: string; deadline: Date }> = [];
+    const targetLobbyId = "queued-lobby";
+    let currentTargetLease: (typeof blockerLeases)[number] | null = null;
+    let latestTargetLease: (typeof blockerLeases)[number] | null = null;
+    vi.useFakeTimers({ now: new Date(NOW) });
+
+    let harness: Awaited<ReturnType<typeof createHarness>> | undefined;
+    const publications: Promise<void>[] = [];
+    try {
+      harness = await createHarness({
+        clock: () => new Date(),
+        findAutomaticCallLeases: async () => blockerLeases,
+        findAutomaticCallLease: async (lobbyId) =>
+          lobbyId === targetLobbyId ? currentTargetLease : null,
+        executeAutomaticCall: async (lease) => {
+          attempts.push(lease);
+          if (lease.lobbyId !== targetLobbyId) await release.promise;
+          else currentTargetLease = null;
+          return "called";
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(attempts).toHaveLength(8);
+
+      for (let index = 1; index <= 20; index += 1) {
+        currentTargetLease = latestTargetLease = {
+          lobbyId: targetLobbyId,
+          roundId: "queued-round",
+          deadline: new Date(Date.parse(NOW) - index),
+        };
+        const publication = harness.server.publishLobbyEvent(
+          targetLobbyId,
+          ActiveLobbyEventSchema.parse({ ...stageEvent, eventSequence: index }),
+        );
+        publications.push(publication);
+        await vi.advanceTimersByTimeAsync(0);
+        await waitForSignal(publication, `queued lease publication ${index}`);
+        await vi.advanceTimersByTimeAsync(0);
+      }
+
+      release.resolve();
+      await vi.runAllTimersAsync();
+      const targetAttempts = attempts.filter(({ lobbyId }) => lobbyId === targetLobbyId);
+      expect(targetAttempts).toEqual([latestTargetLease]);
+    } finally {
+      currentTargetLease = null;
+      release.resolve();
+      try {
+        await waitForSignal(Promise.allSettled(publications), "queued lease test cleanup");
+        if (harness !== undefined) {
+          await waitForSignal(harness.server.close(), "queued lease server cleanup");
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  });
+
+  test("fails closed when the bounded automatic call queue overflows", async () => {
+    const release = deferred();
+    const leases = Array.from({ length: 10 }, (_, index) => ({
+      lobbyId: `overflow-blocking-lobby-${index}`,
+      roundId: `overflow-blocking-round-${index}`,
+      deadline: new Date(NOW),
+    }));
+    const reconciledLobbies = new Set<string>();
+    const attempts: typeof leases = [];
+    let failureObserved = false;
+    vi.useFakeTimers({ now: new Date(NOW) });
+
+    let harness: Awaited<ReturnType<typeof createHarness>> | undefined;
+    try {
+      harness = await createHarness({
+        clock: () => new Date(),
+        limits: { maximumQueuedAutomaticCalls: 1 },
+        findAutomaticCallLeases: async () => leases,
+        findAutomaticCallLease: async (lobbyId) => {
+          if (reconciledLobbies.has(lobbyId)) return null;
+          reconciledLobbies.add(lobbyId);
+          return {
+            lobbyId,
+            roundId: `replacement-${lobbyId}`,
+            deadline: new Date(NOW),
+          };
+        },
+        executeAutomaticCall: async (lease) => {
+          attempts.push(lease);
+          await release.promise;
+          return "called";
+        },
+      });
+      void harness.server.failure.catch(() => {
+        failureObserved = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+
+      expect(failureObserved).toBe(true);
+      expect(attempts).toHaveLength(8);
+      release.resolve();
+      await vi.runAllTimersAsync();
+      expect(attempts).toHaveLength(8);
+    } finally {
+      release.resolve();
+      try {
+        if (harness !== undefined) {
+          await waitForSignal(harness.server.close(), "overflow server cleanup");
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  });
+
+  test("bounds concurrent automatic calls recovered after restart", async () => {
+    const release = deferred();
+    const leases = Array.from({ length: 9 }, (_, index) => ({
+      lobbyId: `${identities.host.lobbyId}-${index}`,
+      roundId: `round-automatic-${index}`,
+      deadline: new Date(NOW),
+    }));
+    const attempts: unknown[] = [];
+    let active = 0;
+    let maximumActive = 0;
+    vi.useFakeTimers({ now: new Date(NOW) });
+
+    let harness: Awaited<ReturnType<typeof createHarness>> | undefined;
+    try {
+      harness = await createHarness({
+        clock: () => new Date(),
+        findAutomaticCallLeases: async () => leases,
+        findAutomaticCallLease: async () => null,
+        executeAutomaticCall: async (lease) => {
+          attempts.push(lease);
+          active += 1;
+          maximumActive = Math.max(maximumActive, active);
+          await release.promise;
+          active -= 1;
+          return "called";
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(maximumActive).toBe(8);
+
+      release.resolve();
+      await vi.runAllTimersAsync();
+      expect(attempts).toEqual(leases);
+    } finally {
+      release.resolve();
+      try {
+        if (harness !== undefined) {
+          await waitForSignal(harness.server.close(), "concurrency server cleanup");
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  });
+
+  test("fails the authority when an automatic call cannot be persisted", async () => {
+    const lease = {
+      lobbyId: identities.host.lobbyId,
+      roundId: "round-automatic",
+      deadline: new Date(NOW),
+    };
+    vi.useFakeTimers({ now: new Date(NOW) });
+
+    try {
+      const harness = await createHarness({
+        clock: () => new Date(),
+        findAutomaticCallLeases: async () => [lease],
+        executeAutomaticCall: async () => {
+          throw new Error("private automatic call persistence detail");
+        },
+      });
+      const authorityFailure = harness.server.failure.catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(authorityFailure).resolves.toMatchObject({
+        message: "Game server authority failed.",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("fails the authority when live automatic lease reconciliation cannot read persistence", async () => {
+    const harness = await createHarness({
+      findAutomaticCallLeases: async () => [],
+      findAutomaticCallLease: async () => {
+        throw new Error("private automatic lease read detail");
+      },
+    });
+    const authorityFailure = harness.server.failure.catch((error: unknown) => error);
+
+    await expect(
+      harness.server.publishLobbyEvent(identities.host.lobbyId, stageEvent),
+    ).rejects.toThrow("private automatic lease read detail");
+    await expect(
+      Promise.race([
+        authorityFailure,
+        new Promise<"pending">((resolve) => setImmediate(() => resolve("pending"))),
+      ]),
+    ).resolves.toMatchObject({ message: "Game server authority failed." });
+  });
+
   test("restores a persisted disconnect grace lease after authority restart", async () => {
     const expired: unknown[] = [];
     const grace = {
@@ -1041,6 +1885,119 @@ describe("authenticated Socket.IO authority", () => {
     } finally {
       releaseOthers.resolve();
       vi.useRealTimers();
+    }
+  });
+
+  test("latches a grace persistence rejection before automatic success reconciliation", async () => {
+    const grace = {
+      lobbyId: identities.player.lobbyId,
+      participantId: identities.player.participantId,
+      presenceGeneration: 1,
+      graceEndsAt: new Date(NOW),
+    };
+    const lease = {
+      lobbyId: identities.host.lobbyId,
+      roundId: "round-concurrent-grace-failure",
+      deadline: new Date(NOW),
+    };
+    const graceResult = deferred<"expired">();
+    const automaticResult = deferred<"called">();
+    const graceStarted = deferred();
+    const automaticStarted = deferred();
+    const leaseReads: string[] = [];
+
+    try {
+      const harness = await createHarness({
+        clock: () => new Date(NOW),
+        initialPresenceGracePeriods: [grace],
+        findAutomaticCallLeases: async () => [lease],
+        findAutomaticCallLease: async (lobbyId) => {
+          leaseReads.push(lobbyId);
+          return null;
+        },
+        expirePresenceGrace: async () => {
+          graceStarted.resolve();
+          return graceResult.promise;
+        },
+        executeAutomaticCall: async () => {
+          automaticStarted.resolve();
+          return automaticResult.promise;
+        },
+      });
+      const authorityFailure = harness.server.failure.catch((error: unknown) => error);
+      await Promise.all([
+        waitForSignal(graceStarted.promise, "the failing grace persistence"),
+        waitForSignal(automaticStarted.promise, "the concurrent automatic call"),
+      ]);
+
+      graceResult.reject(new Error("private grace persistence detail"));
+      automaticResult.resolve("called");
+
+      await expect(
+        waitForSignal(authorityFailure, "the terminal grace persistence failure"),
+      ).resolves.toMatchObject({ message: "Game server authority failed." });
+      await waitForSignal(
+        new Promise<void>((resolve) => setImmediate(resolve)),
+        "grace failure promise reactions",
+      );
+      expect(leaseReads).toEqual([]);
+    } finally {
+      graceResult.resolve("expired");
+      automaticResult.resolve("called");
+    }
+  });
+
+  test("latches a final disconnect rejection before automatic success reconciliation", async () => {
+    const credential = ticket(66);
+    const lease = {
+      lobbyId: identities.otherLobby.lobbyId,
+      roundId: "round-concurrent-disconnect-failure",
+      deadline: new Date(NOW),
+    };
+    const disconnectResult = deferred<null>();
+    const automaticResult = deferred<"called">();
+    const disconnectStarted = deferred();
+    const automaticStarted = deferred();
+    const leaseReads: string[] = [];
+
+    try {
+      const harness = await createHarness({
+        clock: () => new Date(NOW),
+        tickets: new Map([[ticketHash(credential), identities.host]]),
+        findAutomaticCallLeases: async () => [lease],
+        findAutomaticCallLease: async (lobbyId) => {
+          leaseReads.push(lobbyId);
+          return null;
+        },
+        unregisterPresence: async () => {
+          disconnectStarted.resolve();
+          return disconnectResult.promise;
+        },
+        executeAutomaticCall: async () => {
+          automaticStarted.resolve();
+          return automaticResult.promise;
+        },
+      });
+      const client = await harness.connect(credential);
+      const authorityFailure = harness.server.failure.catch((error: unknown) => error);
+      await waitForSignal(automaticStarted.promise, "the concurrent automatic call");
+      client.disconnect();
+      await waitForSignal(disconnectStarted.promise, "the failing final disconnect");
+
+      automaticResult.resolve("called");
+      disconnectResult.reject(new Error("private disconnect persistence detail"));
+
+      await expect(
+        waitForSignal(authorityFailure, "the terminal disconnect persistence failure"),
+      ).resolves.toMatchObject({ message: "Game server authority failed." });
+      await waitForSignal(
+        new Promise<void>((resolve) => setImmediate(resolve)),
+        "disconnect failure promise reactions",
+      );
+      expect(leaseReads).toEqual([]);
+    } finally {
+      disconnectResult.resolve(null);
+      automaticResult.resolve("called");
     }
   });
 
@@ -1612,6 +2569,139 @@ describe("authenticated Socket.IO authority", () => {
         await restartedDatabase?.disconnect();
       }
     },
+  );
+
+  testDatabase(
+    "recovers one persisted automatic call after authority restart",
+    async () => {
+      const fixture = createRestartLobbyState();
+      const startedAt = new Date("2026-07-17T22:00:00.000Z");
+      const deadline = new Date("2026-07-17T22:00:30.000Z");
+      let now = startedAt;
+      const sourceRound = fixture.state.round!;
+      const state: NewActiveLobbyState = {
+        ...fixture.state,
+        lobby: {
+          ...fixture.state.lobby,
+          status: "active",
+          lastActivityAt: startedAt,
+          lastEventSequence: 0n,
+        },
+        round: {
+          ...sourceRound,
+          stage: "active",
+          activeAt: startedAt,
+          pausedAt: null,
+          pauseReason: null,
+          nextCallAt: deadline,
+          coWinnerTriggeringCallId: null,
+          coWinnerOpenedAt: null,
+          coWinnerClosesAt: null,
+          resultSettledAt: null,
+          endedAt: null,
+          coWinners: [],
+        },
+        events: [],
+        commandResults: [],
+      };
+      const databaseOptions = {
+        lifecycleClock: () => now,
+        roundCommands: {
+          patterns: [
+            { id: "standard-one-line", mode: "one-line" as const },
+            { id: "standard-two-lines", mode: "two-lines" as const },
+            { id: "standard-blackout", mode: "blackout" as const },
+          ],
+          clock: () => now,
+          randomBytes: (length: number) => new Uint8Array(randomBytes(length)),
+          nextId: (prefix: "round" | "card" | "call" | "mark") => `${prefix}-${randomUUID()}`,
+        },
+      };
+      let firstDatabase: Awaited<ReturnType<typeof connectDatabase>> | null = null;
+      let restartedDatabase: Awaited<ReturnType<typeof connectDatabase>> | null = null;
+      let firstAuthority: Awaited<ReturnType<typeof createHarness>> | null = null;
+      let restartedAuthority: Awaited<ReturnType<typeof createHarness>> | null = null;
+      let subscription: Awaited<ReturnType<typeof subscribeGameServerToActiveLobbyEvents>> | null =
+        null;
+      vi.useFakeTimers({ now });
+
+      try {
+        firstDatabase = await connectDatabase(testDatabaseUrl!, databaseOptions);
+        const created = await firstDatabase.lobbyStates.createActive(state, {
+          maxActiveLobbies: 100_000,
+          nextCode: randomLobbyCode,
+        });
+        if (!created.ok) throw new Error(created.error.message);
+        const automaticLifecycle = (
+          database: NonNullable<typeof firstDatabase> | NonNullable<typeof restartedDatabase>,
+        ) => ({
+          findAutomaticCallLeases: async () => {
+            const lease = await database.roundCommands.findAutomaticCallLease(
+              fixture.identity.lobbyId,
+            );
+            return lease === null ? [] : [lease];
+          },
+          findAutomaticCallLease: (lobbyId: string) =>
+            database.roundCommands.findAutomaticCallLease(lobbyId),
+          executeAutomaticCall: (lease: { lobbyId: string; roundId: string; deadline: Date }) =>
+            database.roundCommands.executeAutomaticCall(lease),
+        });
+
+        firstAuthority = await createHarness({
+          clock: () => now,
+          ...automaticLifecycle(firstDatabase),
+        });
+        now = new Date("2026-07-17T22:00:10.000Z");
+        await vi.advanceTimersByTimeAsync(10_000);
+        await firstAuthority.server.close();
+        firstAuthority = null;
+        expect(
+          (await firstDatabase.lobbyStates.findById(fixture.identity.lobbyId))?.round?.calls,
+        ).toHaveLength(1);
+        await firstDatabase.disconnect();
+        firstDatabase = null;
+
+        restartedDatabase = await connectDatabase(testDatabaseUrl!, databaseOptions);
+        restartedAuthority = await createHarness({
+          clock: () => now,
+          ...automaticLifecycle(restartedDatabase),
+        });
+        const called = deferred();
+        subscription = await subscribeGameServerToActiveLobbyEvents(
+          restartedDatabase.activeLobbyEvents,
+          {
+            publishLobbyEventFromSource: async (_lobbyId, _sequence, loadEvent) => {
+              const event = await loadEvent();
+              if (event.type === "call") called.resolve();
+            },
+          },
+        );
+
+        await vi.advanceTimersByTimeAsync(19_999);
+        expect(
+          (await restartedDatabase.lobbyStates.findById(fixture.identity.lobbyId))?.round?.calls,
+        ).toHaveLength(1);
+        now = deadline;
+        await vi.advanceTimersByTimeAsync(1);
+        await waitForSignal(called.promise, "the restarted automatic call event");
+
+        const restored = await restartedDatabase.lobbyStates.findById(fixture.identity.lobbyId);
+        expect(restored?.round?.calls.map(({ position, ball }) => ({ position, ball }))).toEqual([
+          { position: 1, ball: 1 },
+          { position: 2, ball: 2 },
+        ]);
+        expect(new Set(restored?.round?.calls.map(({ ball }) => ball)).size).toBe(2);
+        expect(restored?.round?.nextCallAt).toEqual(new Date("2026-07-17T22:01:00.000Z"));
+      } finally {
+        vi.useRealTimers();
+        await firstAuthority?.server.close();
+        await restartedAuthority?.server.close();
+        await subscription?.close();
+        await firstDatabase?.disconnect();
+        await restartedDatabase?.disconnect();
+      }
+    },
+    15_000,
   );
 
   test.each([

@@ -52,6 +52,15 @@ export interface RoundCommandAcknowledgement {
   readonly idempotentReplay: boolean;
 }
 
+export interface AutomaticCallLease {
+  readonly lobbyId: string;
+  readonly roundId: string;
+  readonly deadline: Date;
+}
+
+export type AutomaticCallExecutionResult =
+  "called" | "stale" | "too-early" | "blocked" | "exhausted";
+
 export type RoundCommandExecutionResult =
   | {
       readonly ok: true;
@@ -78,6 +87,9 @@ export interface RoundCommandExecutor {
     readonly participantSessionId: string;
     readonly command: MutationCommand;
   }): Promise<RoundCommandExecutionResult>;
+  findAutomaticCallLeases(maximum?: number): Promise<readonly AutomaticCallLease[]>;
+  findAutomaticCallLease(lobbyId: string): Promise<AutomaticCallLease | null>;
+  executeAutomaticCall(lease: AutomaticCallLease): Promise<AutomaticCallExecutionResult>;
 }
 
 type PendingCommand =
@@ -107,6 +119,7 @@ interface CurrentRound {
   readonly activeAt: Date | null;
   readonly pausedAt: Date | null;
   readonly pauseReason: "HOST_COMMAND" | "HOST_ABSENT" | "PARTICIPANT_ABSENT" | null;
+  readonly nextCallAt: Date | null;
   readonly resultSettledAt: Date | null;
   readonly endedAt: Date | null;
   readonly coWinnerOpenedAt: Date | null;
@@ -358,6 +371,7 @@ async function loadCurrentRound(
       activeAt: true,
       pausedAt: true,
       pauseReason: true,
+      nextCallAt: true,
       resultSettledAt: true,
       endedAt: true,
       coWinnerOpenedAt: true,
@@ -370,6 +384,82 @@ async function loadCurrentRound(
 function nextAutomaticCallAt(round: CurrentRound, now: Date): Date | null {
   if (round.callMode !== "AUTOMATIC" || round.callIntervalSeconds === null) return null;
   return new Date(now.getTime() + round.callIntervalSeconds * 1_000);
+}
+
+async function hasBlockingPresence(
+  transaction: Prisma.TransactionClient,
+  lobbyId: string,
+  now: Date,
+): Promise<boolean> {
+  const blockingPresence = await transaction.presenceGeneration.findFirst({
+    where: {
+      lobbyId,
+      endedAt: null,
+      participant: {
+        departedAt: null,
+        OR: [{ role: "HOST" }, { roundEligibility: "PLAYING" }],
+      },
+      OR: [
+        { status: "ABSENT", overridden: false },
+        { status: "GRACE", graceEndsAt: { lte: now } },
+      ],
+    },
+    select: { participantId: true },
+  });
+  return blockingPresence !== null;
+}
+
+async function commitNextCall(
+  transaction: Prisma.TransactionClient,
+  input: { readonly round: CurrentRound; readonly now: Date },
+  options: RoundCommandRuntimeOptions,
+): Promise<Extract<PendingCommand, { readonly scope: "active-lobby" }> | null> {
+  const { now, round } = input;
+  const [drawPositions, committedCount] = await Promise.all([
+    transaction.drawPosition.findMany({
+      where: { roundId: round.id },
+      select: { ball: true },
+      orderBy: { position: "asc" },
+    }),
+    transaction.call.count({ where: { roundId: round.id } }),
+  ]);
+  const next = commitNextDrawPosition(
+    drawPositions.map(({ ball }) => ball),
+    committedCount,
+  );
+  if (!next.ok) return null;
+  const callId = options.nextId("call");
+  await transaction.call.create({
+    data: {
+      id: callId,
+      roundId: round.id,
+      position: next.position,
+      ball: next.ball,
+      calledAt: now,
+    },
+  });
+  await transaction.round.update({
+    where: { id: round.id },
+    data: {
+      nextCallAt: next.position === drawPositions.length ? null : nextAutomaticCallAt(round, now),
+    },
+  });
+  return {
+    roundId: round.id,
+    scope: "active-lobby",
+    event: {
+      type: "call",
+      payload: {
+        call: {
+          id: callId,
+          roundId: round.id,
+          position: next.position,
+          ball: next.ball,
+          calledAt: now.toISOString(),
+        },
+      },
+    },
+  };
 }
 
 async function executeMutation(
@@ -510,22 +600,7 @@ async function executeMutation(
     command.type === "call-next" ||
     command.type === "continue-round"
   ) {
-    const blockingPresence = await transaction.presenceGeneration.findFirst({
-      where: {
-        lobbyId,
-        endedAt: null,
-        participant: {
-          departedAt: null,
-          OR: [{ role: "HOST" }, { roundEligibility: "PLAYING" }],
-        },
-        OR: [
-          { status: "ABSENT", overridden: false },
-          { status: "GRACE", graceEndsAt: { lte: now } },
-        ],
-      },
-      select: { participantId: true },
-    });
-    if (blockingPresence !== null) return null;
+    if (await hasBlockingPresence(transaction, lobbyId, now)) return null;
   }
 
   if (command.type === "configure") {
@@ -620,49 +695,7 @@ async function executeMutation(
 
   if (command.type === "call-next") {
     if (current.stage !== "ACTIVE") return null;
-    const [drawPositions, committedCount] = await Promise.all([
-      transaction.drawPosition.findMany({
-        where: { roundId: current.id },
-        select: { ball: true },
-        orderBy: { position: "asc" },
-      }),
-      transaction.call.count({ where: { roundId: current.id } }),
-    ]);
-    const next = commitNextDrawPosition(
-      drawPositions.map(({ ball }) => ball),
-      committedCount,
-    );
-    if (!next.ok) return null;
-    const callId = options.nextId("call");
-    await transaction.call.create({
-      data: {
-        id: callId,
-        roundId: current.id,
-        position: next.position,
-        ball: next.ball,
-        calledAt: now,
-      },
-    });
-    await transaction.round.update({
-      where: { id: current.id },
-      data: { nextCallAt: nextAutomaticCallAt(current, now) },
-    });
-    return {
-      roundId: current.id,
-      scope: "active-lobby",
-      event: {
-        type: "call",
-        payload: {
-          call: {
-            id: callId,
-            roundId: current.id,
-            position: next.position,
-            ball: next.ball,
-            calledAt: now.toISOString(),
-          },
-        },
-      },
-    };
+    return commitNextCall(transaction, { round: current, now }, options);
   }
 
   if (command.type === "continue-round") {
@@ -799,6 +832,129 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
     readonly command: MutationCommand;
   }): Promise<RoundCommandExecutionResult> {
     return this.executeForActor(input);
+  }
+
+  async findAutomaticCallLeases(maximum = 2_500): Promise<readonly AutomaticCallLease[]> {
+    if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 2_500) {
+      throw new RangeError("The automatic call recovery limit must be between 1 and 2500.");
+    }
+    const rows = await this.prisma.round.findMany({
+      where: {
+        stage: "ACTIVE",
+        callMode: "AUTOMATIC",
+        nextCallAt: { not: null },
+        lobby: { status: "ACTIVE" },
+      },
+      select: { lobbyId: true, id: true, nextCallAt: true },
+      orderBy: [{ nextCallAt: "asc" }, { lobbyId: "asc" }],
+      take: maximum + 1,
+    });
+    if (rows.length > maximum) throw new Error("The automatic call recovery limit was exceeded.");
+    return rows.map((row) => {
+      if (row.nextCallAt === null) throw new Error("An automatic call lease requires a deadline.");
+      return { lobbyId: row.lobbyId, roundId: row.id, deadline: row.nextCallAt };
+    });
+  }
+
+  async findAutomaticCallLease(lobbyId: string): Promise<AutomaticCallLease | null> {
+    const row = await this.prisma.round.findFirst({
+      where: {
+        lobbyId,
+        stage: "ACTIVE",
+        callMode: "AUTOMATIC",
+        nextCallAt: { not: null },
+        lobby: { status: "ACTIVE" },
+      },
+      select: { id: true, nextCallAt: true },
+    });
+    if (row?.nextCallAt === null || row?.nextCallAt === undefined) return null;
+    return { lobbyId, roundId: row.id, deadline: row.nextCallAt };
+  }
+
+  executeAutomaticCall(lease: AutomaticCallLease): Promise<AutomaticCallExecutionResult> {
+    if (this.options === undefined) {
+      throw new Error("Round command runtime dependencies were not configured.");
+    }
+    assertValidDate(lease.deadline, "Automatic call deadline");
+    const options = this.options;
+    return runTransactionWithRetry(
+      async () =>
+        this.prisma.$transaction(
+          async (transaction) => {
+            const fenced = await transaction.$queryRaw<readonly { id: string }[]>`
+              UPDATE "lobbies"
+                 SET "last_event_sequence" = "last_event_sequence"
+               WHERE "id" = ${lease.lobbyId}
+                 AND "status" = 'ACTIVE'
+               RETURNING "id"
+            `;
+            if (fenced.length !== 1) return "stale";
+            const now = options.clock();
+            assertValidDate(now, "Automatic call timestamp");
+            const current = await loadCurrentRound(transaction, lease.lobbyId);
+            if (
+              current === null ||
+              current.id !== lease.roundId ||
+              current.stage !== "ACTIVE" ||
+              current.callMode !== "AUTOMATIC" ||
+              current.nextCallAt?.getTime() !== lease.deadline.getTime()
+            ) {
+              return "stale";
+            }
+            if (now.getTime() < current.nextCallAt.getTime()) return "too-early";
+            if (await hasBlockingPresence(transaction, lease.lobbyId, now)) return "blocked";
+
+            const pending = await commitNextCall(transaction, { round: current, now }, options);
+            if (pending === null) {
+              await transaction.round.update({
+                where: { id: current.id },
+                data: { nextCallAt: null },
+              });
+              return "exhausted";
+            }
+            const rows = await transaction.$queryRaw<readonly { sequence: bigint }[]>`
+              UPDATE "lobbies"
+                 SET "last_event_sequence" = "last_event_sequence" + 1,
+                     "last_activity_at" = GREATEST("last_activity_at", ${now})
+               WHERE "id" = ${lease.lobbyId}
+               RETURNING "last_event_sequence" AS "sequence"
+            `;
+            const sequence = rows[0]?.sequence;
+            if (sequence === undefined) throw new Error("Unable to allocate an event sequence.");
+            ActiveLobbyEventSchema.parse({
+              schemaVersion: CONTRACT_SCHEMA_VERSION,
+              type: pending.event.type,
+              eventSequence: toSafeSequence(sequence),
+              occurredAt: now.toISOString(),
+              ...pending.event.payload,
+            });
+            await transaction.activeLobbyEvent.create({
+              data: {
+                lobbyId: lease.lobbyId,
+                sequence,
+                roundId: pending.roundId,
+                eventType: pending.event.type,
+                schemaVersion: CONTRACT_SCHEMA_VERSION,
+                payload: pending.event.payload,
+                createdAt: now,
+              },
+            });
+            await transaction.$executeRaw`
+              SELECT pg_notify(
+                ${ACTIVE_LOBBY_EVENT_CHANNEL},
+                ${encodeActiveLobbyEventReference(lease.lobbyId, sequence)}
+              )
+            `;
+            return "called";
+          },
+          {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+            maxWait: 5_000,
+            timeout: 10_000,
+          },
+        ),
+      this.retryOptions,
+    );
   }
 
   private executeForActor(

@@ -64,6 +64,8 @@ export {
 export {
   isRoundCommandAuthorized,
   resolveRoundPatternMode,
+  type AutomaticCallExecutionResult,
+  type AutomaticCallLease,
   type RoundCommandAcknowledgement,
   type RoundCommandExecutionResult,
   type RoundCommandExecutor,

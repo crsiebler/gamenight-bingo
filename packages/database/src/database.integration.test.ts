@@ -4766,6 +4766,288 @@ describeDatabase("PostgreSQL durable game state", () => {
     expect(restored?.commandResults).toHaveLength(6);
   });
 
+  test("recovers and commits automatic call leases exactly once", async () => {
+    let now = new Date("2026-07-17T09:15:00.000Z");
+    const connection = await connectWithRoundCommands(() => now);
+    const initial = createLobbyState();
+    const deadline = new Date(now);
+    const state: DurableLobbyState = {
+      ...initial,
+      lobby: { ...initial.lobby, lastEventSequence: 0n },
+      round: {
+        ...initial.round!,
+        stage: "active",
+        pausedAt: null,
+        pauseReason: null,
+        nextCallAt: deadline,
+        coWinnerTriggeringCallId: null,
+        coWinnerOpenedAt: null,
+        coWinnerClosesAt: null,
+        resultSettledAt: null,
+        coWinners: [],
+      },
+      events: [],
+      commandResults: [],
+    };
+    await createPersistedLobby(connection, state);
+    const automatic = connection.roundCommands;
+
+    const leases = await automatic.findAutomaticCallLeases();
+    const lease = leases.find(({ lobbyId }) => lobbyId === state.lobby.id);
+    expect(lease).toEqual({ lobbyId: state.lobby.id, roundId: state.round!.id, deadline });
+    let resolveNotification!: (notification: ActiveLobbyEventNotification) => void;
+    const notification = new Promise<ActiveLobbyEventNotification>((resolve) => {
+      resolveNotification = resolve;
+    });
+    const subscription = await connection.activeLobbyEvents.subscribe(resolveNotification);
+    let observed: ActiveLobbyEventNotification;
+    try {
+      await expect(automatic.executeAutomaticCall(lease!)).resolves.toBe("called");
+      observed = await Promise.race([
+        notification,
+        new Promise<never>((_, reject) => {
+          setTimeout(
+            () => reject(new Error("Timed out waiting for the automatic call event.")),
+            2_000,
+          );
+        }),
+      ]);
+    } finally {
+      await subscription.close();
+    }
+    await expect(automatic.executeAutomaticCall(lease!)).resolves.toBe("stale");
+
+    let restored = await connection.lobbyStates.findById(state.lobby.id);
+    expect(restored?.round?.calls).toEqual([
+      state.round!.calls[0],
+      expect.objectContaining({ position: 2, ball: 2, calledAt: now }),
+    ]);
+    expect(restored?.round?.nextCallAt).toEqual(new Date("2026-07-17T09:15:30.000Z"));
+    expect(restored?.events).toEqual([
+      expect.objectContaining({ sequence: 1n, eventType: "call", createdAt: now }),
+    ]);
+    await expect(observed!.loadEvent()).resolves.toMatchObject({
+      sequence: 1n,
+      eventType: "call",
+      createdAt: now,
+    });
+    expect(restored?.commandResults).toEqual([]);
+
+    const nextLease = await automatic.findAutomaticCallLease(state.lobby.id);
+    expect(nextLease).toEqual({
+      lobbyId: state.lobby.id,
+      roundId: state.round!.id,
+      deadline: new Date("2026-07-17T09:15:30.000Z"),
+    });
+    await expect(automatic.executeAutomaticCall(nextLease!)).resolves.toBe("too-early");
+    now = nextLease!.deadline;
+    await expect(automatic.executeAutomaticCall(nextLease!)).resolves.toBe("called");
+
+    restored = await connection.lobbyStates.findById(state.lobby.id);
+    expect(restored?.round?.calls.map(({ position, ball }) => ({ position, ball }))).toEqual([
+      { position: 1, ball: 1 },
+      { position: 2, ball: 2 },
+      { position: 3, ball: 3 },
+    ]);
+    expect(restored?.events.map(({ sequence }) => sequence)).toEqual([1n, 2n]);
+  });
+
+  test.each(["manual-first", "automatic-first"] as const)(
+    "serializes host and automatic calls with %s lock ordering",
+    async (order) => {
+      const now = new Date("2026-07-17T09:15:45.000Z");
+      const setupConnection = await connectWithRoundCommands(() => now);
+      const manualConnection = await connectWithRoundCommands(() => now);
+      const automaticConnection = await connectWithRoundCommands(() => now);
+      const initial = createLobbyState();
+      const state: DurableLobbyState = {
+        ...initial,
+        lobby: { ...initial.lobby, lastEventSequence: 0n },
+        round: {
+          ...initial.round!,
+          stage: "active",
+          pausedAt: null,
+          pauseReason: null,
+          nextCallAt: now,
+          coWinnerTriggeringCallId: null,
+          coWinnerOpenedAt: null,
+          coWinnerClosesAt: null,
+          resultSettledAt: null,
+          coWinners: [],
+        },
+        events: [],
+        commandResults: [],
+      };
+      await createPersistedLobby(setupConnection, state);
+      const lease = { lobbyId: state.lobby.id, roundId: state.round!.id, deadline: now };
+      const manual = () =>
+        manualConnection.roundCommands.execute({
+          lobbyId: state.lobby.id,
+          sessionTokenHash: state.sessions[0]!.tokenHash,
+          command: CallNextCommandSchema.parse({
+            schemaVersion: 1,
+            type: "call-next",
+            commandId: `raced-manual-call-${order}-${randomUUID()}`,
+          }),
+        });
+      const automatic = () => automaticConnection.roundCommands.executeAutomaticCall(lease);
+      const blocker = await pool.connect();
+      let transactionOpen = false;
+      const operations: Promise<unknown>[] = [];
+      try {
+        await blocker.query("BEGIN");
+        transactionOpen = true;
+        await blocker.query(`SELECT id FROM lobbies WHERE id = $1 FOR UPDATE`, [state.lobby.id]);
+        operations.push(order === "manual-first" ? manual() : automatic());
+        await waitForBlockedCommandFences(1);
+        operations.push(order === "manual-first" ? automatic() : manual());
+        await waitForBlockedCommandFences(2);
+        await blocker.query("ROLLBACK");
+        transactionOpen = false;
+
+        const results = await Promise.all(operations);
+        expect(results).toEqual(
+          order === "manual-first"
+            ? [expect.objectContaining({ ok: true }), "stale"]
+            : ["called", expect.objectContaining({ ok: true })],
+        );
+      } finally {
+        if (transactionOpen) await blocker.query("ROLLBACK").catch(() => undefined);
+        blocker.release();
+        await Promise.allSettled(operations);
+      }
+
+      const restored = await setupConnection.lobbyStates.findById(state.lobby.id);
+      const expectedCallCount = order === "manual-first" ? 2 : 3;
+      expect(restored?.round?.calls).toHaveLength(expectedCallCount);
+      expect(restored?.round?.calls.map(({ position }) => position)).toEqual(
+        Array.from({ length: expectedCallCount }, (_, index) => index + 1),
+      );
+      expect(new Set(restored?.round?.calls.map(({ ball }) => ball)).size).toBe(expectedCallCount);
+      expect(restored?.events.map(({ sequence }) => sequence)).toEqual(
+        Array.from({ length: expectedCallCount - 1 }, (_, index) => BigInt(index + 1)),
+      );
+    },
+    15_000,
+  );
+
+  test.each(["PAUSED", "CO_WINNER_WINDOW", "RESULT", "ENDED"] as const)(
+    "blocks manual and automatic calls while the round stage is %s",
+    async (stage) => {
+      const now = new Date("2026-07-17T09:15:50.000Z");
+      const connection = await connectWithRoundCommands(() => now);
+      const initial = createLobbyState();
+      const state: DurableLobbyState = {
+        ...initial,
+        lobby: { ...initial.lobby, lastEventSequence: 0n },
+        round: {
+          ...initial.round!,
+          stage: "active",
+          pausedAt: null,
+          pauseReason: null,
+          nextCallAt: now,
+          coWinnerTriggeringCallId: null,
+          coWinnerOpenedAt: null,
+          coWinnerClosesAt: null,
+          resultSettledAt: null,
+          coWinners: [],
+        },
+        events: [],
+        commandResults: [],
+      };
+      await createPersistedLobby(connection, state);
+      await pool.query(`UPDATE rounds SET stage = $2::round_stage WHERE id = $1`, [
+        state.round!.id,
+        stage,
+      ]);
+      const lease = { lobbyId: state.lobby.id, roundId: state.round!.id, deadline: now };
+
+      await expect(connection.roundCommands.executeAutomaticCall(lease)).resolves.toBe("stale");
+      await expect(
+        connection.roundCommands.execute({
+          lobbyId: state.lobby.id,
+          sessionTokenHash: state.sessions[0]!.tokenHash,
+          command: CallNextCommandSchema.parse({
+            schemaVersion: 1,
+            type: "call-next",
+            commandId: `blocked-call-${stage}-${randomUUID()}`,
+          }),
+        }),
+      ).resolves.toEqual({ ok: false, error: { code: "INVALID_COMMAND" } });
+
+      const restored = await connection.lobbyStates.findById(state.lobby.id);
+      expect(restored?.round?.calls).toEqual(state.round!.calls);
+      expect(restored?.events).toEqual([]);
+      expect(restored?.commandResults).toEqual([]);
+    },
+  );
+
+  test("clears automatic scheduling after the final draw position", async () => {
+    const now = new Date("2026-07-17T09:16:00.000Z");
+    const connection = await connectWithRoundCommands(() => now);
+    const initial = createLobbyState();
+    const calls = initial.round!.drawOrder.slice(0, 74).map(({ position, ball }) => ({
+      id: `call-final-${position}-${randomUUID()}`,
+      position,
+      ball,
+      calledAt: new Date(now.getTime() - (75 - position) * 1_000),
+    }));
+    const state: DurableLobbyState = {
+      ...initial,
+      lobby: { ...initial.lobby, lastEventSequence: 0n },
+      round: {
+        ...initial.round!,
+        stage: "active",
+        pausedAt: null,
+        pauseReason: null,
+        nextCallAt: now,
+        coWinnerTriggeringCallId: null,
+        coWinnerOpenedAt: null,
+        coWinnerClosesAt: null,
+        resultSettledAt: null,
+        calls,
+        coWinners: [],
+      },
+      events: [],
+      commandResults: [],
+    };
+    await createPersistedLobby(connection, state);
+
+    const lease = await connection.roundCommands.findAutomaticCallLease(state.lobby.id);
+    expect(lease).toEqual({ lobbyId: state.lobby.id, roundId: state.round!.id, deadline: now });
+    await expect(connection.roundCommands.executeAutomaticCall(lease!)).resolves.toBe("called");
+    await expect(connection.roundCommands.executeAutomaticCall(lease!)).resolves.toBe("stale");
+    await expect(
+      connection.roundCommands.findAutomaticCallLease(state.lobby.id),
+    ).resolves.toBeNull();
+
+    const restored = await connection.lobbyStates.findById(state.lobby.id);
+    expect(restored?.round?.calls).toHaveLength(75);
+    expect(new Set(restored?.round?.calls.map(({ ball }) => ball)).size).toBe(75);
+    expect(restored?.round?.nextCallAt).toBeNull();
+    expect(restored?.events).toEqual([
+      expect.objectContaining({ sequence: 1n, eventType: "call", createdAt: now }),
+    ]);
+
+    const exhaustedCommand = CallNextCommandSchema.parse({
+      schemaVersion: 1,
+      type: "call-next",
+      commandId: `exhausted-host-call-${randomUUID()}`,
+    });
+    await expect(
+      connection.roundCommands.execute({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: state.sessions[0]!.tokenHash,
+        command: exhaustedCommand,
+      }),
+    ).resolves.toEqual({ ok: false, error: { code: "INVALID_COMMAND" } });
+    await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toMatchObject({
+      round: { calls: restored!.round!.calls, nextCallAt: null },
+      events: restored!.events,
+      commandResults: restored!.commandResults,
+    });
+  });
+
   test.each([
     {
       callConfiguration: { mode: "manual" } as const,
@@ -4834,14 +5116,71 @@ describeDatabase("PostgreSQL durable game state", () => {
         ),
       ).resolves.toMatchObject({ ok: true });
 
-      await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toMatchObject({
+      await expect(
+        execute(
+          StartRoundCommandSchema.parse({
+            schemaVersion: 1,
+            type: "start-round",
+            commandId: `start-configured-${randomUUID()}`,
+          }),
+        ),
+      ).resolves.toMatchObject({ ok: true });
+
+      const expectedDeadline =
+        callConfiguration.mode === "automatic"
+          ? new Date(occurredAt.getTime() + callConfiguration.intervalSeconds * 1_000)
+          : null;
+
+      const restored = await connection.lobbyStates.findById(state.lobby.id);
+      expect(restored).toMatchObject({
         round: {
           initialPatternId: "standard-one-line",
           currentPatternId: "standard-one-line",
           callMode: expectedMode,
           callIntervalSeconds: expectedInterval,
+          nextCallAt: expectedDeadline,
         },
       });
+      await expect(
+        connection.roundCommands.findAutomaticCallLease(state.lobby.id),
+      ).resolves.toEqual(
+        expectedDeadline === null
+          ? null
+          : { lobbyId: state.lobby.id, roundId: restored!.round!.id, deadline: expectedDeadline },
+      );
+      if (callConfiguration.mode === "manual") {
+        const playerCall = CallNextCommandSchema.parse({
+          schemaVersion: 1,
+          type: "call-next",
+          commandId: `manual-player-call-${randomUUID()}`,
+        });
+        await expect(
+          connection.roundCommands.execute({
+            lobbyId: state.lobby.id,
+            sessionTokenHash: state.sessions[1]!.tokenHash,
+            command: playerCall,
+          }),
+        ).resolves.toEqual({ ok: false, error: { code: "FORBIDDEN" } });
+
+        const hostCall = CallNextCommandSchema.parse({
+          schemaVersion: 1,
+          type: "call-next",
+          commandId: `manual-host-call-${randomUUID()}`,
+        });
+        await expect(execute(hostCall)).resolves.toMatchObject({
+          ok: true,
+          acknowledgement: { commandId: hostCall.commandId, scope: "active-lobby" },
+        });
+
+        const manuallyAdvanced = await connection.lobbyStates.findById(state.lobby.id);
+        expect(manuallyAdvanced?.round).toMatchObject({
+          callMode: "manual",
+          nextCallAt: null,
+          calls: [expect.objectContaining({ position: 1, calledAt: occurredAt })],
+        });
+        expect(manuallyAdvanced?.events).toHaveLength(restored!.events.length + 1);
+        expect(manuallyAdvanced?.commandResults).toHaveLength(restored!.commandResults.length + 1);
+      }
     },
   );
 
