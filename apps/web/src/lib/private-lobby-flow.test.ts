@@ -2,11 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { CONTRACT_SCHEMA_VERSION, SnapshotSchema, type Snapshot } from "@gamenight-bingo/contracts";
 
-import {
-  PrivateLobbyFlowError,
-  WaitingLobbyCommandSession,
-  loadPrivateLobbySnapshot,
-} from "./private-lobby-flow.js";
+import * as privateLobbyFlow from "./private-lobby-flow.js";
+
+const { PrivateLobbyFlowError, WaitingLobbyCommandSession, loadPrivateLobbySnapshot } =
+  privateLobbyFlow;
 
 const NOW = "2026-07-18T12:00:00.000Z";
 
@@ -270,5 +269,108 @@ describe("private lobby flow", () => {
     await expect(session.run()).rejects.toBeInstanceOf(PrivateLobbyFlowError);
     await expect(session.run()).rejects.toMatchObject({ ambiguous: true, retryable: true });
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks the own card with one replayable command ID and accepts both acknowledgement scopes", async () => {
+    type MarkSessionConstructor = new (
+      selection: { ball: number; code: string },
+      dependencies: {
+        nextCommandId: () => string;
+        request: (path: string, init?: RequestInit) => Promise<Response>;
+      },
+    ) => { run(): Promise<{ commandId: string; scope: string }> };
+    const MarkCardCommandSession = (
+      privateLobbyFlow as typeof privateLobbyFlow & {
+        MarkCardCommandSession?: MarkSessionConstructor;
+      }
+    ).MarkCardCommandSession;
+
+    expect(MarkCardCommandSession).toBeTypeOf("function");
+    if (MarkCardCommandSession === undefined) return;
+
+    const request = vi
+      .fn<(path: string, init?: RequestInit) => Promise<Response>>()
+      .mockResolvedValueOnce(new Response("not json", { status: 502 }))
+      .mockResolvedValueOnce(
+        Response.json({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "ack",
+          scope: "participant-private",
+          commandId: "command-mark",
+          occurredAt: NOW,
+          eventSequence: null,
+          idempotentReplay: true,
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "ack",
+          scope: "active-lobby",
+          commandId: "command-winning-mark",
+          occurredAt: NOW,
+          eventSequence: 7,
+          idempotentReplay: false,
+        }),
+      );
+    const session = new MarkCardCommandSession(
+      { ball: 1, code: "ABC234" },
+      { request, nextCommandId: () => "command-mark" },
+    );
+
+    await expect(session.run()).rejects.toMatchObject({ ambiguous: true, retryable: true });
+    await expect(session.run()).resolves.toMatchObject({
+      commandId: "command-mark",
+      scope: "participant-private",
+    });
+    await expect(
+      new MarkCardCommandSession(
+        { ball: 2, code: "ABC234" },
+        { request, nextCommandId: () => "command-winning-mark" },
+      ).run(),
+    ).resolves.toMatchObject({ commandId: "command-winning-mark", scope: "active-lobby" });
+
+    expect(
+      request.mock.calls.map(([path, init]) => ({
+        path,
+        body: JSON.parse(String(init?.body)),
+        credentials: init?.credentials,
+        method: init?.method,
+      })),
+    ).toEqual([
+      {
+        path: "/api/v1/lobbies/ABC234/cards/own/marks",
+        method: "POST",
+        credentials: "same-origin",
+        body: {
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "mark-card",
+          commandId: "command-mark",
+          ball: 1,
+        },
+      },
+      {
+        path: "/api/v1/lobbies/ABC234/cards/own/marks",
+        method: "POST",
+        credentials: "same-origin",
+        body: {
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "mark-card",
+          commandId: "command-mark",
+          ball: 1,
+        },
+      },
+      {
+        path: "/api/v1/lobbies/ABC234/cards/own/marks",
+        method: "POST",
+        credentials: "same-origin",
+        body: {
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "mark-card",
+          commandId: "command-winning-mark",
+          ball: 2,
+        },
+      },
+    ]);
   });
 });

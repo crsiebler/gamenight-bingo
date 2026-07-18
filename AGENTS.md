@@ -382,6 +382,10 @@ then refactor while green.
 - After an acknowledgement, queue any required authoritative refresh behind an
   in-flight refresh, verify its snapshot sequence and expected state include the
   commit, and keep stale mutation controls latched if reconciliation fails.
+- Card mark clients must accept both strict participant-private acknowledgements
+  and active-lobby acknowledgements because a winning mark can open the
+  co-winner window; reconcile the own mark against the same card, and require
+  the lobby sequence only for the active-lobby scope.
 - Generate pattern previews from canonical catalog data. Never hand-maintain a
   second mask source or transform a source mask implicitly.
 - Themes may change presentation, not game semantics or readability. Lazy-load

@@ -11,8 +11,10 @@ export {
   type LobbyEntrySelection,
 } from "./lobby-entry-flow";
 export {
+  MarkCardCommandSession,
   PrivateLobbyFlowError,
   WaitingLobbyCommandSession,
   loadPrivateLobbySnapshot,
+  type MarkCardCommandSelection,
   type WaitingLobbyCommand,
 } from "./private-lobby-flow";

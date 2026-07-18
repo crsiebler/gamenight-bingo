@@ -63,6 +63,7 @@ Next story: US-001
 - Status-driven forms may move focus into newly revealed controls only when focus remains within the form or was removed with the prior control; asynchronous refreshes must preserve focus that the user moved to another workflow.
 - Verify private App Router document cache headers with a production Next server; development mode rewrites document responses to `no-cache, must-revalidate` even when the production route proxy emits `no-store`.
 - After a browser mutation acknowledgement, serialize any mandatory snapshot reconciliation behind an in-flight refresh, require the snapshot sequence and expected projection to include the commit, and keep stale controls latched until authority confirms the transition.
+- Card mark clients accept both participant-private acknowledgements and active-lobby acknowledgements because a winning mark can open the co-winner window; reconcile the authoritative own mark against the same card and require a lobby sequence only for active-lobby scope.
 
 Append-only iteration log
 -------------------------
@@ -4698,3 +4699,65 @@ Targeted re-review outcome for US-047 at 2026-07-18 10:38:28 MST:
 - UI browser re-review confirmed the two-tone keyboard focus indicator, 500px no-overflow layout, 44px share controls, successful private snapshot rendering, and no application console errors.
 - Residual risk is limited to the 135 generic database-backed tests skipped without a root test URL, realtime event-driven reconciliation assigned to US-049, and non-Chromium/forced-colors manual rendering not rechecked; focused deterministic coverage and approved-database production checks cover this story.
 - US-047 has no unresolved in-scope critical, high, or medium findings.
+
+## 2026-07-18 11:14:15 MST - US-048
+- What was implemented
+  - Added a reusable semantic Bingo card table with B/I/N/G/O headers, 25 native button cells, explicit visible and screen-reader free/called/marked/uncalled/unavailable states, roving arrow/Home/End navigation, visible focus, forced-colors support, and mobile touch targets.
+  - Added local rejection feedback for uncalled, free, marked, waiting, ended, and pending cells without sending invalid mark commands.
+  - Added a strict replayable mark-command session for the existing own-card HTTP endpoint that accepts participant-private and winning active-lobby acknowledgement scopes.
+  - Integrated authoritative mark reconciliation into the private lobby page without optimistic daubs; successful marks retain focus and remain latched until the same card's snapshot confirms the mark and any required lobby sequence.
+  - Fixed stale local feedback after authoritative availability changes and a Lighthouse label-in-name mismatch discovered during browser verification.
+- Files changed: `AGENTS.md`, `apps/web/src/app/globals.css`, `apps/web/src/components/templates/private-lobby-page.test.tsx`, `apps/web/src/components/templates/private-lobby-page.tsx`, `apps/web/src/lib/index.ts`, `apps/web/src/lib/private-lobby-flow.test.ts`, `apps/web/src/lib/private-lobby-flow.ts`, `packages/ui/src/index.ts`, `packages/ui/src/organisms/bingo-card.tsx`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-048 - Build the accessible Bingo card`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/lib/private-lobby-flow.test.ts apps/web/src/components/templates/private-lobby-page.test.tsx` (expected fail before implementation with 4 missing-behavior failures; pass after implementation/review remediation with 32 tests)
+  - Focused stale-feedback regression (expected fail before fix; pass after fix)
+  - Focused accessible label-in-name regression (expected fail before fix; pass after fix)
+  - `bun run test` (pass after review remediation; typecheck, 32 files passed, 1 database file skipped, 541 tests passed, and 135 database-backed tests skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - Focused Prettier check for every intended source/test file (pass)
+  - `bun run format:check` (fails only on unrelated pre-existing untracked browser reports and the two untracked US-048 Lighthouse report directories; every intended story file passes)
+  - `bun install --frozen-lockfile` (pass; 393 installs checked with no changes)
+  - `DATABASE_URL=<approved isolated local database> bun run --cwd apps/web build` (pass)
+  - `TEST_DATABASE_URL=<approved isolated local database> bun run test:e2e` (pass; 3 Playwright tests against a production Next server)
+  - `git diff --check` (pass)
+  - Manual dev-browser verification at 320px/375px mobile and desktop (pass; 25-cell table semantics, pointer and Space-key daubs, arrow navigation, focus retention, local rejection feedback, authoritative POST/snapshot reconciliation, no page overflow, 44px minimum cell targets, contained locked-state labels, visible 4px focus outline, and clean console)
+  - Mobile Lighthouse snapshot after remediation (pass; accessibility 100, best practices 100, SEO 100, agentic browsing 100, and zero failed audits)
+- Implementation agents:
+  - Recommended: `react-specialist`, `accessibility-tester`
+  - Used: `react-specialist`, `accessibility-tester` for component boundaries, table/button semantics, roving focus, acknowledgement/reconciliation risks, live-region discipline, and browser/test recommendations
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, security-triggered `security-engineer`, and UI-triggered `ui-designer`; skipped `ux-researcher` as redundant with the UI specialist under the high-risk review budget
+  - Findings: fixed card-unbound ambiguous command replay/replacement and 320px unavailable-label overlap before targeted re-review
+- Decisions (why):
+  - Used a native table with buttons rather than an ARIA grid because table headers provide stable structural relationships while the buttons preserve native pointer, Enter, and Space activation.
+  - Kept unavailable cells focusable with `aria-disabled` and guarded activation because screen-reader and keyboard users still need to inspect every cell and receive a clear rejection reason.
+  - Accepted both acknowledgement scopes because an ordinary mark is participant-private while the first winning mark commits an active-lobby co-winner-window event.
+  - Required authoritative snapshot confirmation rather than optimistic marking so a stale client cannot present an uncommitted daub.
+- **Learnings for future iterations:**
+  - A mark acknowledgement cannot be assumed participant-private; winning marks require active-lobby sequence reconciliation while ordinary marks have no lobby sequence.
+  - An `aria-label` that replaces visible cell text can fail label-in-name even when it is descriptive; compose accessible names from visible value/state text plus visually hidden context instead.
+  - Local rejection feedback should be scoped to the authoritative cell/availability projection so it does not remain stale after a snapshot changes the card state.
+- Known issues / follow-ups:
+  - The isolated `gamenight_bingo_us047_browser` database retains the US-048 browser lobby and non-destructive active-round/card fixtures; no local data was deleted.
+  - Root `bun run format:check` remains blocked by untracked browser-report artifacts; every intended story file passes Prettier.
+  - Generic database-backed tests remain skipped without a root test URL; approved-database production build, route E2E, and live mark verification passed.
+- Next iteration start:
+  - If review passes, implement US-049 live call and status UI; otherwise resume any recorded blocking finding.
+---
+
+Review remediation for US-048 at 2026-07-18 11:30:00 MST:
+- The initial `code-reviewer`, `qa-expert`, `security-engineer`, and `ui-designer` pass produced two deduplicated medium root causes: ambiguous mark sessions could be replaced or replayed against a later card, and the full unavailable label overlapped adjacent 44px cells at 320px.
+- Added failing regressions before binding retained command sessions to their original card/ball, exposing one explicit same-ID retry action, blocking competing daubs, resolving ambiguous commits through same-card snapshots, and retiring retained sessions when authority replaces the card.
+- Replaced the overlapping visible unavailable label with the concise `Locked` state while retaining full `unavailable because ...` accessible semantics.
+- Post-fix checks: root test passes typecheck with 540 tests and 135 database skips, lint passes, production Playwright passes 3 tests, intended formatting and diff checks pass after formatting, and browser verification confirms 320px no-overflow, 44px targets, contained labels, clean console, and Lighthouse 100 scores with zero failures.
+- Targeted re-review: `code-reviewer`, `qa-expert`, `security-engineer`, and `ui-designer` because the substantive correctness, test, security/idempotency, and responsive UI fixes address findings from all four specialists.
+
+Targeted re-review outcome for US-048 at 2026-07-18 11:37:34 MST:
+- `security-engineer` and `ui-designer` returned empty actionable finding lists and confirmed the original idempotency/card-binding and 320px overlap findings were resolved; browser re-review reconfirmed 44px contained cells and Lighthouse accessibility 100.
+- `code-reviewer` and `qa-expert` identified one deduplicated medium race: an authoritative refresh could resolve or retire an in-flight mark session, then its late rejection could restore stale unresolved state and block the replacement card.
+- Added a failing overlap regression that refreshes to a replacement card while the old request is in flight, rejects that old request, and requires the replacement card to create a fresh command session.
+- Guarded both late acknowledgement and rejection handling by exact retained-session identity so an authoritative refresh remains final and stale outcomes cannot mutate reconciliation state.
+- Final post-remediation checks: focused suites pass 32 tests, root test passes workspace/type checks with 541 tests and 135 database skips, lint passes, intended-file formatting passes, and no in-scope critical, high, or medium findings remain.

@@ -3,6 +3,7 @@ import {
   ConfigureCommandSchema,
   CONTRACT_SCHEMA_VERSION,
   ErrorSchema,
+  MarkCardCommandSchema,
   SnapshotMessageSchema,
   StartRoundCommandSchema,
   type CallConfiguration,
@@ -22,6 +23,7 @@ export type WaitingLobbyCommand =
   | { type: "start-round"; code: string };
 
 export type WaitingLobbyCommandAck = Extract<CommandAck, { scope: "active-lobby" }>;
+export type MarkCardCommandSelection = { ball: number; code: string };
 
 export class PrivateLobbyFlowError extends Error {
   readonly ambiguous: boolean;
@@ -155,6 +157,65 @@ export class WaitingLobbyCommandSession {
       acknowledgement.data.commandId !== this.#commandId ||
       acknowledgement.data.scope !== "active-lobby"
     ) {
+      throw ambiguousCommandError();
+    }
+    return acknowledgement.data;
+  }
+}
+
+export class MarkCardCommandSession {
+  readonly #commandId: string;
+  readonly #request: Requester;
+  readonly #selection: MarkCardCommandSelection;
+  #running: Promise<CommandAck> | null = null;
+
+  constructor(
+    selection: MarkCardCommandSelection,
+    dependencies: { request?: Requester; nextCommandId?: () => string } = {},
+  ) {
+    this.#selection = selection;
+    this.#request = dependencies.request ?? ((path, init) => fetch(path, init));
+    this.#commandId = (dependencies.nextCommandId ?? (() => globalThis.crypto.randomUUID()))();
+  }
+
+  run(): Promise<CommandAck> {
+    this.#running ??= this.#runCommand().finally(() => {
+      this.#running = null;
+    });
+    return this.#running;
+  }
+
+  async #runCommand(): Promise<CommandAck> {
+    const command = MarkCardCommandSchema.parse({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "mark-card",
+      commandId: this.#commandId,
+      ball: this.#selection.ball,
+    });
+    let response: Response;
+    try {
+      response = await this.#request(`/api/v1/lobbies/${this.#selection.code}/cards/own/marks`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(command),
+      });
+    } catch {
+      throw ambiguousCommandError();
+    }
+    const value = await responseValue(response);
+    if (!response.ok) {
+      const parsedError = ErrorSchema.safeParse(value);
+      if (!parsedError.success || parsedError.data.commandId !== this.#commandId) {
+        throw ambiguousCommandError();
+      }
+      throw new PrivateLobbyFlowError(parsedError.data.message, {
+        code: parsedError.data.code,
+        retryable: parsedError.data.retryable,
+      });
+    }
+    const acknowledgement = CommandAckSchema.safeParse(value);
+    if (!acknowledgement.success || acknowledgement.data.commandId !== this.#commandId) {
       throw ambiguousCommandError();
     }
     return acknowledgement.data;

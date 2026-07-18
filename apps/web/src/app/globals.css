@@ -492,6 +492,110 @@ h2 {
   grid-column: 1 / -1;
 }
 
+.card-panel {
+  grid-column: 1 / -1;
+  padding-inline: 0.75rem;
+}
+
+.bingo-card-scroll {
+  overflow-x: auto;
+  padding: 0.65rem;
+}
+
+.bingo-card {
+  border-collapse: separate;
+  border-spacing: 0.35rem;
+  margin: 0 auto;
+  table-layout: fixed;
+  width: min(100%, 35rem);
+}
+
+.bingo-card caption {
+  font-weight: 800;
+  margin-bottom: 0.75rem;
+  text-align: left;
+}
+
+.bingo-card th {
+  color: var(--bingo-coral);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(1.5rem, 7vw, 2.5rem);
+  line-height: 1;
+  padding-bottom: 0.35rem;
+}
+
+.bingo-card td {
+  padding: 0;
+}
+
+.bingo-card-cell {
+  align-items: center;
+  aspect-ratio: 1;
+  background: #f8f4e9;
+  border: 0.125rem solid #8da0ad;
+  border-radius: 0.65rem;
+  color: var(--bingo-ink);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  font: inherit;
+  gap: 0.1rem;
+  justify-content: center;
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+  padding: 0.2rem;
+  width: 100%;
+}
+
+.bingo-card-cell[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+.bingo-card-cell[data-state="called"] {
+  background: #fff0bd;
+  border-color: #8a5a00;
+}
+
+.bingo-card-cell[data-state="marked"],
+.bingo-card-cell[data-state="free"] {
+  background: #cdeee1;
+  border-color: #17634c;
+}
+
+.bingo-card-cell[data-state="unavailable"] {
+  background: #eceff1;
+  border-style: dashed;
+}
+
+.bingo-card-value {
+  font-size: clamp(0.95rem, 4vw, 1.45rem);
+  font-weight: 900;
+  line-height: 1;
+}
+
+.bingo-card-state {
+  font-size: clamp(0.55rem, 2.2vw, 0.72rem);
+  font-weight: 800;
+  line-height: 1.05;
+  text-align: center;
+}
+
+.bingo-card-context {
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+.card-mark-status {
+  line-height: 1.45;
+  margin: 0.75rem 0 0;
+  min-height: 1.45em;
+}
+
 .roster-heading {
   align-items: start;
   display: flex;
@@ -587,6 +691,10 @@ h2 {
     grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
   }
 
+  .card-panel {
+    padding-inline: 2rem;
+  }
+
   .participant-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -616,5 +724,9 @@ h2 {
   .private-state-card,
   .privacy-note {
     border: 0.125rem solid CanvasText;
+  }
+
+  .bingo-card-cell {
+    border-color: ButtonText;
   }
 }

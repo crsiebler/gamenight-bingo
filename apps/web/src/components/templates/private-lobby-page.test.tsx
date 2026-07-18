@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -25,11 +25,14 @@ const patterns = [
 function snapshotFor(
   role: "host" | "player" | "waiting" = "host",
   options: {
+    cardId?: string;
+    calledBalls?: readonly number[];
     callConfiguration?: { mode: "manual" } | { mode: "automatic"; intervalSeconds: 10 };
     eventSequence?: number | null;
     hostPresence?: "connected" | "absent";
     absentPlayerEligibility?: "playing" | "waiting";
     absentPlayerOverridden?: boolean;
+    markedBalls?: readonly number[];
     patternId?: string;
     round?: "waiting" | "active" | null;
   } = {},
@@ -159,7 +162,7 @@ function snapshotFor(
       options.round === null || role === "waiting"
         ? null
         : {
-            id: `card-${role}`,
+            id: options.cardId ?? `card-${role}`,
             roundId: "round-1",
             participantId: selfId,
             cells: [
@@ -190,8 +193,22 @@ function snapshotFor(
               65,
             ],
           },
-    ownMarks: [],
-    calls: [],
+    ownMarks:
+      options.round === null || role === "waiting"
+        ? []
+        : (options.markedBalls ?? []).map((ball, index) => ({
+            id: `mark-${index + 1}`,
+            cardId: options.cardId ?? `card-${role}`,
+            ball,
+            markedAt: NOW,
+          })),
+    calls: (options.calledBalls ?? []).map((ball, index) => ({
+      id: `call-${index + 1}`,
+      roundId: "round-1",
+      position: index + 1,
+      ball,
+      calledAt: NOW,
+    })),
     timer: null,
   });
 }
@@ -207,6 +224,22 @@ function activeLobbyAck(eventSequence = 2): Extract<CommandAck, { scope: "active
     idempotentReplay: false,
   });
   if (acknowledgement.scope !== "active-lobby") throw new Error("Expected active-lobby ack.");
+  return acknowledgement;
+}
+
+function privateAck(): Extract<CommandAck, { scope: "participant-private" }> {
+  const acknowledgement = CommandAckSchema.parse({
+    schemaVersion: CONTRACT_SCHEMA_VERSION,
+    type: "ack",
+    scope: "participant-private",
+    commandId: "command-mark",
+    occurredAt: NOW,
+    eventSequence: null,
+    idempotentReplay: false,
+  });
+  if (acknowledgement.scope !== "participant-private") {
+    throw new Error("Expected participant-private ack.");
+  }
   return acknowledgement;
 }
 
@@ -267,6 +300,412 @@ describe("PrivateLobbyPage", () => {
     ).toBeVisible();
   });
 
+  it("renders and keyboard-navigates all card cells with explicit non-color states", async () => {
+    const createMarkCommandSession = vi.fn(() => ({ run: vi.fn(async () => privateAck()) }));
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createMarkCommandSession={createMarkCommandSession}
+        loadSnapshot={async () =>
+          snapshotFor("host", {
+            absentPlayerOverridden: true,
+            calledBalls: [1, 17, 31],
+            markedBalls: [17],
+            round: "active",
+          })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const card = await screen.findByRole("table", { name: "Your Bingo card" });
+    expect(
+      within(card)
+        .getAllByRole("columnheader")
+        .map((header) => header.textContent),
+    ).toEqual(["B", "I", "N", "G", "O"]);
+    expect(within(card).getAllByRole("button")).toHaveLength(25);
+    const called = within(card).getByRole("button", {
+      name: /b.*1.*called - mark.*available to mark/i,
+    });
+    expect(called).toHaveTextContent(/called/i);
+    expect(within(card).getByRole("button", { name: /i.*17.*marked/i })).toHaveTextContent(
+      /marked/i,
+    );
+    expect(
+      within(card).getByRole("button", {
+        name: /n.*free.*automatically satisfied/i,
+      }),
+    ).toHaveTextContent(/free/i);
+    const uncalled = within(card).getByRole("button", {
+      name: /g.*46.*not called.*cannot be marked yet/i,
+    });
+    expect(uncalled).toHaveTextContent(/not called/i);
+    expect(uncalled).toHaveAttribute("aria-disabled", "true");
+
+    called.focus();
+    fireEvent.keyDown(called, { key: "ArrowRight" });
+    expect(within(card).getByRole("button", { name: /i.*16.*not called/i })).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    expect(within(card).getByRole("button", { name: /i.*17.*marked/i })).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: "End" });
+    expect(within(card).getByRole("button", { name: /o.*62.*not called/i })).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { ctrlKey: true, key: "Home" });
+    expect(called).toHaveFocus();
+    expect(
+      within(card)
+        .getAllByRole("button")
+        .filter((cell) => cell.getAttribute("tabindex") === "0"),
+    ).toEqual([called]);
+
+    fireEvent.click(uncalled);
+    expect(createMarkCommandSession).not.toHaveBeenCalled();
+    expect(screen.getByRole("status", { name: "Card marking status" })).toHaveTextContent(
+      /g 46 has not been called and was not marked/i,
+    );
+  });
+
+  it("submits a called daub once and waits for an authoritative marked snapshot", async () => {
+    const mark = deferred<CommandAck>();
+    const createMarkCommandSession = vi.fn(() => ({ run: () => mark.promise }));
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          calledBalls: [1],
+          eventSequence: 4,
+          round: "active",
+        }),
+      )
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          calledBalls: [1],
+          eventSequence: 4,
+          markedBalls: [1],
+          round: "active",
+        }),
+      );
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createMarkCommandSession={createMarkCommandSession}
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const cell = await screen.findByRole("button", {
+      name: /b.*1.*called - mark.*available to mark/i,
+    });
+    cell.focus();
+    fireEvent.click(cell);
+    fireEvent.click(cell);
+    expect(createMarkCommandSession).toHaveBeenCalledOnce();
+    expect(createMarkCommandSession).toHaveBeenCalledWith({ ball: 1, code: "ABC234" });
+    expect(screen.getByRole("status", { name: "Card marking status" })).toHaveTextContent(
+      /marking b 1/i,
+    );
+    expect(cell).toHaveAttribute("aria-disabled", "true");
+
+    mark.resolve(privateAck());
+    await waitFor(() => expect(loadSnapshot).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("button", { name: /b.*1.*marked/i })).toHaveFocus();
+    expect(screen.getByRole("status", { name: "Card marking status" })).toHaveTextContent(
+      /b 1 marked/i,
+    );
+  });
+
+  it("keeps a winning mark latched until its lobby sequence is visible", async () => {
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          calledBalls: [1],
+          eventSequence: 4,
+          round: "active",
+        }),
+      )
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          calledBalls: [1],
+          eventSequence: 4,
+          markedBalls: [1],
+          round: "active",
+        }),
+      )
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          calledBalls: [1],
+          eventSequence: 5,
+          markedBalls: [1],
+          round: "active",
+        }),
+      );
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createMarkCommandSession={() => ({ run: async () => activeLobbyAck(5) })}
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /b.*1.*called - mark.*available to mark/i,
+      }),
+    );
+    await screen.findByText(/mark committed.*could not confirm/i);
+    expect(screen.getByRole("button", { name: /i.*16.*unavailable.*pending/i })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh lobby" }));
+    await waitFor(() => expect(loadSnapshot).toHaveBeenCalledTimes(3));
+    expect(screen.getByRole("status", { name: "Card marking status" })).toHaveTextContent(
+      /b 1 marked/i,
+    );
+    expect(screen.getByRole("button", { name: /i.*16.*not called.*cannot/i })).toBeVisible();
+  });
+
+  it("retains an ambiguous mark for explicit same-card replay and blocks competing daubs", async () => {
+    const run = vi
+      .fn<() => Promise<CommandAck>>()
+      .mockRejectedValueOnce(
+        new PrivateLobbyFlowError(
+          "We could not confirm the server response. Retry to safely check the same command.",
+          { ambiguous: true },
+        ),
+      )
+      .mockResolvedValueOnce(privateAck());
+    const createMarkCommandSession = vi.fn(() => ({ run }));
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          calledBalls: [1, 31],
+          round: "active",
+        }),
+      )
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          calledBalls: [1, 31],
+          markedBalls: [1],
+          round: "active",
+        }),
+      );
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createMarkCommandSession={createMarkCommandSession}
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /b.*1.*called - mark.*available to mark/i,
+      }),
+    );
+    expect(await screen.findByRole("button", { name: /retry b 1 mark/i })).toBeVisible();
+    const competing = screen.getByRole("button", {
+      name: /n.*31.*unavailable.*b 1 mark needs confirmation/i,
+    });
+    fireEvent.click(competing);
+    expect(createMarkCommandSession).toHaveBeenCalledOnce();
+    expect(run).toHaveBeenCalledOnce();
+
+    fireEvent.click(screen.getByRole("button", { name: /retry b 1 mark/i }));
+    await waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    expect(createMarkCommandSession).toHaveBeenCalledOnce();
+    expect(await screen.findByRole("button", { name: /b.*1.*marked/i })).toBeVisible();
+  });
+
+  it("retires an ambiguous mark session when authority replaces the card", async () => {
+    const unresolvedRun = vi.fn(async () => {
+      throw new PrivateLobbyFlowError(
+        "We could not confirm the server response. Retry to safely check the same command.",
+        { ambiguous: true },
+      );
+    });
+    const replacementRun = vi.fn<() => Promise<CommandAck>>(
+      () => new Promise<CommandAck>(() => undefined),
+    );
+    const createMarkCommandSession = vi
+      .fn()
+      .mockReturnValueOnce({ run: unresolvedRun })
+      .mockReturnValueOnce({ run: replacementRun });
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          calledBalls: [1],
+          round: "active",
+        }),
+      )
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          calledBalls: [1],
+          cardId: "replacement-card",
+          round: "active",
+        }),
+      );
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createMarkCommandSession={createMarkCommandSession}
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /b.*1.*called - mark.*available to mark/i,
+      }),
+    );
+    await screen.findByRole("button", { name: /retry b 1 mark/i });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh lobby" }));
+    await waitFor(() => expect(loadSnapshot).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("button", { name: /retry b 1 mark/i })).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /b.*1.*called - mark.*available to mark/i }),
+    );
+    expect(createMarkCommandSession).toHaveBeenCalledTimes(2);
+    expect(replacementRun).toHaveBeenCalledOnce();
+  });
+
+  it("ignores a late rejection after authority replaces the card", async () => {
+    const originalMark = deferred<CommandAck>();
+    const replacementRun = vi.fn<() => Promise<CommandAck>>(
+      () => new Promise<CommandAck>(() => undefined),
+    );
+    const createMarkCommandSession = vi
+      .fn()
+      .mockReturnValueOnce({ run: () => originalMark.promise })
+      .mockReturnValueOnce({ run: replacementRun });
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          calledBalls: [1],
+          round: "active",
+        }),
+      )
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          calledBalls: [1],
+          cardId: "replacement-card",
+          round: "active",
+        }),
+      );
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createMarkCommandSession={createMarkCommandSession}
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /b.*1.*called - mark.*available to mark/i,
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Refresh lobby" }));
+    await waitFor(() => expect(loadSnapshot).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      originalMark.reject(
+        new PrivateLobbyFlowError(
+          "We could not confirm the server response. Retry to safely check the same command.",
+          { ambiguous: true },
+        ),
+      );
+      await originalMark.promise.catch(() => undefined);
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /b.*1.*called - mark.*available to mark/i }),
+    );
+    expect(createMarkCommandSession).toHaveBeenCalledTimes(2);
+    expect(replacementRun).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a created card discoverable but unavailable before the round starts", async () => {
+    const createMarkCommandSession = vi.fn(() => ({ run: vi.fn(async () => privateAck()) }));
+    const { rerender } = render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createMarkCommandSession={createMarkCommandSession}
+        loadSnapshot={async () => snapshotFor("host", { absentPlayerOverridden: true })}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const cell = await screen.findByRole("button", {
+      name: /b.*1.*unavailable.*round has not started/i,
+    });
+    expect(cell).toHaveTextContent("Locked");
+    fireEvent.click(cell);
+    expect(createMarkCommandSession).not.toHaveBeenCalled();
+    expect(screen.getByRole("status", { name: "Card marking status" })).toHaveTextContent(
+      /round has not started/i,
+    );
+
+    rerender(
+      <PrivateLobbyPage
+        code="ABC234"
+        createMarkCommandSession={createMarkCommandSession}
+        loadSnapshot={async () =>
+          snapshotFor("host", {
+            absentPlayerOverridden: true,
+            calledBalls: [1],
+            round: "active",
+          })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    expect(
+      await screen.findByRole("button", {
+        name: /b.*1.*called - mark.*available to mark/i,
+      }),
+    ).toBeVisible();
+    expect(screen.getByRole("status", { name: "Card marking status" })).toBeEmptyDOMElement();
+  });
+
   it("copies only credential-free sharing values and provides a focused fallback", async () => {
     const copyText = vi
       .fn<(value: string) => Promise<void>>()
@@ -295,7 +734,7 @@ describe("PrivateLobbyPage", () => {
     expect(invite).toHaveProperty("selectionEnd", String(invite.getAttribute("value")).length);
     expect(invite).toHaveValue("https://play.example/?code=ABC234#join-lobby");
     expect(copyText).toHaveBeenLastCalledWith("https://play.example/?code=ABC234#join-lobby");
-    expect(screen.getByRole("status")).toHaveTextContent(
+    expect(screen.getByRole("status", { name: "Sharing status" })).toHaveTextContent(
       /select the invite url and copy it manually/i,
     );
     expect(String(copyText.mock.calls[1]?.[0])).not.toMatch(/session|secret|participant/i);
@@ -344,10 +783,16 @@ describe("PrivateLobbyPage", () => {
     await waitFor(() => expect(invite).toHaveFocus());
     expect(invite).toHaveProperty("selectionStart", 0);
     expect(invite).toHaveProperty("selectionEnd", String(invite.getAttribute("value")).length);
-    expect(screen.getByRole("status")).toHaveTextContent(/sharing failed.*copy it manually/i);
+    expect(screen.getByRole("status", { name: "Sharing status" })).toHaveTextContent(
+      /sharing failed.*copy it manually/i,
+    );
 
     fireEvent.click(share);
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(/sharing canceled/i));
+    await waitFor(() =>
+      expect(screen.getByRole("status", { name: "Sharing status" })).toHaveTextContent(
+        /sharing canceled/i,
+      ),
+    );
   });
 
   it("shows setup controls only to the host", async () => {

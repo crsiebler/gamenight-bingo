@@ -5,17 +5,21 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import type {
   AutomaticCallInterval,
   CallConfiguration,
+  CommandAck,
   ParticipantSummary,
   Snapshot,
 } from "@gamenight-bingo/contracts";
+import { BingoCard, type BingoCardCell } from "@gamenight-bingo/ui";
 
 import { Button, LinkButton, Option } from "@/atoms";
 import { Select } from "@/molecules";
 import { THEME_OPTIONS } from "@/organisms";
 import {
+  MarkCardCommandSession,
   PrivateLobbyFlowError,
   WaitingLobbyCommandSession,
   loadPrivateLobbySnapshot,
+  type MarkCardCommandSelection,
   type WaitingLobbyCommand,
   type WaitingLobbyCommandAck,
 } from "@/lib/private-lobby-flow";
@@ -36,11 +40,25 @@ type PrivateLobbyPageProps = {
   createCommandSession?: (command: WaitingLobbyCommand) => {
     run(): Promise<WaitingLobbyCommandAck>;
   };
+  createMarkCommandSession?: (command: MarkCardCommandSelection) => {
+    run(): Promise<CommandAck>;
+  };
 };
 
 type PendingCommandReconciliation = {
   command: WaitingLobbyCommand;
   eventSequence: WaitingLobbyCommandAck["eventSequence"];
+};
+
+type PendingMarkReconciliation = {
+  ball: number;
+  cardId: string;
+  eventSequence: number | null;
+};
+
+type UnresolvedMark = {
+  ball: number;
+  cardId: string;
 };
 
 const AUTOMATIC_INTERVALS = [5, 10, 30, 60, 120] as const;
@@ -113,6 +131,20 @@ function snapshotConfirmsCommand(
     : snapshot.round !== null && snapshot.round.stage !== "waiting";
 }
 
+function snapshotConfirmsMark(snapshot: Snapshot, pending: PendingMarkReconciliation): boolean {
+  return (
+    snapshot.ownCard?.id === pending.cardId &&
+    snapshot.ownMarks.some((mark) => mark.ball === pending.ball) &&
+    (pending.eventSequence === null ||
+      (snapshot.lastEventSequence !== null && snapshot.lastEventSequence >= pending.eventSequence))
+  );
+}
+
+function cardBallLabel(snapshot: Snapshot, ball: number): string {
+  const index = snapshot.ownCard?.cells.findIndex((cell) => cell === ball) ?? -1;
+  return index < 0 ? String(ball) : `${["B", "I", "N", "G", "O"][index % 5]} ${ball}`;
+}
+
 function snapshotErrorMessage(error: unknown): string {
   if (!(error instanceof PrivateLobbyFlowError)) {
     return "We could not load this private lobby. Try again.";
@@ -131,6 +163,8 @@ function snapshotErrorMessage(error: unknown): string {
 
 const defaultCreateCommandSession = (command: WaitingLobbyCommand) =>
   new WaitingLobbyCommandSession(command);
+const defaultCreateMarkCommandSession = (command: MarkCardCommandSelection) =>
+  new MarkCardCommandSession(command);
 
 export function PrivateLobbyPage({
   code,
@@ -140,6 +174,7 @@ export function PrivateLobbyPage({
   shareInvite,
   origin,
   createCommandSession = defaultCreateCommandSession,
+  createMarkCommandSession = defaultCreateMarkCommandSession,
 }: PrivateLobbyPageProps) {
   const codeRef = useRef<HTMLInputElement>(null);
   const inviteRef = useRef<HTMLInputElement>(null);
@@ -148,10 +183,18 @@ export function PrivateLobbyPage({
     runner: ReturnType<NonNullable<PrivateLobbyPageProps["createCommandSession"]>>;
   } | null>(null);
   const commandPendingRef = useRef(false);
+  const markCommandPendingRef = useRef(false);
+  const markCommandSessionRef = useRef<{
+    ball: number;
+    cardId: string;
+    runner: ReturnType<NonNullable<PrivateLobbyPageProps["createMarkCommandSession"]>>;
+  } | null>(null);
   const loadGenerationRef = useRef(0);
   const refreshPendingRef = useRef(false);
   const refreshPromiseRef = useRef<Promise<Snapshot | null> | null>(null);
   const pendingCommandRef = useRef<PendingCommandReconciliation | null>(null);
+  const pendingMarkRef = useRef<PendingMarkReconciliation | null>(null);
+  const unresolvedMarkRef = useRef<UnresolvedMark | null>(null);
   const setupDirtyRef = useRef(false);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [snapshotMessage, setSnapshotMessage] = useState("Loading private lobby...");
@@ -161,6 +204,9 @@ export function PrivateLobbyPage({
   const [shareMessage, setShareMessage] = useState("");
   const [commandMessage, setCommandMessage] = useState("");
   const [commandPending, setCommandPending] = useState(false);
+  const [markMessage, setMarkMessage] = useState("");
+  const [markPendingBall, setMarkPendingBall] = useState<number | null>(null);
+  const [unresolvedMark, setUnresolvedMark] = useState<UnresolvedMark | null>(null);
   const [patternId, setPatternId] = useState("");
   const [callMode, setCallMode] = useState<CallConfiguration["mode"]>("manual");
   const [interval, setInterval] = useState("30");
@@ -212,6 +258,34 @@ export function PrivateLobbyPage({
         if (pendingConfirmed) {
           pendingCommandRef.current = null;
           setPendingCommand(null);
+        }
+        const retainedMark = markCommandSessionRef.current;
+        if (retainedMark !== null) {
+          if (next.ownCard?.id !== retainedMark.cardId) {
+            markCommandSessionRef.current = null;
+            unresolvedMarkRef.current = null;
+            setUnresolvedMark(null);
+            setMarkPendingBall(null);
+            setMarkMessage("Your card changed. The prior mark command will not be replayed.");
+          } else if (next.ownMarks.some((mark) => mark.ball === retainedMark.ball)) {
+            markCommandSessionRef.current = null;
+            unresolvedMarkRef.current = null;
+            setUnresolvedMark(null);
+            setMarkPendingBall(null);
+            setMarkMessage(`${cardBallLabel(next, retainedMark.ball)} marked.`);
+          }
+        }
+        const pendingMark = pendingMarkRef.current;
+        if (pendingMark !== null) {
+          if (next.ownCard?.id !== pendingMark.cardId) {
+            pendingMarkRef.current = null;
+            setMarkPendingBall(null);
+            setMarkMessage("The round changed before the prior card mark could be shown.");
+          } else if (snapshotConfirmsMark(next, pendingMark)) {
+            pendingMarkRef.current = null;
+            setMarkPendingBall(null);
+            setMarkMessage(`${cardBallLabel(next, pendingMark.ball)} marked.`);
+          }
         }
         setSnapshotErrorCode(undefined);
         setSnapshotErrorRetryable(true);
@@ -366,6 +440,98 @@ export function PrivateLobbyPage({
     );
   }
 
+  async function markCard(ball: number) {
+    const currentSnapshot = snapshot;
+    if (
+      markCommandPendingRef.current ||
+      pendingMarkRef.current !== null ||
+      currentSnapshot === null ||
+      currentSnapshot.ownCard === null
+    ) {
+      return;
+    }
+    const card = currentSnapshot.ownCard;
+    const unresolved = unresolvedMarkRef.current;
+    if (unresolved !== null && (unresolved.ball !== ball || unresolved.cardId !== card.id)) {
+      return;
+    }
+
+    markCommandPendingRef.current = true;
+    const retainedSession = markCommandSessionRef.current;
+    if (
+      retainedSession !== null &&
+      (retainedSession.ball !== ball || retainedSession.cardId !== card.id)
+    ) {
+      markCommandPendingRef.current = false;
+      return;
+    }
+    const session =
+      retainedSession ??
+      ({
+        ball,
+        cardId: card.id,
+        runner: createMarkCommandSession({ ball, code }),
+      } satisfies NonNullable<typeof markCommandSessionRef.current>);
+    markCommandSessionRef.current = session;
+    unresolvedMarkRef.current = null;
+    setUnresolvedMark(null);
+    setMarkPendingBall(ball);
+    setMarkMessage(`Marking ${cardBallLabel(currentSnapshot, ball)}...`);
+
+    let acknowledgement: CommandAck;
+    try {
+      acknowledgement = await session.runner.run();
+      if (markCommandSessionRef.current !== session) {
+        markCommandPendingRef.current = false;
+        return;
+      }
+      markCommandSessionRef.current = null;
+    } catch (error) {
+      if (markCommandSessionRef.current !== session) {
+        markCommandPendingRef.current = false;
+        return;
+      }
+      const flowError =
+        error instanceof PrivateLobbyFlowError
+          ? error
+          : new PrivateLobbyFlowError("We could not confirm the mark response.", {
+              ambiguous: true,
+            });
+      if (flowError.ambiguous || flowError.retryable) {
+        const unresolvedMark = { ball, cardId: card.id };
+        unresolvedMarkRef.current = unresolvedMark;
+        setUnresolvedMark(unresolvedMark);
+      } else {
+        markCommandSessionRef.current = null;
+      }
+      setMarkPendingBall(null);
+      setMarkMessage(flowError.message);
+      markCommandPendingRef.current = false;
+      return;
+    }
+
+    const pending: PendingMarkReconciliation = {
+      ball,
+      cardId: card.id,
+      eventSequence:
+        acknowledgement.scope === "active-lobby" ? acknowledgement.eventSequence : null,
+    };
+    pendingMarkRef.current = pending;
+    setMarkMessage("Mark committed. Refreshing your card...");
+    try {
+      const next = await refreshSnapshot("Refreshing your card...", { mandatory: true });
+      if (next === null || !snapshotConfirmsMark(next, pending)) {
+        throw new Error("The refreshed snapshot did not include the mark.");
+      }
+    } catch {
+      setMarkMessage(
+        "The mark committed, but we could not confirm the latest card. Refresh the lobby.",
+      );
+    } finally {
+      markCommandPendingRef.current = false;
+    }
+  }
+
   if (snapshot === null) {
     const unavailable = snapshotErrorCode === "NOT_FOUND" || snapshotErrorCode === "LOBBY_EXPIRED";
     return (
@@ -429,6 +595,30 @@ export function PrivateLobbyPage({
         : snapshot.round.stage === "waiting"
           ? "Waiting for the host to start the round."
           : "The round has started.";
+  const cardUnavailableReason =
+    unresolvedMark !== null && snapshot.ownCard?.id === unresolvedMark.cardId
+      ? `the ${cardBallLabel(snapshot, unresolvedMark.ball)} mark needs confirmation`
+      : snapshot.round === null || snapshot.round.stage === "waiting"
+        ? "the round has not started"
+        : snapshot.round.stage === "result"
+          ? "the round result is being shown"
+          : snapshot.round.stage === "ended"
+            ? "the round has ended"
+            : undefined;
+  const calledBalls = new Set(snapshot.calls.map((call) => call.ball));
+  const markedBalls = new Set(snapshot.ownMarks.map((mark) => mark.ball));
+  const cardCells: BingoCardCell[] =
+    snapshot.ownCard?.cells.map((cell) => ({
+      value: cell,
+      state:
+        cell === "FREE"
+          ? "free"
+          : markedBalls.has(cell)
+            ? "marked"
+            : calledBalls.has(cell)
+              ? "called"
+              : "uncalled",
+    })) ?? [];
 
   return (
     <main aria-busy={snapshotPending} className="private-lobby-shell">
@@ -511,7 +701,7 @@ export function PrivateLobbyPage({
               </Button>
             ) : null}
           </div>
-          <p aria-live="polite" className="share-status" role="status">
+          <p aria-label="Sharing status" aria-live="polite" className="share-status" role="status">
             {shareMessage}
           </p>
         </section>
@@ -626,6 +816,35 @@ export function PrivateLobbyPage({
           ) : (
             <p className="waiting-note">{waitingMessage}</p>
           )}
+        </section>
+
+        <section aria-labelledby="card-heading" className="lobby-panel card-panel">
+          <p className="eyebrow">Your numbers</p>
+          <h2 id="card-heading">Your card</h2>
+          {snapshot.ownCard === null ? (
+            <p className="waiting-note">
+              Your card is unavailable while you wait for the next round.
+            </p>
+          ) : (
+            <BingoCard
+              cells={cardCells}
+              onMark={(ball) => void markCard(ball)}
+              pendingBall={markPendingBall}
+              statusMessage={markMessage}
+              {...(cardUnavailableReason === undefined
+                ? {}
+                : { unavailableReason: cardUnavailableReason })}
+            />
+          )}
+          {unresolvedMark !== null && snapshot.ownCard?.id === unresolvedMark.cardId ? (
+            <Button
+              onClick={() => void markCard(unresolvedMark.ball)}
+              type="button"
+              variant="outline"
+            >
+              Retry {cardBallLabel(snapshot, unresolvedMark.ball)} mark
+            </Button>
+          ) : null}
         </section>
 
         <section aria-labelledby="participants-heading" className="lobby-panel roster-panel">
