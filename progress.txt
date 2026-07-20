@@ -66,6 +66,9 @@ Next story: US-001
 - Card mark clients accept both participant-private acknowledgements and active-lobby acknowledgements because a winning mark can open the co-winner window; reconcile the authoritative own mark against the same card and require a lobby sequence only for active-lobby scope.
 - Browser live projections apply only contiguous lobby events, ignore stale duplicates, reject lower-sequence snapshots, validate every locally projected snapshot, and request one resync for gaps or inconsistent references; automatic call events update the visible call immediately but require a snapshot to restore the next authoritative deadline without replaying call-history announcements. Participant-private marks carry no lobby sequence, so merge them append-only only within the same card and preserve them across equal-sequence snapshots.
 - Browser realtime adapters retry transient ticket, handshake, and retryable server failures with bounded delays and a fresh single-use ticket; strict non-retryable ticket errors terminate in an explicit expired state rather than looping or reusing credentials.
+- Replayable browser commands retain their original pre-command reconciliation baseline because live state may already include an ambiguous first attempt before its same-ID replay acknowledgement arrives.
+- Retained round commands stay bound to their original round, while absence overrides stay bound to an exact participant presence generation; recheck the latest authoritative snapshot both when it arrives and after an ambiguous response, and treat a later lobby sequence as proof that an acknowledged command was included even when the state has since advanced.
+- When stage-changing controls or native dialogs disappear, restore or move focus after the conditional UI unmounts to a surviving control or section heading; handling Escape in parallel with the native dialog cancel event can lose focus to the document body.
 
 Append-only iteration log
 -------------------------
@@ -4824,3 +4827,54 @@ Targeted re-review outcome for US-049 at 2026-07-18 13:10:00 MST:
 - Staged self-review found and fixed one lifecycle nuance with a failing regression: grace-to-absent is a valid same-generation presence transition, while only lower generations are stale.
 - Final checks: focused suites pass 93 tests; root test passes workspace/type checks with 567 tests and 135 database skips; lint, typecheck, intended formatting, frozen install, production build, and 3 production Playwright tests pass. The final 320px browser pass confirms live summary, card, round details, sharing, setup, and roster order with no horizontal overflow; the local authority exited during that pass, so expected connection-refused console entries remained while the UI correctly showed Offline.
 - No in-scope critical, high, or medium findings remain after the final staged self-review. Residual manual risk is limited to non-Chromium/assistive-technology rendering and a final connected socket pass after the layout-only hierarchy move; the earlier real-socket pass and deterministic final adapter/component coverage exercise those behaviors.
+
+## 2026-07-20 13:32:08 MST - US-050
+- What was implemented
+  - Added server-authorized live host controls for start, pause, resume, Call Next, stage continuation, end-round confirmation, and current player-absence override, with manual/automatic guidance and authoritative countdown context.
+  - Extended the strict browser command client and versioned HTTP dispatcher for every host action while retaining one command ID across ambiguous retries and latching competing controls through acknowledgement plus snapshot reconciliation.
+  - Projected the exact next continuation target in result snapshots, including carried-winner result transitions, and reconciled both active and immediately settled continuation outcomes.
+  - Added persistent host command announcements, stable post-transition focus, round- and presence-generation-fenced retries, native modal description/Escape restoration, uncertain-authority gating, responsive presentation, and comprehensive UI/HTTP/database coverage.
+- Files changed: `AGENTS.md`, `apps/game-server/src/socket-server.test.ts`, `apps/web/src/app/globals.css`, `apps/web/src/components/templates/private-lobby-page.tsx`, `apps/web/src/components/templates/private-lobby-page.test.tsx`, `apps/web/src/lib/private-lobby-flow.ts`, `apps/web/src/lib/private-lobby-flow.test.ts`, `apps/web/src/lobby-entry-http.ts`, `apps/web/src/lobby-entry-http.test.ts`, `packages/contracts/src/v1/game-state.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/round-command-executor.ts`, `packages/database/src/database.integration.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-050 - Build live host controls`
+- Auto approval: `enabled`
+- Checks:
+  - Focused host-control RED tests (expected failures for missing controls, stable focus, carried-result reconciliation, original Call Next baseline, authority gating, modal semantics, stale-round replay, successor-state reconciliation, and presence-generation fencing; pass after implementation)
+  - `bunx vitest run apps/web/src/lib/private-lobby-flow.test.ts apps/web/src/components/templates/private-lobby-page.test.tsx apps/web/src/lobby-entry-http.test.ts packages/database/src/round-command-executor.test.ts` (pass; 4 files and 132 tests)
+  - `bun run test` (pass; typecheck, 33 files passed, 1 database file skipped, 593 tests passed, and 135 database-backed tests skipped)
+  - `TEST_DATABASE_URL=<fresh approved local database> bunx vitest run --maxWorkers=1` (pass; 34 files and 715 tests; serialized to avoid known cross-file admission-fence contention)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - Focused Prettier check for every intended source/test/guidance file (pass)
+  - `bun install --frozen-lockfile` (pass; 393 installs checked with no changes)
+  - `DATABASE_URL=<approved isolated local database> bun run --cwd apps/web build` (pass); final remediated production build also passed with a non-secret loopback placeholder used only for build-time config parsing
+  - `TEST_DATABASE_URL=<approved local database> DATABASE_URL=<same> bun run test:e2e` (pass; 3 production Playwright tests); final no-database rerun passed the smoke test and skipped the 2 database-backed routes as designed
+  - `git diff --check` (pass)
+  - Manual dev-browser verification at desktop and narrow mobile viewport (pass; manual and automatic modes, 10-second countdown, Call Next, pause/resume, command announcements, stable focus, described confirmation modal, Escape focus restoration, 44px controls, and no horizontal overflow)
+  - Mobile Lighthouse snapshot (accessibility 100 and best practices 100)
+- Implementation agents:
+  - Recommended: `frontend-developer`, `accessibility-tester`
+  - Used: `frontend-developer`, `accessibility-tester` for command lifecycle, carried-result reconciliation, stable focus/modal semantics, authorization gating, and focused test/browser risks
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and UI-triggered `ui-designer`, followed by targeted re-review after each remediation cycle
+  - Findings: fixed uncertain-authority mutation access, replacement-round command/modal hazards, successor-state latching, disappearing-control focus loss, focus contrast, modal-local authority status, visible disabled action continuity, and exact presence-generation retry lifetime; final specialist passes reported no actionable findings
+- Decisions (why):
+  - Reused the existing strict HTTP command session instead of adding a second Socket.IO mutation path because the fallback endpoints already provide stable IDs, correlated acknowledgements, and authoritative post-commit reconciliation.
+  - Stored Call Next's starting call count on the retained session because an ambiguous first attempt may commit and arrive live before the same-ID replay acknowledgement.
+  - Projected `continuationPatternId` from durable initial/current patterns rather than deriving valid progression in the browser, keeping action availability server-authoritative.
+  - Kept result continuation reconciliation valid for both active and result stages because a prior winner's latest-ball mark can immediately satisfy the next pattern.
+  - Used a native modal dialog and deferred focus restoration until after unmount because focusing outside an open modal during Escape handling leaves browser focus on the document body.
+  - Accepted a higher authoritative lobby sequence as proof of an acknowledged command even if later activity changed or replaced its immediate state, while refusing to replay an unacknowledged round-scoped command after round replacement.
+  - Kept absence-override retries across round replacement only while the exact participant absence generation remains current and non-overridden; authoritative confirmation or generation/status changes resolve or retire the retained session without replay.
+- **Learnings for future iterations:**
+  - Command-specific reconciliation needs immutable pre-command context when the committed effect is a relative change such as one additional call.
+  - Recheck retained command scope after asynchronous failures as well as during snapshot application because realtime authority can advance while an HTTP response remains in flight.
+  - Result snapshots need an explicit nullable continuation target so terminal patterns cannot accidentally expose continuation while One Line progression remains precisely labeled.
+  - Production browser verification is necessary for native dialog focus; jsdom accepted synchronous focus restoration that Chromium rejected while the modal was still mounted.
+- Known issues / follow-ups:
+  - Parallel database-enabled root runs can exhaust the global lobby-admission Serializable retry budget when independent test files create lobbies concurrently; all 715 tests pass with one worker, and the unchanged standard root command passes without the optional database URL.
+  - The isolated `gamenight_bingo_us050_browser_2` and test databases retain non-destructive verification fixtures; no existing local data was deleted.
+  - The browser console recorded one expected 401 while intentionally opening a disconnected private session before completing the supported same-device rejoin path; successful manual/automatic control paths had no application error.
+  - Unrelated pre-existing untracked browser and Lighthouse artifacts remain untouched and unstaged.
+- Next iteration start:
+  - Implement US-051 winner and result states.
+---

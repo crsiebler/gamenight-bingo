@@ -3009,6 +3009,7 @@ describeDatabase("PostgreSQL durable game state", () => {
     expect(result).toMatchObject({
       generatedAt: generatedAt.toISOString(),
       lobby: { id: state.lobby.id, code: state.lobby.code, status: "active" },
+      round: { stage: "result", continuationPatternId: "standard-two-lines" },
       session: { id: session.id, participantId: participant.id, status: "active" },
       self: { id: participant.id, username: participant.username },
       ownCard: { id: state.round!.cards[0]!.id, participantId: participant.id },
@@ -6029,6 +6030,7 @@ describeDatabase("PostgreSQL durable game state", () => {
         round: {
           stage: "result",
           patternId: "standard-two-lines",
+          continuationPatternId: "standard-blackout",
           result: { winnerParticipantIds: [state.participants[0]!.id] },
         },
       },

@@ -403,6 +403,7 @@ function createRestartLobbyState(): {
           patternId: "standard-one-line",
           callConfiguration: { mode: "automatic", intervalSeconds: 30 },
           stage: "result",
+          continuationPatternId: "standard-two-lines",
           startedAt: startedAt.toISOString(),
           result: {
             triggeringCallId: callId,

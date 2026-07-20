@@ -179,7 +179,7 @@ describe("private lobby flow", () => {
     ).toEqual(["command-start", "command-start"]);
   });
 
-  it("sends exact configure and start requests and returns their acknowledgements", async () => {
+  it("sends exact host control requests and returns their acknowledgements", async () => {
     const request = vi.fn(async (_path: string, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as { commandId: string };
       return Response.json({
@@ -192,22 +192,63 @@ describe("private lobby flow", () => {
         idempotentReplay: false,
       });
     });
-    const configure = new WaitingLobbyCommandSession(
+    const selections = [
       {
-        type: "configure",
-        code: "ABC234",
-        patternId: "shape-x",
-        callConfiguration: { mode: "automatic", intervalSeconds: 10 },
+        selection: {
+          type: "configure" as const,
+          code: "ABC234",
+          patternId: "shape-x",
+          callConfiguration: { mode: "automatic" as const, intervalSeconds: 10 as const },
+        },
+        commandId: "command-configure",
       },
-      { request, nextCommandId: () => "command-configure" },
-    );
-    const start = new WaitingLobbyCommandSession(
-      { type: "start-round", code: "ABC234" },
-      { request, nextCommandId: () => "command-start" },
-    );
+      {
+        selection: { type: "start-round" as const, code: "ABC234" },
+        commandId: "command-start",
+      },
+      {
+        selection: { type: "pause-round" as const, code: "ABC234" },
+        commandId: "command-pause",
+      },
+      {
+        selection: { type: "resume-round" as const, code: "ABC234" },
+        commandId: "command-resume",
+      },
+      {
+        selection: { type: "call-next" as const, code: "ABC234" },
+        commandId: "command-call-next",
+      },
+      {
+        selection: {
+          type: "continue-round" as const,
+          code: "ABC234",
+          patternId: "standard-two-lines",
+        },
+        commandId: "command-continue",
+      },
+      {
+        selection: { type: "end-round" as const, code: "ABC234" },
+        commandId: "command-end",
+      },
+      {
+        selection: {
+          type: "override-absence" as const,
+          code: "ABC234",
+          participantId: "participant-player",
+          presenceGeneration: 3,
+        },
+        commandId: "command-override",
+      },
+    ];
 
-    await expect(configure.run()).resolves.toMatchObject({ eventSequence: 4 });
-    await expect(start.run()).resolves.toMatchObject({ eventSequence: 5 });
+    for (const { commandId, selection } of selections) {
+      await expect(
+        new WaitingLobbyCommandSession(selection, {
+          request,
+          nextCommandId: () => commandId,
+        }).run(),
+      ).resolves.toMatchObject({ commandId });
+    }
     expect(
       request.mock.calls.map(([path, init]) => ({
         path,
@@ -239,6 +280,87 @@ describe("private lobby flow", () => {
             schemaVersion: CONTRACT_SCHEMA_VERSION,
             type: "start-round",
             commandId: "command-start",
+          },
+        },
+      },
+      {
+        path: "/api/v1/lobbies/ABC234/rounds/current/pause",
+        init: {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "content-type": "application/json" },
+          body: {
+            schemaVersion: CONTRACT_SCHEMA_VERSION,
+            type: "pause-round",
+            commandId: "command-pause",
+          },
+        },
+      },
+      {
+        path: "/api/v1/lobbies/ABC234/rounds/current/resume",
+        init: {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "content-type": "application/json" },
+          body: {
+            schemaVersion: CONTRACT_SCHEMA_VERSION,
+            type: "resume-round",
+            commandId: "command-resume",
+          },
+        },
+      },
+      {
+        path: "/api/v1/lobbies/ABC234/rounds/current/call-next",
+        init: {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "content-type": "application/json" },
+          body: {
+            schemaVersion: CONTRACT_SCHEMA_VERSION,
+            type: "call-next",
+            commandId: "command-call-next",
+          },
+        },
+      },
+      {
+        path: "/api/v1/lobbies/ABC234/rounds/current/continue",
+        init: {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "content-type": "application/json" },
+          body: {
+            schemaVersion: CONTRACT_SCHEMA_VERSION,
+            type: "continue-round",
+            commandId: "command-continue",
+            patternId: "standard-two-lines",
+          },
+        },
+      },
+      {
+        path: "/api/v1/lobbies/ABC234/rounds/current/end",
+        init: {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "content-type": "application/json" },
+          body: {
+            schemaVersion: CONTRACT_SCHEMA_VERSION,
+            type: "end-round",
+            commandId: "command-end",
+          },
+        },
+      },
+      {
+        path: "/api/v1/lobbies/ABC234/participants/absence/override",
+        init: {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "content-type": "application/json" },
+          body: {
+            schemaVersion: CONTRACT_SCHEMA_VERSION,
+            type: "override-absence",
+            commandId: "command-override",
+            participantId: "participant-player",
+            presenceGeneration: 3,
           },
         },
       },

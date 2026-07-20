@@ -1,9 +1,15 @@
 import {
+  CallNextCommandSchema,
   CommandAckSchema,
   ConfigureCommandSchema,
+  ContinueRoundCommandSchema,
   CONTRACT_SCHEMA_VERSION,
+  EndRoundCommandSchema,
   ErrorSchema,
   MarkCardCommandSchema,
+  OverrideAbsenceCommandSchema,
+  PauseRoundCommandSchema,
+  ResumeRoundCommandSchema,
   SnapshotMessageSchema,
   StartRoundCommandSchema,
   type CallConfiguration,
@@ -20,7 +26,18 @@ export type WaitingLobbyCommand =
       patternId: string;
       callConfiguration: CallConfiguration;
     }
-  | { type: "start-round"; code: string };
+  | { type: "start-round"; code: string }
+  | { type: "pause-round"; code: string }
+  | { type: "resume-round"; code: string }
+  | { type: "call-next"; code: string }
+  | { type: "continue-round"; code: string; patternId: string }
+  | { type: "end-round"; code: string }
+  | {
+      type: "override-absence";
+      code: string;
+      participantId: string;
+      presenceGeneration: number;
+    };
 
 export type WaitingLobbyCommandAck = Extract<CommandAck, { scope: "active-lobby" }>;
 export type MarkCardCommandSelection = { ball: number; code: string };
@@ -111,24 +128,79 @@ export class WaitingLobbyCommandSession {
   }
 
   async #runCommand(): Promise<WaitingLobbyCommandAck> {
-    const command =
-      this.#selection.type === "configure"
-        ? ConfigureCommandSchema.parse({
-            schemaVersion: CONTRACT_SCHEMA_VERSION,
-            type: "configure",
-            commandId: this.#commandId,
-            patternId: this.#selection.patternId,
-            callConfiguration: this.#selection.callConfiguration,
-          })
-        : StartRoundCommandSchema.parse({
-            schemaVersion: CONTRACT_SCHEMA_VERSION,
-            type: "start-round",
-            commandId: this.#commandId,
-          });
-    const path =
-      this.#selection.type === "configure"
-        ? `/api/v1/lobbies/${this.#selection.code}/configuration`
-        : `/api/v1/lobbies/${this.#selection.code}/rounds/current/start`;
+    let command;
+    let path;
+    switch (this.#selection.type) {
+      case "configure":
+        command = ConfigureCommandSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "configure",
+          commandId: this.#commandId,
+          patternId: this.#selection.patternId,
+          callConfiguration: this.#selection.callConfiguration,
+        });
+        path = `/api/v1/lobbies/${this.#selection.code}/configuration`;
+        break;
+      case "start-round":
+        command = StartRoundCommandSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "start-round",
+          commandId: this.#commandId,
+        });
+        path = `/api/v1/lobbies/${this.#selection.code}/rounds/current/start`;
+        break;
+      case "pause-round":
+        command = PauseRoundCommandSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "pause-round",
+          commandId: this.#commandId,
+        });
+        path = `/api/v1/lobbies/${this.#selection.code}/rounds/current/pause`;
+        break;
+      case "resume-round":
+        command = ResumeRoundCommandSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "resume-round",
+          commandId: this.#commandId,
+        });
+        path = `/api/v1/lobbies/${this.#selection.code}/rounds/current/resume`;
+        break;
+      case "call-next":
+        command = CallNextCommandSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "call-next",
+          commandId: this.#commandId,
+        });
+        path = `/api/v1/lobbies/${this.#selection.code}/rounds/current/call-next`;
+        break;
+      case "continue-round":
+        command = ContinueRoundCommandSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "continue-round",
+          commandId: this.#commandId,
+          patternId: this.#selection.patternId,
+        });
+        path = `/api/v1/lobbies/${this.#selection.code}/rounds/current/continue`;
+        break;
+      case "end-round":
+        command = EndRoundCommandSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "end-round",
+          commandId: this.#commandId,
+        });
+        path = `/api/v1/lobbies/${this.#selection.code}/rounds/current/end`;
+        break;
+      case "override-absence":
+        command = OverrideAbsenceCommandSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "override-absence",
+          commandId: this.#commandId,
+          participantId: this.#selection.participantId,
+          presenceGeneration: this.#selection.presenceGeneration,
+        });
+        path = `/api/v1/lobbies/${this.#selection.code}/participants/absence/override`;
+        break;
+    }
     let response: Response;
     try {
       response = await this.#request(path, {

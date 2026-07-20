@@ -28,6 +28,7 @@ import {
 } from "../generated/prisma/client.js";
 import {
   createPrismaRoundCommandExecutor,
+  nextContinuationPatternId,
   type RoundCommandExecutor,
   type RoundCommandRuntimeOptions,
 } from "./round-command-executor.js";
@@ -3167,6 +3168,7 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
                 currentRound: {
                   select: {
                     id: true,
+                    initialPatternId: true,
                     currentPatternId: true,
                     stage: true,
                     callMode: true,
@@ -3414,7 +3416,16 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
                   break;
                 case "RESULT":
                   if (winnerResult === null) throw new Error("Result rounds require winners.");
-                  roundState = { ...baseRound, stage: "result", startedAt, result: winnerResult };
+                  roundState = {
+                    ...baseRound,
+                    stage: "result",
+                    startedAt,
+                    continuationPatternId: nextContinuationPatternId(
+                      round.initialPatternId,
+                      round.currentPatternId,
+                    ),
+                    result: winnerResult,
+                  };
                   break;
                 case "ENDED":
                   roundState = {

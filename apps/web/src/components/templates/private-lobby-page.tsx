@@ -61,6 +61,8 @@ type PrivateLobbyPageProps = {
 type PendingCommandReconciliation = {
   command: WaitingLobbyCommand;
   eventSequence: WaitingLobbyCommandAck["eventSequence"];
+  roundId: string | null;
+  startingCallCount: number;
 };
 
 type PendingMarkReconciliation = {
@@ -265,13 +267,124 @@ function snapshotConfirmsCommand(
   if (snapshot.lastEventSequence === null || snapshot.lastEventSequence < pending.eventSequence) {
     return false;
   }
-  return pending.command.type === "configure"
-    ? snapshot.round?.patternId === pending.command.patternId &&
+  if (snapshot.lastEventSequence > pending.eventSequence) return true;
+  if (
+    pending.command.type !== "override-absence" &&
+    (pending.roundId === null || snapshot.round?.id !== pending.roundId)
+  ) {
+    return false;
+  }
+  switch (pending.command.type) {
+    case "configure":
+      return (
+        snapshot.round?.patternId === pending.command.patternId &&
         callConfigurationMatches(
           snapshot.round.callConfiguration,
           pending.command.callConfiguration,
         )
-    : snapshot.round !== null && snapshot.round.stage !== "waiting";
+      );
+    case "start-round":
+      return snapshot.round !== null && snapshot.round.stage !== "waiting";
+    case "pause-round":
+      return snapshot.round?.stage === "paused";
+    case "resume-round":
+      return snapshot.round?.stage === "active";
+    case "call-next":
+      return snapshot.calls.length > pending.startingCallCount;
+    case "continue-round":
+      return (
+        (snapshot.round?.stage === "active" || snapshot.round?.stage === "result") &&
+        snapshot.round.patternId === pending.command.patternId
+      );
+    case "end-round":
+      return snapshot.round?.stage === "ended";
+    case "override-absence": {
+      const command = pending.command as Extract<WaitingLobbyCommand, { type: "override-absence" }>;
+      const participant = snapshot.participants.find(({ id }) => id === command.participantId);
+      return (
+        participant?.presence.status === "absent" &&
+        participant.presence.generation === command.presenceGeneration &&
+        participant.presence.overridden
+      );
+    }
+  }
+}
+
+function commandPendingMessage(command: WaitingLobbyCommand): string {
+  switch (command.type) {
+    case "configure":
+      return "Saving lobby setup...";
+    case "start-round":
+      return "Starting the round...";
+    case "pause-round":
+      return "Pausing calling...";
+    case "resume-round":
+      return "Resuming calling...";
+    case "call-next":
+      return "Calling the next ball...";
+    case "continue-round":
+      return "Continuing the round...";
+    case "end-round":
+      return "Ending the round...";
+    case "override-absence":
+      return "Applying the absence override...";
+  }
+}
+
+function commandSuccessMessage(command: WaitingLobbyCommand): string {
+  switch (command.type) {
+    case "configure":
+      return "Lobby setup saved.";
+    case "start-round":
+      return "Round started.";
+    case "pause-round":
+      return "Calling paused.";
+    case "resume-round":
+      return "Calling resumed.";
+    case "call-next":
+      return "Next ball called.";
+    case "continue-round":
+      return "Round continued.";
+    case "end-round":
+      return "Round ended.";
+    case "override-absence":
+      return "Player absence override applied. Calling remains paused until you resume it.";
+  }
+}
+
+function commandActionLabel(command: WaitingLobbyCommand): string {
+  switch (command.type) {
+    case "configure":
+      return "Save setup";
+    case "start-round":
+      return "Start round";
+    case "pause-round":
+      return "Pause calling";
+    case "resume-round":
+      return "Resume calling";
+    case "call-next":
+      return "Call Next";
+    case "continue-round":
+      return "Continue round";
+    case "end-round":
+      return "End round";
+    case "override-absence":
+      return "absence override";
+  }
+}
+
+function absenceOverrideState(
+  snapshot: Snapshot,
+  command: Extract<WaitingLobbyCommand, { type: "override-absence" }>,
+): "pending" | "confirmed" | "stale" {
+  const participant = snapshot.participants.find(({ id }) => id === command.participantId);
+  if (
+    participant?.presence.status !== "absent" ||
+    participant.presence.generation !== command.presenceGeneration
+  ) {
+    return "stale";
+  }
+  return participant.presence.overridden ? "confirmed" : "pending";
 }
 
 function snapshotConfirmsMark(snapshot: Snapshot, pending: PendingMarkReconciliation): boolean {
@@ -325,8 +438,11 @@ export function PrivateLobbyPage({
   const codeRef = useRef<HTMLInputElement>(null);
   const inviteRef = useRef<HTMLInputElement>(null);
   const commandSessionRef = useRef<{
+    command: WaitingLobbyCommand;
     key: string;
+    roundId: string | null;
     runner: ReturnType<NonNullable<PrivateLobbyPageProps["createCommandSession"]>>;
+    startingCallCount: number;
   } | null>(null);
   const commandPendingRef = useRef(false);
   const markCommandPendingRef = useRef(false);
@@ -347,6 +463,13 @@ export function PrivateLobbyPage({
   const recoveringRef = useRef(false);
   const callHistoryRef = useRef<HTMLOListElement>(null);
   const followCallHistoryRef = useRef(true);
+  const liveGameHeadingRef = useRef<HTMLHeadingElement>(null);
+  const hostControlsHeadingRef = useRef<HTMLHeadingElement>(null);
+  const callNextButtonRef = useRef<HTMLButtonElement>(null);
+  const endRoundButtonRef = useRef<HTMLButtonElement>(null);
+  const endRoundCancelRef = useRef<HTMLButtonElement>(null);
+  const endRoundDialogRef = useRef<HTMLDialogElement>(null);
+  const endConfirmationRoundIdRef = useRef<string | null>(null);
   const setupDirtyRef = useRef(false);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [snapshotMessage, setSnapshotMessage] = useState("Loading private lobby...");
@@ -364,11 +487,17 @@ export function PrivateLobbyPage({
   const [interval, setInterval] = useState("30");
   const [setupDirty, setSetupDirty] = useState(false);
   const [pendingCommand, setPendingCommand] = useState<PendingCommandReconciliation | null>(null);
+  const [unresolvedCommand, setUnresolvedCommand] = useState<WaitingLobbyCommand | null>(null);
   const [resolvedOrigin, setResolvedOrigin] = useState(origin ?? "");
   const [nativeShare, setNativeShare] = useState<NonNullable<typeof shareInvite> | null>(null);
   const [connectionState, setConnectionState] =
     useState<PrivateLobbyConnectionState>("snapshot-syncing");
   const [callAnnouncement, setCallAnnouncement] = useState("");
+  const [endConfirmationOpen, setEndConfirmationOpen] = useState(false);
+  const [restoreEndRoundFocus, setRestoreEndRoundFocus] = useState(false);
+  const [commandFocusTarget, setCommandFocusTarget] = useState<
+    "host-controls" | "live-game" | null
+  >(null);
   const [clockNow, setClockNow] = useState(() => Date.now());
 
   function setSetupDraftDirty(dirty: boolean) {
@@ -377,12 +506,73 @@ export function PrivateLobbyPage({
   }
 
   function reconcilePendingState(next: Snapshot): PendingCommandReconciliation | null {
+    if (
+      callNextButtonRef.current !== null &&
+      document.activeElement === callNextButtonRef.current &&
+      (next.round?.stage !== "active" || next.calls.length >= 75)
+    ) {
+      setCommandFocusTarget(
+        next.round?.stage === "active" ||
+          next.round?.stage === "paused" ||
+          next.round?.stage === "result"
+          ? "host-controls"
+          : "live-game",
+      );
+    }
+    const retainedCommand = commandSessionRef.current;
+    if (!commandPendingRef.current && retainedCommand !== null) {
+      if (retainedCommand.command.type === "override-absence") {
+        const state = absenceOverrideState(next, retainedCommand.command);
+        if (state !== "pending") {
+          commandSessionRef.current = null;
+          setUnresolvedCommand(null);
+          setCommandMessage(
+            state === "confirmed"
+              ? commandSuccessMessage(retainedCommand.command)
+              : "The participant's absence changed. The prior command will not be replayed.",
+          );
+        }
+      } else if (retainedCommand.roundId !== null && retainedCommand.roundId !== next.round?.id) {
+        commandSessionRef.current = null;
+        setUnresolvedCommand(null);
+        setCommandMessage(
+          "The prior command belongs to a previous round and will not be replayed.",
+        );
+      }
+    }
     const pending = pendingCommandRef.current;
     const confirmedCommand =
       pending !== null && snapshotConfirmsCommand(next, pending) ? pending : null;
     if (confirmedCommand !== null) {
       pendingCommandRef.current = null;
       setPendingCommand(null);
+      setCommandMessage(
+        next.lastEventSequence !== null && next.lastEventSequence > confirmedCommand.eventSequence
+          ? "Command committed. The lobby has since advanced."
+          : commandSuccessMessage(confirmedCommand.command),
+      );
+      if (confirmedCommand.command.type === "end-round") {
+        setCommandFocusTarget("live-game");
+      } else if (
+        confirmedCommand.command.type === "start-round" ||
+        confirmedCommand.command.type === "pause-round" ||
+        confirmedCommand.command.type === "resume-round" ||
+        confirmedCommand.command.type === "continue-round" ||
+        confirmedCommand.command.type === "override-absence"
+      ) {
+        setCommandFocusTarget("host-controls");
+      } else if (
+        confirmedCommand.command.type === "call-next" &&
+        (next.round?.stage !== "active" || next.calls.length >= 75)
+      ) {
+        setCommandFocusTarget(
+          next.round?.stage === "active" ||
+            next.round?.stage === "paused" ||
+            next.round?.stage === "result"
+            ? "host-controls"
+            : "live-game",
+        );
+      }
     }
     const retainedMark = markCommandSessionRef.current;
     if (retainedMark !== null) {
@@ -557,6 +747,7 @@ export function PrivateLobbyPage({
         }
         snapshotRef.current = next;
         setSnapshot(next);
+        reconcilePendingState(next);
         const requiresAutomaticTimer =
           next.round?.stage === "active" && next.round.callConfiguration.mode === "automatic";
         if (event.type === "call") {
@@ -565,6 +756,7 @@ export function PrivateLobbyPage({
         if (requiresAutomaticTimer && (event.type === "call" || event.type === "stage")) {
           requestResync(event.eventSequence);
         }
+        if (event.type === "co-winner-result") requestResync(event.eventSequence);
       },
       onPrivateEvent(event: ParticipantPrivateEvent) {
         const current = snapshotRef.current;
@@ -657,6 +849,57 @@ export function PrivateLobbyPage({
     if (history !== null && followCallHistoryRef.current) history.scrollTop = history.scrollHeight;
   }, [snapshot?.calls.length, snapshot?.round?.id]);
 
+  useEffect(() => {
+    if (!endConfirmationOpen) return;
+    const dialog = endRoundDialogRef.current;
+    if (dialog !== null && !dialog.open) {
+      if (typeof dialog.showModal === "function") dialog.showModal();
+      else dialog.setAttribute("open", "");
+    }
+    endRoundCancelRef.current?.focus();
+  }, [endConfirmationOpen]);
+
+  useEffect(() => {
+    if (
+      endConfirmationOpen &&
+      (snapshot?.self.presence.status !== "connected" ||
+        (enableRealtime && connectionState !== "connected" && connectionState !== "recovered"))
+    ) {
+      endRoundCancelRef.current?.focus();
+    }
+  }, [connectionState, enableRealtime, endConfirmationOpen, snapshot?.self.presence.status]);
+
+  useEffect(() => {
+    if (
+      endConfirmationOpen &&
+      (snapshot?.round?.id !== endConfirmationRoundIdRef.current ||
+        (snapshot.round.stage !== "active" &&
+          snapshot.round.stage !== "paused" &&
+          snapshot.round.stage !== "result"))
+    ) {
+      endConfirmationRoundIdRef.current = null;
+      setEndConfirmationOpen(false);
+      setCommandFocusTarget("live-game");
+    }
+  }, [endConfirmationOpen, snapshot?.round?.id, snapshot?.round?.stage]);
+
+  useEffect(() => {
+    if (endConfirmationOpen || !restoreEndRoundFocus) return;
+    if (endRoundButtonRef.current?.disabled === false) endRoundButtonRef.current.focus();
+    else hostControlsHeadingRef.current?.focus();
+    setRestoreEndRoundFocus(false);
+  }, [endConfirmationOpen, restoreEndRoundFocus]);
+
+  useEffect(() => {
+    if (commandFocusTarget === null) return;
+    const target =
+      commandFocusTarget === "host-controls"
+        ? hostControlsHeadingRef.current
+        : liveGameHeadingRef.current;
+    target?.focus();
+    setCommandFocusTarget(null);
+  }, [commandFocusTarget, snapshot?.round?.stage]);
+
   const inviteUrl = resolvedOrigin
     ? (() => {
         const url = new URL("/", resolvedOrigin);
@@ -683,19 +926,59 @@ export function PrivateLobbyPage({
     }
   }
 
-  async function runCommand(command: WaitingLobbyCommand, pendingMessage: string) {
+  async function runCommand(
+    command: WaitingLobbyCommand,
+    pendingMessage = commandPendingMessage(command),
+  ) {
     if (commandPendingRef.current) return;
-    commandPendingRef.current = true;
     const key = JSON.stringify(command);
-    if (commandSessionRef.current?.key !== key) {
-      commandSessionRef.current = { key, runner: createCommandSession(command) };
+    const retainedCommand = commandSessionRef.current;
+    if (
+      retainedCommand?.key === key &&
+      command.type === "override-absence" &&
+      snapshotRef.current !== null
+    ) {
+      const state = absenceOverrideState(snapshotRef.current, command);
+      if (state !== "pending") {
+        commandSessionRef.current = null;
+        setUnresolvedCommand(null);
+        setCommandMessage(
+          state === "confirmed"
+            ? commandSuccessMessage(command)
+            : "The participant's absence changed. The prior command will not be replayed.",
+        );
+        return;
+      }
     }
+    if (
+      retainedCommand?.key === key &&
+      command.type !== "override-absence" &&
+      retainedCommand.roundId !== null &&
+      retainedCommand.roundId !== snapshotRef.current?.round?.id
+    ) {
+      commandSessionRef.current = null;
+      setUnresolvedCommand(null);
+      setCommandMessage("The prior command belongs to a previous round and will not be replayed.");
+      return;
+    }
+    commandPendingRef.current = true;
+    if (commandSessionRef.current?.key !== key) {
+      commandSessionRef.current = {
+        command,
+        key,
+        roundId: snapshotRef.current?.round?.id ?? null,
+        runner: createCommandSession(command),
+        startingCallCount: snapshotRef.current?.calls.length ?? 0,
+      };
+    }
+    const session = commandSessionRef.current;
     setCommandPending(true);
     setCommandMessage(pendingMessage);
     let acknowledgement: WaitingLobbyCommandAck;
     try {
-      acknowledgement = await commandSessionRef.current.runner.run();
+      acknowledgement = await session.runner.run();
       commandSessionRef.current = null;
+      setUnresolvedCommand(null);
     } catch (error) {
       const flowError =
         error instanceof PrivateLobbyFlowError
@@ -703,14 +986,48 @@ export function PrivateLobbyPage({
           : new PrivateLobbyFlowError("We could not confirm the command response.", {
               ambiguous: true,
             });
-      if (!flowError.ambiguous && !flowError.retryable) commandSessionRef.current = null;
-      setCommandMessage(flowError.message);
+      let resultMessage = flowError.message;
+      if (flowError.ambiguous || flowError.retryable) {
+        const latest = snapshotRef.current;
+        if (command.type === "override-absence" && latest !== null) {
+          const state = absenceOverrideState(latest, command);
+          if (state === "pending") {
+            setUnresolvedCommand(command);
+          } else {
+            commandSessionRef.current = null;
+            setUnresolvedCommand(null);
+            resultMessage =
+              state === "confirmed"
+                ? commandSuccessMessage(command)
+                : "The participant's absence changed. The prior command will not be replayed.";
+          }
+        } else if (
+          command.type !== "override-absence" &&
+          session.roundId !== null &&
+          session.roundId !== latest?.round?.id
+        ) {
+          commandSessionRef.current = null;
+          setUnresolvedCommand(null);
+          resultMessage = "The prior command belongs to a previous round and will not be replayed.";
+        } else {
+          setUnresolvedCommand(command);
+        }
+      } else {
+        commandSessionRef.current = null;
+        setUnresolvedCommand(null);
+      }
+      setCommandMessage(resultMessage);
       commandPendingRef.current = false;
       setCommandPending(false);
       return;
     }
 
-    const pending = { command, eventSequence: acknowledgement.eventSequence };
+    const pending = {
+      command,
+      eventSequence: acknowledgement.eventSequence,
+      roundId: session.roundId,
+      startingCallCount: session.startingCallCount,
+    };
     pendingCommandRef.current = pending;
     setPendingCommand(pending);
     setCommandMessage("Command committed. Refreshing the lobby...");
@@ -730,7 +1047,11 @@ export function PrivateLobbyPage({
         );
         setSetupDraftDirty(false);
       }
-      setCommandMessage(command.type === "configure" ? "Lobby setup saved." : "Round started.");
+      setCommandMessage(
+        next.lastEventSequence !== null && next.lastEventSequence > pending.eventSequence
+          ? "Command committed. The lobby has since advanced."
+          : commandSuccessMessage(command),
+      );
     } catch {
       setCommandMessage(
         "The command committed, but we could not confirm the latest lobby state. Refresh the lobby.",
@@ -743,7 +1064,14 @@ export function PrivateLobbyPage({
 
   function saveSetup(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (commandPendingRef.current || pendingCommandRef.current !== null) return;
+    if (
+      commandPendingRef.current ||
+      pendingCommandRef.current !== null ||
+      hostAuthorityUnavailable ||
+      (unresolvedCommand !== null && unresolvedCommand.type !== "configure")
+    ) {
+      return;
+    }
     const callConfiguration: CallConfiguration =
       callMode === "manual"
         ? { mode: "manual" }
@@ -879,15 +1207,27 @@ export function PrivateLobbyPage({
   const themeName = THEME_OPTIONS.find((theme) => theme.id === snapshot.lobby.themeId)?.name;
   const hostCanConfigure = snapshot.self.role === "host" && snapshot.round?.stage === "waiting";
   const selfConnected = snapshot.self.presence.status === "connected";
+  const realtimeAuthorityUncertain =
+    enableRealtime && connectionState !== "connected" && connectionState !== "recovered";
+  const hostAuthorityUnavailable = !selfConnected || realtimeAuthorityUncertain;
   const blockingAbsentPlayer = snapshot.participants.some(
     (participant) =>
+      participant.role === "player" &&
       participant.roundEligibility === "playing" &&
       participant.presence.status === "absent" &&
       !participant.presence.overridden,
   );
-  const waitingControlsUnavailable = commandPending || pendingCommand !== null;
-  const startUnavailable =
-    waitingControlsUnavailable || setupDirty || !selfConnected || blockingAbsentPlayer;
+  const waitingControlsUnavailable =
+    hostAuthorityUnavailable ||
+    commandPending ||
+    pendingCommand !== null ||
+    unresolvedCommand !== null;
+  const setupCommandUnavailable =
+    hostAuthorityUnavailable ||
+    commandPending ||
+    pendingCommand !== null ||
+    (unresolvedCommand !== null && unresolvedCommand.type !== "configure");
+  const startUnavailable = waitingControlsUnavailable || setupDirty || blockingAbsentPlayer;
   const duplicatePatternNames = new Set(
     patterns.map(({ name }) => name).filter((name, index, names) => names.indexOf(name) !== index),
   );
@@ -910,6 +1250,48 @@ export function PrivateLobbyPage({
     snapshot.timer?.kind === "automatic-call"
       ? Math.max(0, Math.ceil((Date.parse(snapshot.timer.deadline) - clockNow) / 1000))
       : null;
+  const eligibleAbsences = snapshot.participants.filter(
+    (participant) =>
+      participant.role === "player" &&
+      participant.roundEligibility === "playing" &&
+      participant.presence.status === "absent" &&
+      !participant.presence.overridden,
+  );
+  const roundStage = snapshot.round?.stage;
+  const showHostControls =
+    snapshot.self.role === "host" &&
+    (roundStage === "active" ||
+      roundStage === "paused" ||
+      roundStage === "result" ||
+      eligibleAbsences.length > 0);
+  const hostControlsUnavailable =
+    hostAuthorityUnavailable ||
+    commandPending ||
+    pendingCommand !== null ||
+    unresolvedCommand !== null;
+  const canCallNext = roundStage === "active" && snapshot.calls.length < 75;
+  const continuationPatternId =
+    snapshot.round?.stage === "result" ? snapshot.round.continuationPatternId : null;
+  const continuationPatternName =
+    continuationPatternId === undefined || continuationPatternId === null
+      ? null
+      : (patternCatalog.find(({ id }) => id === continuationPatternId)?.name ??
+        continuationPatternId);
+  const hostControlGuidance = realtimeAuthorityUncertain
+    ? "Host actions become available after the realtime snapshot is synchronized."
+    : !selfConnected
+      ? "Host actions are unavailable until authoritative host presence is connected."
+      : blockingAbsentPlayer
+        ? "A current player is absent. Reconnect or apply the current absence override before progressing."
+        : roundStage === "paused"
+          ? "Calling is paused. Resume calling when everyone is ready, or end the round."
+          : roundStage === "result"
+            ? continuationPatternName === null
+              ? "The result is settled. End this terminal round when everyone is ready."
+              : `The result is settled. Continue to ${continuationPatternName} or end the round.`
+            : snapshot.round?.callConfiguration.mode === "automatic"
+              ? `Automatic calling is set to every ${snapshot.round.callConfiguration.intervalSeconds} seconds. Call Next is also safe to use while no command is pending.`
+              : "Manual mode only advances when you choose Call Next.";
 
   const waitingMessage =
     snapshot.round === null
@@ -1002,6 +1384,17 @@ export function PrivateLobbyPage({
       <p aria-live="polite" className="refresh-status">
         {snapshotMessage}
       </p>
+      {snapshot.self.role === "host" ? (
+        <p
+          aria-atomic="true"
+          aria-label="Host command status"
+          aria-live="polite"
+          className="command-status"
+          role="status"
+        >
+          {commandMessage}
+        </p>
+      ) : null}
 
       <div className="private-lobby-grid">
         <section
@@ -1012,7 +1405,14 @@ export function PrivateLobbyPage({
           <div className="live-game-heading">
             <div>
               <p className="eyebrow">On the board</p>
-              <h2 id="live-game-heading">Live game status</h2>
+              <h2
+                className="section-focus-target"
+                id="live-game-heading"
+                ref={liveGameHeadingRef}
+                tabIndex={-1}
+              >
+                Live game status
+              </h2>
             </div>
             {enableRealtime ? (
               <strong className="connection-state" data-state={connectionState}>
@@ -1099,6 +1499,126 @@ export function PrivateLobbyPage({
             </Button>
           ) : null}
         </section>
+
+        {showHostControls ? (
+          <section
+            aria-busy={commandPending || pendingCommand !== null}
+            aria-labelledby="host-controls-heading"
+            className="lobby-panel host-controls-panel"
+            role="region"
+          >
+            <p className="eyebrow">Game authority</p>
+            <h2
+              className="section-focus-target"
+              id="host-controls-heading"
+              ref={hostControlsHeadingRef}
+              tabIndex={-1}
+            >
+              Host controls
+            </h2>
+            <p className="host-control-guidance">{hostControlGuidance}</p>
+            <div className="host-round-actions">
+              {roundStage === "active" ? (
+                <Button
+                  disabled={hostControlsUnavailable}
+                  onClick={() => void runCommand({ type: "pause-round", code })}
+                  type="button"
+                  variant="outline"
+                >
+                  Pause calling
+                </Button>
+              ) : null}
+              {roundStage === "paused" ? (
+                <Button
+                  disabled={hostControlsUnavailable || blockingAbsentPlayer}
+                  onClick={() => void runCommand({ type: "resume-round", code })}
+                  type="button"
+                >
+                  Resume calling
+                </Button>
+              ) : null}
+              {canCallNext ? (
+                <Button
+                  disabled={hostControlsUnavailable || blockingAbsentPlayer}
+                  onClick={() => void runCommand({ type: "call-next", code })}
+                  ref={callNextButtonRef}
+                  type="button"
+                >
+                  Call Next
+                </Button>
+              ) : null}
+              {roundStage === "result" &&
+              continuationPatternId !== undefined &&
+              continuationPatternId !== null ? (
+                <Button
+                  disabled={hostControlsUnavailable || blockingAbsentPlayer}
+                  onClick={() =>
+                    void runCommand({
+                      type: "continue-round",
+                      code,
+                      patternId: continuationPatternId,
+                    })
+                  }
+                  type="button"
+                >
+                  Continue to {continuationPatternName}
+                </Button>
+              ) : null}
+              {roundStage === "active" || roundStage === "paused" || roundStage === "result" ? (
+                <Button
+                  disabled={hostControlsUnavailable}
+                  onClick={() => {
+                    endConfirmationRoundIdRef.current = snapshot.round?.id ?? null;
+                    setEndConfirmationOpen(true);
+                  }}
+                  ref={endRoundButtonRef}
+                  tone="danger"
+                  type="button"
+                  variant="outline"
+                >
+                  End round
+                </Button>
+              ) : null}
+            </div>
+            {unresolvedCommand !== null ? (
+              <Button
+                disabled={hostAuthorityUnavailable || commandPending}
+                onClick={() => void runCommand(unresolvedCommand)}
+                type="button"
+                variant="outline"
+              >
+                Retry {commandActionLabel(unresolvedCommand)}
+              </Button>
+            ) : null}
+            {eligibleAbsences.length > 0 ? (
+              <div className="absence-overrides">
+                <h3>Current player absences</h3>
+                <p>An override applies only to this absence. It never resumes calling.</p>
+                {eligibleAbsences.map((participant) => {
+                  if (participant.presence.status !== "absent") return null;
+                  return (
+                    <Button
+                      disabled={hostControlsUnavailable}
+                      key={participant.id}
+                      onClick={() =>
+                        void runCommand({
+                          type: "override-absence",
+                          code,
+                          participantId: participant.id,
+                          presenceGeneration: participant.presence.generation,
+                        })
+                      }
+                      type="button"
+                      variant="outline"
+                    >
+                      Override absence for {participant.username}
+                    </Button>
+                  );
+                })}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
 
         <section
           aria-labelledby="round-details-heading"
@@ -1294,20 +1814,22 @@ export function PrivateLobbyPage({
                 </Select>
               ) : null}
               <p className="setup-guidance">
-                {!selfConnected
-                  ? "Start becomes available when your authoritative presence is connected."
-                  : blockingAbsentPlayer
-                    ? "A current player is absent. Reconnect or apply the current absence override before starting."
-                    : pendingCommand !== null
-                      ? pendingCommand.command.type === "configure"
-                        ? "Setup committed. Waiting for the authoritative lobby state."
-                        : "Start committed. Waiting for the authoritative lobby state."
-                      : setupDirty
-                        ? "Save setup before starting the round."
-                        : "Setup is saved and the host is connected."}
+                {realtimeAuthorityUncertain
+                  ? "Host actions become available after the realtime snapshot is synchronized."
+                  : !selfConnected
+                    ? "Start becomes available when your authoritative presence is connected."
+                    : blockingAbsentPlayer
+                      ? "A current player is absent. Reconnect or apply the current absence override before starting."
+                      : pendingCommand !== null
+                        ? pendingCommand.command.type === "configure"
+                          ? "Setup committed. Waiting for the authoritative lobby state."
+                          : "Start committed. Waiting for the authoritative lobby state."
+                        : setupDirty
+                          ? "Save setup before starting the round."
+                          : "Setup is saved and the host is connected."}
               </p>
               <div className="host-actions">
-                <Button aria-disabled={waitingControlsUnavailable} type="submit" variant="outline">
+                <Button aria-disabled={setupCommandUnavailable} type="submit" variant="outline">
                   Save setup
                 </Button>
                 <Button
@@ -1321,10 +1843,17 @@ export function PrivateLobbyPage({
                 >
                   Start round
                 </Button>
+                {unresolvedCommand?.type === "start-round" ? (
+                  <Button
+                    disabled={hostAuthorityUnavailable || commandPending}
+                    onClick={() => void runCommand(unresolvedCommand)}
+                    type="button"
+                    variant="outline"
+                  >
+                    Retry Start round
+                  </Button>
+                ) : null}
               </div>
-              <p aria-live="polite" className="command-status">
-                {commandMessage}
-              </p>
             </form>
           ) : (
             <p className="waiting-note">{waitingMessage}</p>
@@ -1358,6 +1887,71 @@ export function PrivateLobbyPage({
           </ul>
         </section>
       </div>
+      {endConfirmationOpen ? (
+        <dialog
+          aria-describedby="end-round-description"
+          aria-modal="true"
+          aria-labelledby="end-round-heading"
+          className="end-round-dialog"
+          onCancel={(event) => {
+            event.preventDefault();
+            endConfirmationRoundIdRef.current = null;
+            setRestoreEndRoundFocus(true);
+            setEndConfirmationOpen(false);
+          }}
+          ref={endRoundDialogRef}
+        >
+          <h2 id="end-round-heading">End this round?</h2>
+          <p id="end-round-description">Calling stops immediately. This action cannot be undone.</p>
+          {hostAuthorityUnavailable ? (
+            <p aria-label="End round availability" aria-live="polite" role="status">
+              Host actions are unavailable until authoritative host presence and realtime state are
+              ready.
+            </p>
+          ) : null}
+          <div className="host-round-actions">
+            <Button
+              onClick={() => {
+                endConfirmationRoundIdRef.current = null;
+                setRestoreEndRoundFocus(true);
+                setEndConfirmationOpen(false);
+              }}
+              ref={endRoundCancelRef}
+              type="button"
+              variant="outline"
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={
+                hostAuthorityUnavailable ||
+                commandPending ||
+                pendingCommand !== null ||
+                unresolvedCommand !== null
+              }
+              onClick={() => {
+                if (
+                  hostAuthorityUnavailable ||
+                  commandPendingRef.current ||
+                  pendingCommandRef.current !== null ||
+                  commandSessionRef.current !== null ||
+                  snapshot.round?.id !== endConfirmationRoundIdRef.current
+                ) {
+                  return;
+                }
+                endConfirmationRoundIdRef.current = null;
+                setEndConfirmationOpen(false);
+                setCommandFocusTarget("host-controls");
+                void runCommand({ type: "end-round", code });
+              }}
+              tone="danger"
+              type="button"
+            >
+              End round
+            </Button>
+          </div>
+        </dialog>
+      ) : null}
     </main>
   );
 }

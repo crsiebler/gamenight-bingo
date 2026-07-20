@@ -481,6 +481,63 @@ h2 {
   opacity: 0.55;
 }
 
+.host-controls-panel {
+  background: #fff8df;
+  border-color: var(--bingo-gold);
+}
+
+.section-focus-target:focus {
+  box-shadow: 0 0 0 0.125rem #173f5f;
+  outline: 0.25rem solid #ffffff;
+  outline-offset: 0.25rem;
+}
+
+.host-control-guidance {
+  color: var(--bingo-text-muted);
+  line-height: 1.5;
+}
+
+.host-round-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.absence-overrides {
+  border-top: 0.125rem solid #d9cba9;
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+}
+
+.absence-overrides h3 {
+  margin-bottom: 0.35rem;
+}
+
+.absence-overrides p {
+  line-height: 1.45;
+  margin-top: 0;
+}
+
+.absence-overrides button {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.end-round-dialog {
+  background: #ffffff;
+  border: 0.1875rem solid #8f1d1d;
+  border-radius: 1.25rem;
+  box-shadow: 0 1.5rem 4rem rgb(16 42 67 / 28%);
+  color: var(--bingo-ink);
+  margin: auto;
+  max-width: min(32rem, calc(100vw - 2rem));
+  padding: 1.5rem;
+}
+
+.end-round-dialog::backdrop {
+  background: rgb(16 42 67 / 72%);
+}
+
 .waiting-note {
   background: #e9f8f2;
   border-left: 0.3rem solid #26735b;
@@ -936,6 +993,8 @@ h2 {
   }
 
   .live-game-panel,
+  .host-controls-panel,
+  .end-round-dialog,
   .current-call,
   .call-mode-status,
   .pattern-miniature {

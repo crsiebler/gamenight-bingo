@@ -540,6 +540,16 @@ function callConfiguration(round: CurrentRound) {
   };
 }
 
+export function nextContinuationPatternId(
+  initialPatternId: string,
+  currentPatternId: string,
+): string | null {
+  if (initialPatternId !== "standard-one-line") return null;
+  if (currentPatternId === "standard-one-line") return "standard-two-lines";
+  if (currentPatternId === "standard-two-lines") return "standard-blackout";
+  return null;
+}
+
 async function publicRoundState(
   transaction: Prisma.TransactionClient,
   lobbyId: string,
@@ -605,7 +615,16 @@ async function publicRoundState(
             };
       candidate =
         round.stage === "RESULT"
-          ? { ...base, stage: "result", startedAt, result }
+          ? {
+              ...base,
+              stage: "result",
+              startedAt,
+              continuationPatternId: nextContinuationPatternId(
+                round.initialPatternId,
+                round.currentPatternId,
+              ),
+              result,
+            }
           : {
               ...base,
               stage: "ended",

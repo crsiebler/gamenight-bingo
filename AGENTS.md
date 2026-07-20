@@ -390,6 +390,13 @@ then refactor while green.
 - After an acknowledgement, queue any required authoritative refresh behind an
   in-flight refresh, verify its snapshot sequence and expected state include the
   commit, and keep stale mutation controls latched if reconciliation fails.
+- Retained command sessions must keep any pre-command reconciliation baseline
+  captured on the first attempt; an ambiguous replay may run after live state
+  already reflects the original commit and must not recapture that newer state.
+- Scope retained round commands to their original round and absence overrides to
+  the exact participant presence generation. Recheck the latest authoritative
+  snapshot both when it arrives and after an ambiguous response; a later lobby
+  sequence proves an acknowledged command was included even if state advanced.
 - Card mark clients must accept both strict participant-private acknowledgements
   and active-lobby acknowledgements because a winning mark can open the
   co-winner window; reconcile the own mark against the same card, and require
@@ -406,6 +413,9 @@ then refactor while green.
   errors/instructions programmatically.
 - Provide visible focus, logical focus order, generous touch targets, and text
   equivalents for card and status states.
+- When a stage change or native dialog close removes the focused control, move
+  focus after that conditional UI unmounts to the surviving action or section
+  heading; let the native dialog cancel event own Escape handling.
 - Never communicate called/marked, connection, pause, winner, or error state by
   color, sound, or motion alone.
 - Use controlled live regions for new calls and important state changes; avoid

@@ -15,6 +15,7 @@ import {
   LobbyCodeSchema,
   LobbyEntryResponseSchema,
   MarkCardCommandSchema,
+  OverrideAbsenceCommandSchema,
   PauseRoundCommandSchema,
   PatternCatalogResponseSchema,
   RealtimeTicketRequestSchema,
@@ -391,9 +392,11 @@ function parseRoundCommand(resource: string, value: unknown): MutationCommand | 
                   ? ContinueRoundCommandSchema
                   : resource === "rounds/current/end"
                     ? EndRoundCommandSchema
-                    : resource === "cards/own/marks"
-                      ? MarkCardCommandSchema
-                      : null;
+                    : resource === "participants/absence/override"
+                      ? OverrideAbsenceCommandSchema
+                      : resource === "cards/own/marks"
+                        ? MarkCardCommandSchema
+                        : null;
   if (schema === null) return null;
   const parsed = schema.safeParse(value);
   return parsed.success ? parsed.data : null;
@@ -546,7 +549,7 @@ export function createLobbyEntryHttpHandler(dependencies: LobbyEntryHttpDependen
     }
 
     const commandMatch =
-      /^\/api\/v1\/lobbies\/([^/]+)\/(configuration|rounds|rounds\/current\/(?:start|pause|resume|call-next|continue|end)|cards\/own\/marks)$/.exec(
+      /^\/api\/v1\/lobbies\/([^/]+)\/(configuration|rounds|rounds\/current\/(?:start|pause|resume|call-next|continue|end)|participants\/absence\/override|cards\/own\/marks)$/.exec(
         pathname,
       );
     if (commandMatch !== null) {

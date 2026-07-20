@@ -38,7 +38,8 @@ function snapshotFor(
     absentPlayerOverridden?: boolean;
     markedBalls?: readonly number[];
     patternId?: string;
-    round?: "waiting" | "active" | null;
+    continuationPatternId?: string | null;
+    round?: "waiting" | "active" | "paused" | "result" | "ended" | null;
   } = {},
 ): Snapshot {
   const selfId =
@@ -136,7 +137,7 @@ function snapshotFor(
       code: "ABC234",
       hostParticipantId: "participant-host",
       themeId: "animals",
-      ...(options.round === "active"
+      ...(options.round !== undefined && options.round !== "waiting" && options.round !== null
         ? { status: "active" as const, roundId: "round-1" }
         : { status: "waiting" as const }),
       createdAt: NOW,
@@ -150,18 +151,50 @@ function snapshotFor(
     },
     self,
     participants,
-    round:
-      options.round === null
-        ? null
-        : {
-            id: "round-1",
-            lobbyId: "lobby-1",
-            patternId: options.patternId ?? "standard-one-line",
-            callConfiguration: options.callConfiguration ?? { mode: "manual" },
-            ...(options.round === "active"
-              ? { stage: "active" as const, startedAt: NOW }
-              : { stage: "waiting" as const, createdAt: NOW }),
+    round: (() => {
+      if (options.round === null) return null;
+      const base = {
+        id: "round-1",
+        lobbyId: "lobby-1",
+        patternId: options.patternId ?? "standard-one-line",
+        callConfiguration: options.callConfiguration ?? { mode: "manual" as const },
+      };
+      if (options.round === "active") return { ...base, stage: "active" as const, startedAt: NOW };
+      if (options.round === "paused") {
+        return {
+          ...base,
+          stage: "paused" as const,
+          startedAt: NOW,
+          pauseReason: "participant-absent" as const,
+          pausedAt: NOW,
+        };
+      }
+      if (options.round === "result") {
+        return {
+          ...base,
+          stage: "result" as const,
+          startedAt: NOW,
+          continuationPatternId: options.continuationPatternId ?? null,
+          result: {
+            triggeringCallId: "call-1",
+            openedAt: "2026-07-18T11:59:57.000Z",
+            closesAt: "2026-07-18T11:59:59.000Z",
+            settledAt: NOW,
+            winnerParticipantIds: ["participant-host"],
           },
+        };
+      }
+      if (options.round === "ended") {
+        return {
+          ...base,
+          stage: "ended" as const,
+          startedAt: NOW,
+          endedAt: NOW,
+          result: null,
+        };
+      }
+      return { ...base, stage: "waiting" as const, createdAt: NOW };
+    })(),
     ownCard:
       options.round === null || role === "waiting"
         ? null
@@ -842,6 +875,8 @@ describe("PrivateLobbyPage", () => {
         shareInvite={null}
       />,
     );
+    await screen.findByRole("region", { name: "Live game status" });
+    act(() => handlers?.onSnapshot(baseline));
     fireEvent.change(await screen.findByRole("combobox", { name: "Call mode" }), {
       target: { value: "automatic" },
     });
@@ -1622,6 +1657,1102 @@ describe("PrivateLobbyPage", () => {
     expect(screen.getByRole("option", { name: "X (Letter)" })).toBeVisible();
   });
 
+  it("shows only authoritative host controls for the current stage and call mode", async () => {
+    const { rerender } = render(
+      <PrivateLobbyPage
+        code="ABC234"
+        loadSnapshot={async () =>
+          snapshotFor("player", { absentPlayerOverridden: true, round: "active" })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: /lobby abc234/i });
+    expect(screen.queryByRole("region", { name: "Host controls" })).toBeNull();
+
+    rerender(
+      <PrivateLobbyPage
+        code="ABC234"
+        loadSnapshot={async () =>
+          snapshotFor("host", { absentPlayerOverridden: true, round: "active" })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    const manualControls = await screen.findByRole("region", { name: "Host controls" });
+    expect(within(manualControls).getByRole("button", { name: "Pause calling" })).toBeVisible();
+    expect(within(manualControls).getByRole("button", { name: "Call Next" })).toBeVisible();
+    expect(within(manualControls).getByRole("button", { name: "End round" })).toBeVisible();
+    expect(within(manualControls).getByText(/manual mode.*only advances/i)).toBeVisible();
+    expect(within(manualControls).queryByRole("button", { name: /resume/i })).toBeNull();
+    expect(within(manualControls).queryByRole("button", { name: /continue/i })).toBeNull();
+
+    rerender(
+      <PrivateLobbyPage
+        code="ABC234"
+        loadSnapshot={async () =>
+          snapshotFor("host", {
+            absentPlayerOverridden: true,
+            callConfiguration: { mode: "automatic", intervalSeconds: 10 },
+            round: "active",
+          })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    const automaticControls = await screen.findByRole("region", { name: "Host controls" });
+    expect(within(automaticControls).getByRole("button", { name: "Call Next" })).toBeVisible();
+    expect(within(automaticControls).getByText(/automatic.*10 seconds/i)).toBeVisible();
+  });
+
+  it("offers only eligible player absence overrides and keeps resume blocked", async () => {
+    const { rerender } = render(
+      <PrivateLobbyPage
+        code="ABC234"
+        loadSnapshot={async () => snapshotFor("host", { round: "paused" })}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const controls = await screen.findByRole("region", { name: "Host controls" });
+    expect(within(controls).getByRole("button", { name: "Resume calling" })).toBeDisabled();
+    expect(within(controls).getByText(/current player is absent/i)).toBeVisible();
+    expect(
+      within(controls).getByRole("button", { name: "Override absence for Drew" }),
+    ).toBeVisible();
+    expect(
+      within(controls).queryByRole("button", { name: /override absence for casey/i }),
+    ).toBeNull();
+    expect(
+      within(controls).queryByRole("button", { name: /override absence for robin/i }),
+    ).toBeNull();
+
+    rerender(
+      <PrivateLobbyPage
+        code="ABC234"
+        loadSnapshot={async () =>
+          snapshotFor("host", { absentPlayerOverridden: true, round: "paused" })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    expect(await screen.findByRole("button", { name: "Resume calling" })).toBeVisible();
+  });
+
+  it("disables every host mutation while authoritative host presence is absent", async () => {
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        loadSnapshot={async () =>
+          snapshotFor("host", {
+            absentPlayerOverridden: false,
+            hostPresence: "absent",
+            round: "active",
+          })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const controls = await screen.findByRole("region", { name: "Host controls" });
+    expect(within(controls).getByRole("button", { name: "Pause calling" })).toBeDisabled();
+    expect(within(controls).getByRole("button", { name: "End round" })).toBeDisabled();
+    expect(
+      within(controls).getByRole("button", { name: "Override absence for Drew" }),
+    ).toBeDisabled();
+    expect(within(controls).getByRole("button", { name: "Call Next" })).toBeDisabled();
+    expect(
+      within(controls).queryByRole("button", { name: /override absence for casey/i }),
+    ).toBeNull();
+  });
+
+  it("disables host mutations while realtime authority is uncertain", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const requestResync = vi.fn();
+    const createCommandSession = vi.fn(() => ({
+      run: () => new Promise<ReturnType<typeof activeLobbyAck>>(() => undefined),
+    }));
+    const baseline = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      eventSequence: 1,
+      round: "active",
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync };
+        }}
+        createCommandSession={createCommandSession}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const pause = await screen.findByRole("button", { name: "Pause calling" });
+    const callNext = screen.getByRole("button", { name: "Call Next" });
+    expect(pause).toBeDisabled();
+    expect(callNext).toBeDisabled();
+    act(() => handlers?.onSnapshot(baseline));
+    await waitFor(() => expect(pause).toBeEnabled());
+
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "call",
+          eventSequence: 3,
+          occurredAt: NOW,
+          call: { id: "call-3", roundId: "round-1", position: 1, ball: 1, calledAt: NOW },
+        }),
+      ),
+    );
+    expect(requestResync).toHaveBeenCalledWith(1);
+    expect(pause).toBeDisabled();
+    expect(callNext).toBeDisabled();
+    fireEvent.click(pause);
+    expect(createCommandSession).not.toHaveBeenCalled();
+
+    act(() => handlers?.onConnectionState("offline"));
+    expect(pause).toBeDisabled();
+  });
+
+  it("disables retained retries when the host becomes absent", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const run = vi.fn(async () => {
+      throw new PrivateLobbyFlowError(
+        "We could not confirm the server response. Retry to safely check the same command.",
+        { ambiguous: true },
+      );
+    });
+    const baseline = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      eventSequence: 1,
+      round: "active",
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        createCommandSession={() => ({ run })}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    await screen.findByRole("region", { name: "Host controls" });
+    act(() => handlers?.onSnapshot(baseline));
+    fireEvent.click(screen.getByRole("button", { name: "Pause calling" }));
+    const retry = await screen.findByRole("button", { name: "Retry Pause calling" });
+
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "presence",
+          eventSequence: 2,
+          occurredAt: NOW,
+          presence: {
+            participantId: "participant-host",
+            generation: 1,
+            status: "absent",
+            absentSince: NOW,
+            changedAt: NOW,
+            overridden: false,
+          },
+        }),
+      ),
+    );
+
+    expect(retry).toBeDisabled();
+    fireEvent.click(retry);
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("disables end confirmation when the host becomes absent", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const baseline = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      eventSequence: 1,
+      round: "active",
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    await screen.findByRole("region", { name: "Host controls" });
+    act(() => handlers?.onSnapshot(baseline));
+    fireEvent.click(screen.getByRole("button", { name: "End round" }));
+    const confirm = within(screen.getByRole("dialog", { name: "End this round?" })).getByRole(
+      "button",
+      { name: "End round" },
+    );
+    confirm.focus();
+
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "presence",
+          eventSequence: 2,
+          occurredAt: NOW,
+          presence: {
+            participantId: "participant-host",
+            generation: 1,
+            status: "absent",
+            absentSince: NOW,
+            changedAt: NOW,
+            overridden: false,
+          },
+        }),
+      ),
+    );
+
+    expect(confirm).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    expect(screen.getByRole("status", { name: "End round availability" })).toHaveTextContent(
+      /host actions are unavailable/i,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("heading", { name: "Host controls" })).toHaveFocus();
+  });
+
+  it("closes end confirmation when the current round is replaced", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const baseline = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      eventSequence: 1,
+      round: "active",
+    });
+    const replacementBase = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      eventSequence: 2,
+      round: "active",
+    });
+    const replacement = SnapshotSchema.parse({
+      ...replacementBase,
+      lobby: { ...replacementBase.lobby, roundId: "round-2" },
+      round: { ...replacementBase.round, id: "round-2" },
+      ownCard: { ...replacementBase.ownCard, id: "card-round-2", roundId: "round-2" },
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    await screen.findByRole("region", { name: "Host controls" });
+    act(() => handlers?.onSnapshot(baseline));
+    fireEvent.click(screen.getByRole("button", { name: "End round" }));
+
+    act(() => handlers?.onSnapshot(replacement));
+
+    expect(screen.queryByRole("dialog", { name: "End this round?" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Live game status" })).toHaveFocus();
+  });
+
+  it("labels only the authoritative continuation target from a result snapshot", async () => {
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        loadSnapshot={async () =>
+          snapshotFor("host", {
+            absentPlayerOverridden: true,
+            calledBalls: [1],
+            continuationPatternId: "standard-two-lines",
+            eventSequence: 8,
+            round: "result",
+          })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const controls = await screen.findByRole("region", { name: "Host controls" });
+    expect(within(controls).getByRole("button", { name: "Continue to Two Lines" })).toBeVisible();
+    expect(within(controls).getByText(/result is settled.*continue to two lines/i)).toBeVisible();
+    expect(within(controls).queryByRole("button", { name: /call next/i })).toBeNull();
+  });
+
+  it("reconciles a continuation that immediately settles the next stage", async () => {
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          calledBalls: [1],
+          continuationPatternId: "standard-two-lines",
+          eventSequence: 8,
+          round: "result",
+        }),
+      )
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          calledBalls: [1],
+          continuationPatternId: "standard-blackout",
+          eventSequence: 9,
+          patternId: "standard-two-lines",
+          round: "result",
+        }),
+      );
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createCommandSession={() => ({ run: async () => activeLobbyAck(9) })}
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Continue to Two Lines" }));
+
+    expect(await screen.findByRole("button", { name: "Continue to Blackout" })).toBeEnabled();
+    expect(screen.getByRole("status", { name: "Host command status" })).toHaveTextContent(
+      "Round continued.",
+    );
+  });
+
+  it("suppresses duplicate host commands until acknowledgement and snapshot reconciliation", async () => {
+    const acknowledgement = deferred<ReturnType<typeof activeLobbyAck>>();
+    const commands: unknown[] = [];
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          eventSequence: 1,
+          round: "active",
+        }),
+      )
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          eventSequence: 2,
+          round: "paused",
+        }),
+      );
+    const createCommandSession = vi.fn((command: unknown) => {
+      commands.push(command);
+      return { run: () => acknowledgement.promise };
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createCommandSession={createCommandSession}
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const pause = await screen.findByRole("button", { name: "Pause calling" });
+    fireEvent.click(pause);
+    fireEvent.click(pause);
+    expect(createCommandSession).toHaveBeenCalledOnce();
+    expect(commands).toEqual([{ type: "pause-round", code: "ABC234" }]);
+    expect(pause).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Call Next" })).toBeDisabled();
+
+    acknowledgement.resolve(activeLobbyAck(2));
+    expect(await screen.findByRole("button", { name: "Resume calling" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Pause calling" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Host controls" })).toHaveFocus();
+    expect(screen.getByRole("status", { name: "Host command status" })).toHaveTextContent(
+      /calling paused/i,
+    );
+  });
+
+  it("retains an ambiguous host command for same-action replay and blocks competing actions", async () => {
+    const run = vi
+      .fn<() => Promise<ReturnType<typeof activeLobbyAck>>>()
+      .mockRejectedValueOnce(
+        new PrivateLobbyFlowError(
+          "We could not confirm the server response. Retry to safely check the same command.",
+          { ambiguous: true },
+        ),
+      )
+      .mockImplementationOnce(() => new Promise(() => undefined));
+    const createCommandSession = vi.fn(() => ({ run }));
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createCommandSession={createCommandSession}
+        loadSnapshot={async () =>
+          snapshotFor("host", { absentPlayerOverridden: true, round: "active" })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Pause calling" }));
+    const retry = await screen.findByRole("button", { name: "Retry Pause calling" });
+    expect(screen.getByRole("button", { name: "Call Next" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "End round" })).toBeDisabled();
+
+    fireEvent.click(retry);
+    fireEvent.click(retry);
+    expect(createCommandSession).toHaveBeenCalledOnce();
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("reconciles an ambiguous Call Next replay from its original call baseline", async () => {
+    const run = vi
+      .fn<() => Promise<ReturnType<typeof activeLobbyAck>>>()
+      .mockRejectedValueOnce(
+        new PrivateLobbyFlowError(
+          "We could not confirm the server response. Retry to safely check the same command.",
+          { ambiguous: true },
+        ),
+      )
+      .mockResolvedValueOnce(activeLobbyAck(2));
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          calledBalls: [1],
+          eventSequence: 1,
+          round: "active",
+        }),
+      )
+      .mockResolvedValue(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          calledBalls: [1, 17],
+          eventSequence: 2,
+          round: "active",
+        }),
+      );
+    const createCommandSession = vi.fn(() => ({ run }));
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createCommandSession={createCommandSession}
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Call Next" }));
+    await screen.findByRole("button", { name: "Retry Call Next" });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh lobby" }));
+    await waitFor(() => expect(loadSnapshot).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("button", { name: "Retry Call Next" }));
+
+    await waitFor(() => expect(loadSnapshot).toHaveBeenCalledTimes(3));
+    expect(createCommandSession).toHaveBeenCalledOnce();
+    expect(screen.getByRole("status", { name: "Host command status" })).toHaveTextContent(
+      "Next ball called.",
+    );
+    expect(screen.getByRole("button", { name: "Call Next" })).toBeEnabled();
+  });
+
+  it("does not replay a retained Call Next command against a replacement round", async () => {
+    const run = vi
+      .fn<() => Promise<ReturnType<typeof activeLobbyAck>>>()
+      .mockRejectedValueOnce(
+        new PrivateLobbyFlowError(
+          "We could not confirm the server response. Retry to safely check the same command.",
+          { ambiguous: true },
+        ),
+      )
+      .mockResolvedValueOnce(activeLobbyAck(2));
+    const initial = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      calledBalls: [1],
+      eventSequence: 1,
+      round: "active",
+    });
+    const replacementBase = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      calledBalls: [1, 17],
+      eventSequence: 2,
+      round: "active",
+    });
+    const replacement = SnapshotSchema.parse({
+      ...replacementBase,
+      lobby: { ...replacementBase.lobby, roundId: "round-2" },
+      round: { ...replacementBase.round, id: "round-2" },
+      ownCard: { ...replacementBase.ownCard, id: "card-round-2", roundId: "round-2" },
+      calls: replacementBase.calls.map((call) => ({ ...call, roundId: "round-2" })),
+    });
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValue(replacement);
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createCommandSession={() => ({ run })}
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Call Next" }));
+    await screen.findByRole("button", { name: "Retry Call Next" });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh lobby" }));
+    await waitFor(() => expect(loadSnapshot).toHaveBeenCalledTimes(2));
+
+    await screen.findByText(/prior command belongs to a previous round/i);
+    expect(run).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Retry Call Next" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Call Next" })).toBeEnabled();
+  });
+
+  it("retains a generation-scoped absence override retry across round replacement", async () => {
+    const run = vi
+      .fn<() => Promise<ReturnType<typeof activeLobbyAck>>>()
+      .mockRejectedValueOnce(
+        new PrivateLobbyFlowError(
+          "We could not confirm the server response. Retry to safely check the same command.",
+          { ambiguous: true },
+        ),
+      )
+      .mockResolvedValueOnce(activeLobbyAck(3));
+    const replacementSnapshot = (overridden: boolean, eventSequence: number) => {
+      const base = snapshotFor("host", {
+        absentPlayerOverridden: overridden,
+        eventSequence,
+        round: "paused",
+      });
+      return SnapshotSchema.parse({
+        ...base,
+        lobby: { ...base.lobby, roundId: "round-2" },
+        round: { ...base.round, id: "round-2" },
+        ownCard: { ...base.ownCard, id: "card-round-2", roundId: "round-2" },
+      });
+    };
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(
+        snapshotFor("host", { absentPlayerOverridden: false, eventSequence: 1, round: "paused" }),
+      )
+      .mockResolvedValueOnce(replacementSnapshot(false, 2))
+      .mockResolvedValueOnce(replacementSnapshot(true, 3));
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createCommandSession={() => ({ run })}
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Override absence for Drew" }));
+    await screen.findByRole("button", { name: "Retry absence override" });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh lobby" }));
+    await waitFor(() => expect(loadSnapshot).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("button", { name: "Retry absence override" }));
+
+    await screen.findByText(/absence override applied/i);
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("retires an absence override retry when the presence generation changes", async () => {
+    const run = vi.fn(async () => {
+      throw new PrivateLobbyFlowError(
+        "We could not confirm the server response. Retry to safely check the same command.",
+        { ambiguous: true },
+      );
+    });
+    const changedBase = snapshotFor("host", {
+      absentPlayerOverridden: false,
+      eventSequence: 2,
+      round: "paused",
+    });
+    const changedGeneration = SnapshotSchema.parse({
+      ...changedBase,
+      participants: changedBase.participants.map((participant) =>
+        participant.id === "participant-absent"
+          ? { ...participant, presence: { ...participant.presence, generation: 4 } }
+          : participant,
+      ),
+    });
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(
+        snapshotFor("host", { absentPlayerOverridden: false, eventSequence: 1, round: "paused" }),
+      )
+      .mockResolvedValueOnce(changedGeneration);
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createCommandSession={() => ({ run })}
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Override absence for Drew" }));
+    await screen.findByRole("button", { name: "Retry absence override" });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh lobby" }));
+
+    await screen.findByText(/absence changed.*prior command will not be replayed/i);
+    expect(screen.queryByRole("button", { name: "Retry absence override" })).toBeNull();
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("resolves an absence override retry from authoritative state without replay", async () => {
+    const run = vi.fn(async () => {
+      throw new PrivateLobbyFlowError(
+        "We could not confirm the server response. Retry to safely check the same command.",
+        { ambiguous: true },
+      );
+    });
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(
+        snapshotFor("host", { absentPlayerOverridden: false, eventSequence: 1, round: "paused" }),
+      )
+      .mockResolvedValueOnce(
+        snapshotFor("host", { absentPlayerOverridden: true, eventSequence: 2, round: "paused" }),
+      );
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createCommandSession={() => ({ run })}
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Override absence for Drew" }));
+    await screen.findByRole("button", { name: "Retry absence override" });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh lobby" }));
+
+    await screen.findByText(/absence override applied/i);
+    expect(screen.queryByRole("button", { name: "Retry absence override" })).toBeNull();
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("does not expose an override retry when authority confirms it before an ambiguous response", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const response = deferred<ReturnType<typeof activeLobbyAck>>();
+    const baseline = snapshotFor("host", {
+      absentPlayerOverridden: false,
+      eventSequence: 1,
+      round: "paused",
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        createCommandSession={() => ({ run: () => response.promise })}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    await screen.findByRole("region", { name: "Host controls" });
+    act(() => handlers?.onSnapshot(baseline));
+    const override = screen.getByRole("button", { name: "Override absence for Drew" });
+    await waitFor(() => expect(override).toBeEnabled());
+    fireEvent.click(override);
+
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "presence",
+          eventSequence: 2,
+          occurredAt: NOW,
+          presence: {
+            participantId: "participant-absent",
+            generation: 3,
+            status: "absent",
+            absentSince: NOW,
+            changedAt: NOW,
+            overridden: true,
+          },
+        }),
+      ),
+    );
+    response.reject(
+      new PrivateLobbyFlowError(
+        "We could not confirm the server response. Retry to safely check the same command.",
+        { ambiguous: true },
+      ),
+    );
+
+    await screen.findByText(/absence override applied/i);
+    expect(screen.queryByRole("button", { name: "Retry absence override" })).toBeNull();
+  });
+
+  it("reconciles an acknowledged command after a valid successor event", async () => {
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          eventSequence: 1,
+          round: "active",
+        }),
+      )
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          eventSequence: 3,
+          round: "active",
+        }),
+      );
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createCommandSession={() => ({ run: async () => activeLobbyAck(2) })}
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Pause calling" }));
+
+    await screen.findByText(/command committed.*lobby has since advanced/i);
+    expect(screen.getByRole("button", { name: "Pause calling" })).toBeEnabled();
+  });
+
+  it("reconciles an acknowledged command after a replacement-round successor event", async () => {
+    const replacementBase = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      eventSequence: 3,
+      round: "active",
+    });
+    const replacement = SnapshotSchema.parse({
+      ...replacementBase,
+      lobby: { ...replacementBase.lobby, roundId: "round-2" },
+      round: { ...replacementBase.round, id: "round-2" },
+      ownCard: { ...replacementBase.ownCard, id: "card-round-2", roundId: "round-2" },
+    });
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          eventSequence: 1,
+          round: "active",
+        }),
+      )
+      .mockResolvedValueOnce(replacement);
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createCommandSession={() => ({ run: async () => activeLobbyAck(2) })}
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Pause calling" }));
+
+    await screen.findByText(/command committed.*lobby has since advanced/i);
+    expect(screen.getByRole("button", { name: "Pause calling" })).toBeEnabled();
+  });
+
+  it("moves focus when the final Call Next action disappears", async () => {
+    const firstSeventyFour = Array.from({ length: 74 }, (_, index) => index + 1);
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          calledBalls: firstSeventyFour,
+          eventSequence: 74,
+          round: "active",
+        }),
+      )
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          calledBalls: [...firstSeventyFour, 75],
+          eventSequence: 75,
+          round: "active",
+        }),
+      );
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createCommandSession={() => ({ run: async () => activeLobbyAck(75) })}
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const callNext = await screen.findByRole("button", { name: "Call Next" });
+    callNext.focus();
+    fireEvent.click(callNext);
+
+    await screen.findByText("Next ball called.");
+    expect(screen.queryByRole("button", { name: "Call Next" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Host controls" })).toHaveFocus();
+  });
+
+  it("moves focus when Call Next opens a co-winner window from realtime", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const baseline = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      calledBalls: [1],
+      eventSequence: 1,
+      round: "active",
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    await screen.findByRole("region", { name: "Host controls" });
+    act(() => handlers?.onSnapshot(baseline));
+    const callNext = screen.getByRole("button", { name: "Call Next" });
+    await waitFor(() => expect(callNext).toBeEnabled());
+    callNext.focus();
+
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "co-winner-window",
+          eventSequence: 2,
+          occurredAt: NOW,
+          window: {
+            triggeringCallId: "call-1",
+            openedAt: NOW,
+            closesAt: "2026-07-18T12:00:03.000Z",
+          },
+        }),
+      ),
+    );
+
+    expect(screen.queryByRole("button", { name: "Call Next" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Live game status" })).toHaveFocus();
+  });
+
+  it("keeps an ambiguous start available only as a same-command retry", async () => {
+    const run = vi
+      .fn<() => Promise<ReturnType<typeof activeLobbyAck>>>()
+      .mockRejectedValueOnce(
+        new PrivateLobbyFlowError(
+          "We could not confirm the server response. Retry to safely check the same command.",
+          { ambiguous: true },
+        ),
+      )
+      .mockImplementationOnce(() => new Promise(() => undefined));
+    const createCommandSession = vi.fn(() => ({ run }));
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createCommandSession={createCommandSession}
+        loadSnapshot={async () => snapshotFor("host", { absentPlayerOverridden: true })}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Start round" }));
+    const retry = await screen.findByRole("button", { name: "Retry Start round" });
+    expect(screen.getByRole("button", { name: "Start round" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    fireEvent.click(retry);
+    fireEvent.click(retry);
+    expect(createCommandSession).toHaveBeenCalledOnce();
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("requires confirmation before ending a round and restores focus after cancellation", async () => {
+    const commands: unknown[] = [];
+    const run = vi.fn<() => Promise<ReturnType<typeof activeLobbyAck>>>(
+      () => new Promise(() => undefined),
+    );
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createCommandSession={(command) => {
+          commands.push(command);
+          return { run };
+        }}
+        loadSnapshot={async () =>
+          snapshotFor("host", { absentPlayerOverridden: true, round: "active" })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const end = await screen.findByRole("button", { name: "End round" });
+    end.focus();
+    fireEvent.click(end);
+    const dialog = screen.getByRole("dialog", { name: "End this round?" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(dialog).toHaveAccessibleDescription(
+      "Calling stops immediately. This action cannot be undone.",
+    );
+    expect(run).not.toHaveBeenCalled();
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "End this round?" })).toBeNull();
+    expect(end).toHaveFocus();
+
+    fireEvent.click(end);
+    fireEvent.click(
+      within(screen.getByRole("dialog", { name: "End this round?" })).getByRole("button", {
+        name: "End round",
+      }),
+    );
+    expect(commands).toEqual([{ type: "end-round", code: "ABC234" }]);
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("keeps end-round status available and moves focus when host controls leave", async () => {
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          eventSequence: 1,
+          round: "active",
+        }),
+      )
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          eventSequence: 2,
+          round: "ended",
+        }),
+      );
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createCommandSession={() => ({ run: async () => activeLobbyAck(2) })}
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "End round" }));
+    fireEvent.click(
+      within(screen.getByRole("dialog", { name: "End this round?" })).getByRole("button", {
+        name: "End round",
+      }),
+    );
+
+    await waitFor(() => expect(loadSnapshot).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("region", { name: "Host controls" })).toBeNull();
+    expect(screen.getByRole("status", { name: "Host command status" })).toHaveTextContent(
+      "Round ended.",
+    );
+    expect(screen.getByRole("heading", { name: "Live game status" })).toHaveFocus();
+  });
+
+  it("submits the current player absence generation and never the host absence", async () => {
+    const commands: unknown[] = [];
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createCommandSession={(command) => {
+          commands.push(command);
+          return { run: () => new Promise(() => undefined) };
+        }}
+        loadSnapshot={async () => snapshotFor("host", { round: "paused" })}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Override absence for Drew" }));
+    expect(commands).toEqual([
+      {
+        type: "override-absence",
+        code: "ABC234",
+        participantId: "participant-absent",
+        presenceGeneration: 3,
+      },
+    ]);
+    expect(screen.queryByRole("button", { name: /override absence for casey/i })).toBeNull();
+  });
+
   it("keeps start unavailable until presence is connected and edited setup is committed", async () => {
     const commands: unknown[] = [];
     let snapshots = 0;
@@ -1824,7 +2955,9 @@ describe("PrivateLobbyPage", () => {
       "aria-disabled",
       "true",
     );
-    expect(screen.getByText(/current player.*absent/i)).toBeVisible();
+    expect(
+      screen.getByText(/current player.*absent/i, { selector: ".setup-guidance" }),
+    ).toBeVisible();
 
     rerender(
       <PrivateLobbyPage

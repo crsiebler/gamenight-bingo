@@ -786,7 +786,7 @@
         "Verify in browser using dev-browser skill."
       ],
       "priority": 50,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @frontend-developer, @accessibility-tester. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {

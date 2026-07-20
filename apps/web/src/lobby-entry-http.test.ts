@@ -1080,6 +1080,16 @@ describe("round-control HTTP API", () => {
         commandId: "command-end",
       },
     ],
+    [
+      "/api/v1/lobbies/ABC234/participants/absence/override",
+      {
+        schemaVersion: CONTRACT_SCHEMA_VERSION,
+        type: "override-absence",
+        commandId: "command-override",
+        participantId: "participant-player",
+        presenceGeneration: 3,
+      },
+    ],
   ] as const;
 
   test.each(hostCommands)("dispatches %s as a committed host command", async (path, command) => {

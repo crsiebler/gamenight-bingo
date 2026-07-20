@@ -281,6 +281,7 @@ export const CoWinnerRoundStateSchema = z.strictObject({
 export const ResultRoundStateSchema = z.strictObject({
   ...startedRoundShape,
   stage: z.literal("result"),
+  continuationPatternId: PatternIdSchema.nullable().optional(),
   result: CoWinnerResultSchema,
 });
 export const EndedRoundStateSchema = z.strictObject({
