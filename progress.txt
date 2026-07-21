@@ -74,6 +74,7 @@ Next story: US-001
 - Long-lived browser realtime handlers read current readiness from refs rather than render-time closures; when outcome layout changes reading order, keep announcement nodes mounted and reorder only visible panels.
 - Responsive decorative wordmarks need browser-level bounding checks based on rendered content width, not only the grid item's box; reserve an explicit track plus readable separation at the breakpoint where multi-column layout begins.
 - Public privacy/lifecycle copy receives only allowlisted runtime duration values from the server entry point; definitive session/lobby errors latch all snapshot and realtime delivery closed, while an unavailable-lobby view must discard the old locator/private content, focus its terminal heading once, and link only to fresh create/join flows.
+- Theme visual assets are canonical theme metadata rendered into one external SVG sprite per theme; generate sprites and review documents with `bun scripts/generate-theme-assets.ts`, preload only the selected lobby sprite, and keep every SVG decorative, unfocusable, static-capable, and backed by semantic HTML plus a load-failure fallback.
 
 Append-only iteration log
 -------------------------
@@ -5394,3 +5395,62 @@ Targeted re-review outcome for US-053 at 2026-07-21 03:17:20 MST:
 - The full CSS-variable comparison, explicit inverse/card-surface contrast pairs, 21-role specimens, functional disclosure focus treatment, and strengthened media declarations resolve all initial findings.
 - No in-scope critical, high, or medium findings remain; the review stabilization loop passed.
 - Residual risk is limited to preference behavior not being independently media-emulated by the available Chrome controls, Playwright-managed Chromium being unavailable locally, and asset behavior intentionally deferred to US-054. Canonical policy tests, generated CSS assertions, stable-Chrome checks, and browser inspection cover this story's foundation scope.
+
+## 2026-07-21 03:47:44 MST - US-054
+- What was implemented
+  - Attached complete original visual concepts to all 11 canonical themes and generated one safe static SVG sprite per theme with icon, dauber, call-ball, card-decoration, winner, and respectful other-player-won symbols.
+  - Integrated selected-theme semantic tokens and progressive artwork into the private lobby while preserving authoritative call/card/result text, a silent geometric loading/failure fallback, reduced-motion output, and high-contrast/forced-colors decoration removal.
+  - Added the generic hero swoop, friendly floating ghost, cartoon confetti cannon/treasure-runway plank, and baseball ball-strike concepts, plus a responsive generated review gallery that requests only its selected sprite.
+  - Added catalog completeness, concept, fail-closed SVG validation, 66 independently reviewed symbol goldens, generated parity, gzip/Brotli budget, selected-theme loading, result-scene, fallback, and unknown-theme regression coverage.
+- Files changed: `AGENTS.md`, `README.md`, `apps/web/public/theme-assets/*.svg`, `apps/web/src/app/globals.css`, `apps/web/src/components/templates/private-lobby-page.tsx`, `apps/web/src/components/templates/private-lobby-page.test.tsx`, `docs/theme-assets.html`, `docs/theme-moodboards.md`, `packages/themes/src/assets.ts`, `packages/themes/src/catalog.ts`, `packages/themes/src/index.ts`, `packages/themes/src/preview.ts`, `scripts/generate-theme-assets.ts`, `tests/goldens/theme-assets.json`, `tests/theme-assets.test.ts`, `tests/theme-catalog.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-054 - Create themed visual assets`
+- Auto approval: `enabled`
+- Checks:
+  - Focused theme/private-lobby tests (expected fail before implementation with 6 missing-metadata/generator/integration failures; review regressions then failed for missing strict validation and empty 66-symbol goldens; pass after remediation with 3 files and 117 tests)
+  - `bun run test` (pass after review remediation; typecheck, 35 files passed, 1 database file skipped, 647 tests passed, and 135 database-backed tests skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `bun run format:check` (blocked only by 57 unrelated untracked browser/Lighthouse artifacts); focused intended-file Prettier check (pass)
+  - `bun install --frozen-lockfile` (pass; 394 installs checked with no changes)
+  - `DATABASE_URL=<documented local default> bun run --cwd apps/web build` (pass)
+  - `PLAYWRIGHT_BROWSER_CHANNEL=chrome bun run test:e2e` (pass; 2 tests passed and 3 database-backed tests skipped without `TEST_DATABASE_URL`)
+  - `git diff --check` (pass)
+  - Manual dev-browser verification at 320px and 1440px (pass; all 11 themes, no overflow, balanced desktop grid, cached switching, selected-only sprite request, static failure fallback, 44px select, and clean console)
+  - Playwright media emulation (pass; reduced motion disables animation/transitions, increased contrast and forced colors hide decoration while preserving all six labeled specimens)
+  - Lighthouse mobile snapshot (accessibility 100 and best practices 100; standalone review-page SEO is not product-facing)
+- Implementation agents:
+  - Recommended: none in story notes; selected `ui-designer` and `accessibility-tester` within the complex-story budget
+  - Used: `ui-designer`, `accessibility-tester` for asset architecture, respectful concept treatment, SVG semantics, failure behavior, media fallbacks, budget/lazy-load boundaries, and browser-test recommendations
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and UI-triggered `ui-designer`; targeted re-review by `qa-expert` and `ui-designer`
+  - Findings: fixed missing independent render goldens, replaced denylist SVG checks with strict fail-closed parsing, and redrew pirate/sports other-winner scenes with explicit treasure-route and shared-scoreboard celebration cues; targeted re-review returned none
+- Decisions (why):
+  - Used one generated external sprite per theme instead of one global sprite or bundled inline artwork so a lobby loads only the selected theme and keeps each complete visual journey far below 500 KB compressed.
+  - Kept call values, card states, winner names, and result messages in existing semantic HTML because artwork is optional presentation and must never become authoritative or enter live announcements.
+  - Used a single hidden selected-sprite preload to switch from a CSS fallback to external `<use>` symbols because `<use>` has no reliable load-error event of its own.
+  - Generated committed sprites and the review gallery from canonical metadata so concept descriptions, file paths, symbols, budgets, and review output cannot drift independently.
+- **Learnings for future iterations:**
+  - Cached image URLs may not emit another load event when assigned unchanged; preserve already-loaded state for a no-op selection and synchronously inspect completed cached replacements.
+  - External SVG `<use>` content remains silent and efficient, but a separate selected-sprite preload is required for deterministic loading/failure presentation.
+  - Browser verification must serve external SVG symbols over HTTP; `file://` security can hide valid external `<use>` artwork and show only the fallback.
+- Known issues / follow-ups:
+  - Database-backed Vitest and Playwright cases remain skipped without `TEST_DATABASE_URL`; this story changes no database behavior.
+  - Root `bun run format:check` remains blocked by unrelated untracked browser/Lighthouse artifacts; every intended source, test, documentation, and generated review file passes Prettier.
+  - Browser review artifacts `.review-us054-desktop.png` and `.us054-http.log` remain untracked and unstaged alongside pre-existing review artifacts.
+- Next iteration start:
+  - If review passes, implement US-055 optional controlled per-theme audio; otherwise resume any recorded blocking finding.
+---
+
+Initial review remediation for US-054 at 2026-07-21 04:02:56 MST:
+- `code-reviewer` returned no actionable findings. `qa-expert` and `ui-designer` produced three medium blockers: no independent render-level goldens, denylist-only SVG safety checks, and ambiguous pirate/sports other-winner imagery that could read as punitive.
+- Added failing tests for a required validator and all 66 theme-role golden hashes, then implemented a strict fail-closed SVG element/attribute/nesting parser that rejects unmodeled markup, links, styles, scripts, events, animation, unsafe values, malformed XML-like structure, and incomplete symbols before generation writes files.
+- Added independently reviewed per-symbol SHA-256 goldens so coordinated generator/file changes cannot silently alter any required vector role.
+- Replaced the pirate other-winner cannon/plank composition with a compass-led treasure route, celebration spark, and treasure chest; replaced baseball X marks with three positive strike-count scoreboard lights, a ball, and a shared field arc.
+- Post-fix browser inspection at 320px confirms both revised scenes read as positive, labeled celebrations without overflow; semantic labels and all existing fallbacks remain unchanged.
+- Post-fix checks: focused asset tests pass 5 tests, focused theme/private-lobby tests pass 117 tests, root tests pass typecheck with 647 tests and 135 database skips, lint and intended formatting pass, production Next build passes, stable-Chrome Playwright passes 2 tests with 3 database skips, and staged/unstaged whitespace checks pass.
+- Targeted re-review is limited to `qa-expert` and `ui-designer` because only their substantive findings required changes; `code-reviewer` returned an empty finding list.
+
+Targeted re-review outcome for US-054 at 2026-07-21 04:07:39 MST:
+- `qa-expert` and `ui-designer` reviewed the revised complete staged diff and returned empty actionable finding lists with no residual risks.
+- The strict generation-time validator, malicious mutation coverage, 66 independent role goldens, compass-led treasure route, and positive shared baseball scoreboard fully resolve the initial review findings.
+- `code-reviewer` had already returned an empty finding list. No in-scope critical, high, or medium findings remain; US-054 can be marked passing and committed after the final consistency check.

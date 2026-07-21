@@ -241,10 +241,13 @@ are never implicitly rotated, reflected, translated, or deduplicated.
 `packages/themes` is the canonical catalog for approved theme IDs, moodboards,
 semantic color roles, focus treatment, and motion policy. Review the generated
 [theme direction](docs/theme-moodboards.md) and [browser specimen
-gallery](docs/theme-moodboards.html). Future visual/audio assets and provenance
-also belong to that package. Every theme must preserve readable game state,
-visible focus, high contrast, reduced motion, mute controls, and functional
-fallbacks when a decorative asset fails.
+gallery](docs/theme-moodboards.html). Original per-theme vector sprites are
+described by that catalog and reviewed in the generated [visual asset
+gallery](docs/theme-assets.html); the private lobby requests only its selected
+theme. Future audio and any nongenerated-asset provenance also belong to that
+package. Every theme must preserve readable game state, visible focus, high
+contrast, reduced motion, mute controls, and functional fallbacks when a
+decorative asset fails.
 
 ## Realtime And Reconnects
 

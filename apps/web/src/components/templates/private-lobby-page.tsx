@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 
 import {
   SnapshotSchema,
@@ -13,11 +13,16 @@ import {
   type Snapshot,
 } from "@gamenight-bingo/contracts";
 import { calculatePatternProgress, patternCatalog } from "@gamenight-bingo/patterns";
+import {
+  getTheme,
+  themeCssVariables,
+  type ThemeAssetRole,
+  type ThemeDefinition,
+} from "@gamenight-bingo/themes";
 import { BingoCard, type BingoCardCell } from "@gamenight-bingo/ui";
 
 import { Button, LinkButton, Option } from "@/atoms";
 import { Select } from "@/molecules";
-import { THEME_OPTIONS } from "@/organisms";
 import {
   MarkCardCommandSession,
   PrivateLobbyFlowError,
@@ -84,6 +89,34 @@ const PATTERN_CATEGORY_LABELS = {
   number: "Number",
   christmas: "Christmas",
 } as const;
+
+function ThemeArtwork({
+  className,
+  loaded,
+  role,
+  theme,
+}: {
+  className: string;
+  loaded: boolean;
+  role: ThemeAssetRole;
+  theme: ThemeDefinition | undefined;
+}) {
+  if (theme === undefined) return null;
+  return (
+    <span aria-hidden="true" className={`theme-artwork ${className}`} data-loaded={loaded}>
+      <span className="theme-art-fallback">◇</span>
+      <svg
+        aria-hidden="true"
+        className="theme-art-vector"
+        data-theme-asset={role}
+        focusable="false"
+        viewBox="0 0 120 120"
+      >
+        <use href={`${theme.visuals.spriteUrl}#${role}`} />
+      </svg>
+    </span>
+  );
+}
 
 function presenceText(participant: ParticipantSummary): string {
   switch (participant.presence.status) {
@@ -571,6 +604,7 @@ export function PrivateLobbyPage({
   const [outcomeAnnouncement, setOutcomeAnnouncement] = useState("");
   const [endConfirmationOpen, setEndConfirmationOpen] = useState(false);
   const [restoreEndRoundFocus, setRestoreEndRoundFocus] = useState(false);
+  const [loadedThemeSpriteUrl, setLoadedThemeSpriteUrl] = useState<string | null>(null);
   const [commandFocusTarget, setCommandFocusTarget] = useState<
     "host-controls" | "live-game" | "outcome" | "setup" | null
   >(null);
@@ -1567,7 +1601,11 @@ export function PrivateLobbyPage({
     );
   }
 
-  const themeName = THEME_OPTIONS.find((theme) => theme.id === snapshot.lobby.themeId)?.name;
+  const activeTheme = getTheme(snapshot.lobby.themeId);
+  const themeName = activeTheme?.name;
+  const themeStyle =
+    activeTheme === undefined ? undefined : (themeCssVariables(activeTheme) as CSSProperties);
+  const themeSpriteLoaded = loadedThemeSpriteUrl === activeTheme?.visuals.spriteUrl;
   const hostCanConfigure = snapshot.self.role === "host" && snapshot.round?.stage === "waiting";
   const selfConnected = snapshot.self.presence.status === "connected";
   const realtimeAuthorityUncertain =
@@ -1819,8 +1857,16 @@ export function PrivateLobbyPage({
       </div>
       <div className="live-game-summary">
         <div className="current-call">
-          <span>Current call</span>
-          <strong>{latestCall === undefined ? "Waiting" : ballLabel(latestCall.ball)}</strong>
+          <ThemeArtwork
+            className="theme-call-art"
+            loaded={themeSpriteLoaded}
+            role="call-ball"
+            theme={activeTheme}
+          />
+          <div className="theme-art-content">
+            <span>Current call</span>
+            <strong>{latestCall === undefined ? "Waiting" : ballLabel(latestCall.ball)}</strong>
+          </div>
         </div>
         <div className="call-mode-status">
           <strong>{snapshot.round === null ? "Round not configured" : callDescription}</strong>
@@ -1896,6 +1942,18 @@ export function PrivateLobbyPage({
     >
       <p className="eyebrow">Your numbers</p>
       <h2 id="card-heading">Your card</h2>
+      <ThemeArtwork
+        className="theme-card-decoration"
+        loaded={themeSpriteLoaded}
+        role="card-decoration"
+        theme={activeTheme}
+      />
+      <ThemeArtwork
+        className="theme-dauber-art"
+        loaded={themeSpriteLoaded}
+        role="dauber"
+        theme={activeTheme}
+      />
       {snapshot.ownCard === null ? (
         <p className="waiting-note">{missingCardMessage}</p>
       ) : (
@@ -1920,7 +1978,23 @@ export function PrivateLobbyPage({
   );
 
   return (
-    <main aria-busy={snapshotPending} className="private-lobby-shell">
+    <main
+      aria-busy={snapshotPending}
+      className="private-lobby-shell"
+      data-theme-id={activeTheme?.id}
+      style={themeStyle}
+    >
+      {activeTheme === undefined ? null : (
+        <img
+          alt=""
+          aria-hidden="true"
+          data-theme-sprite-preload
+          hidden
+          onError={() => setLoadedThemeSpriteUrl(null)}
+          onLoad={() => setLoadedThemeSpriteUrl(activeTheme.visuals.spriteUrl)}
+          src={activeTheme.visuals.spriteUrl}
+        />
+      )}
       <header className="lobby-masthead">
         <div>
           <p className="eyebrow">Private game room</p>
@@ -1930,6 +2004,12 @@ export function PrivateLobbyPage({
             {snapshot.self.role === "host" ? " (host)" : ""}.
           </p>
         </div>
+        <ThemeArtwork
+          className="theme-masthead-art"
+          loaded={themeSpriteLoaded}
+          role="icon"
+          theme={activeTheme}
+        />
         <Button
           aria-disabled={snapshotPending}
           onClick={() => {
@@ -1975,6 +2055,14 @@ export function PrivateLobbyPage({
             }
             role="region"
           >
+            {settledResult === null ? null : (
+              <ThemeArtwork
+                className="theme-outcome-art"
+                loaded={themeSpriteLoaded}
+                role={selfWon ? "winner" : "other-winner"}
+                theme={activeTheme}
+              />
+            )}
             {roundStage === "co-winner-window" ? (
               <div className="outcome-lockup outcome-lockup-checking">
                 <div>

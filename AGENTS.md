@@ -413,6 +413,10 @@ then refactor while green.
   canonical in `packages/themes`; derive selectors and generated review documents
   from that catalog, and verify every authored text pair at 4.5:1 plus focus,
   indicators, and component boundaries at 3:1 before adding theme assets.
+- Keep original visual metadata on the canonical theme definition and regenerate
+  one external sprite per theme with `bun scripts/generate-theme-assets.ts`.
+  Private UI must preload only the selected sprite, keep artwork decorative and
+  unfocusable, and preserve semantic HTML plus a static fallback on load failure.
 
 ## Accessibility
 

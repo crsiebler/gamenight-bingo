@@ -70,11 +70,42 @@ export type ThemeMoodboard = {
   readonly avoid: readonly string[];
 };
 
+export const themeAssetRoles = [
+  "icon",
+  "dauber",
+  "call-ball",
+  "card-decoration",
+  "winner",
+  "other-winner",
+] as const;
+
+export type ThemeAssetRole = (typeof themeAssetRoles)[number];
+
+export type ThemeVisualMotif =
+  | "animals"
+  | "nature"
+  | "hero"
+  | "pirate"
+  | "ghost"
+  | "sports"
+  | "winter"
+  | "halloween"
+  | "civic"
+  | "hearts"
+  | "birthday";
+
+export type ThemeVisualAssets = {
+  readonly motif: ThemeVisualMotif;
+  readonly spriteUrl: `/theme-assets/${string}.svg`;
+  readonly concepts: Readonly<Record<ThemeAssetRole, string>>;
+};
+
 export type ThemeDefinition = {
   readonly id: string;
   readonly name: string;
   readonly moodboard: ThemeMoodboard;
   readonly tokens: ThemeTokens;
+  readonly visuals: ThemeVisualAssets;
 };
 
 type ThemePalette = {
@@ -149,11 +180,34 @@ const SHARED_AVOID = [
   "Cultural caricatures, gender stereotypes, gore, or hostile loser imagery",
 ] as const;
 
+type ThemeVisualInput = {
+  readonly motif: ThemeVisualMotif;
+  readonly subject: string;
+  readonly concepts?: Partial<Readonly<Record<ThemeAssetRole, string>>>;
+};
+
+function visualAssets(id: string, name: string, input: ThemeVisualInput): ThemeVisualAssets {
+  return {
+    motif: input.motif,
+    spriteUrl: `/theme-assets/${id}.svg`,
+    concepts: {
+      icon: `Original ${input.subject} emblem for the ${name} theme`,
+      dauber: `Original ${input.subject} stamp inside a tactile dauber silhouette`,
+      "call-ball": `Original ${input.subject} frame around the separate authoritative call text`,
+      "card-decoration": `Original ${input.subject} corner flourishes outside the playable card cells`,
+      winner: `Original ${input.subject} celebration framing the confirmed winner message`,
+      "other-winner": `Calm original ${input.subject} scene congratulating the confirmed winner`,
+      ...input.concepts,
+    },
+  };
+}
+
 function defineTheme<const Id extends string, const Name extends string>(input: {
   readonly id: Id;
   readonly name: Name;
   readonly palette: ThemePalette;
   readonly moodboard: Omit<ThemeMoodboard, "avoid"> & { readonly avoid?: readonly string[] };
+  readonly visuals: ThemeVisualInput;
 }): ThemeDefinition & { readonly id: Id; readonly name: Name } {
   return {
     id: input.id,
@@ -163,6 +217,7 @@ function defineTheme<const Id extends string, const Name extends string>(input: 
       avoid: [...SHARED_AVOID, ...(input.moodboard.avoid ?? [])],
     },
     tokens: tokens(input.palette),
+    visuals: visualAssets(input.id, input.name, input.visuals),
   };
 }
 
@@ -170,6 +225,7 @@ export const themeCatalog = [
   defineTheme({
     id: "animals",
     name: "Animals",
+    visuals: { motif: "animals", subject: "paw trail and feather" },
     palette: {
       canvas: "#fff8eb",
       surface: "#ffffff",
@@ -201,6 +257,7 @@ export const themeCatalog = [
   defineTheme({
     id: "nature",
     name: "Nature",
+    visuals: { motif: "nature", subject: "leaf, contour, and water-ripple" },
     palette: {
       canvas: "#f3f8ef",
       surface: "#ffffff",
@@ -233,6 +290,13 @@ export const themeCatalog = [
   defineTheme({
     id: "superheroes",
     name: "Superheroes",
+    visuals: {
+      motif: "hero",
+      subject: "ray, shield, and teamwork ribbon",
+      concepts: {
+        winner: "Original generic hero swoop with abstract rays and a teamwork ribbon",
+      },
+    },
     palette: {
       canvas: "#f5f7fb",
       surface: "#ffffff",
@@ -266,6 +330,14 @@ export const themeCatalog = [
   defineTheme({
     id: "pirates",
     name: "Pirates",
+    visuals: {
+      motif: "pirate",
+      subject: "compass, map route, and seafaring rope",
+      concepts: {
+        winner: "Original cartoon pirate cannon launching Bingo-ball confetti",
+        "other-winner": "Playful plank transformed into a treasure-map runway for celebration",
+      },
+    },
     palette: {
       canvas: "#fbf3df",
       surface: "#ffffff",
@@ -301,6 +373,13 @@ export const themeCatalog = [
   defineTheme({
     id: "ghosts",
     name: "Ghosts",
+    visuals: {
+      motif: "ghost",
+      subject: "moon, fog ribbon, and spectral curve",
+      concepts: {
+        icon: "Original friendly floating ghost with a soft moonlit outline",
+      },
+    },
     palette: {
       canvas: "#f5f2fb",
       surface: "#ffffff",
@@ -333,6 +412,14 @@ export const themeCatalog = [
   defineTheme({
     id: "sports",
     name: "Sports",
+    visuals: {
+      motif: "sports",
+      subject: "community scoreboard, ball arc, and field line",
+      concepts: {
+        "other-winner":
+          "Respectful baseball strike-count lights applied to the ball beside a shared scoreboard",
+      },
+    },
     palette: {
       canvas: "#f4f7f5",
       surface: "#ffffff",
@@ -368,6 +455,7 @@ export const themeCatalog = [
   defineTheme({
     id: "christmas",
     name: "Christmas",
+    visuals: { motif: "winter", subject: "paper evergreen, gift, and warm-light" },
     palette: {
       canvas: "#fbf7ea",
       surface: "#ffffff",
@@ -403,6 +491,7 @@ export const themeCatalog = [
   defineTheme({
     id: "halloween",
     name: "Halloween",
+    visuals: { motif: "halloween", subject: "friendly lantern, bat, and candy" },
     palette: {
       canvas: "#f8f1e8",
       surface: "#ffffff",
@@ -438,6 +527,7 @@ export const themeCatalog = [
   defineTheme({
     id: "july-4th",
     name: "July 4th",
+    visuals: { motif: "civic", subject: "bunting, picnic star, and quiet sparkler" },
     palette: {
       canvas: "#f6f7fa",
       surface: "#ffffff",
@@ -473,6 +563,7 @@ export const themeCatalog = [
   defineTheme({
     id: "valentines-day",
     name: "Valentine's Day",
+    visuals: { motif: "hearts", subject: "linked heart, folded note, and care ribbon" },
     palette: {
       canvas: "#fff5f6",
       surface: "#ffffff",
@@ -508,6 +599,7 @@ export const themeCatalog = [
   defineTheme({
     id: "birthday",
     name: "Birthday",
+    visuals: { motif: "birthday", subject: "cake, balloon, gift, and confetti" },
     palette: {
       canvas: "#f7f5fc",
       surface: "#ffffff",

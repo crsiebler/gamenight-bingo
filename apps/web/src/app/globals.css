@@ -328,6 +328,59 @@ h2 {
   padding: 2rem 1.25rem 5rem;
 }
 
+.private-lobby-shell[data-theme-id] {
+  background: var(--bingo-theme-canvas);
+  color: var(--bingo-theme-text-primary);
+}
+
+.private-lobby-shell[data-theme-id] .lobby-panel {
+  background: var(--bingo-theme-surface);
+  border-color: var(--bingo-theme-border);
+}
+
+.private-lobby-shell[data-theme-id] .eyebrow,
+.private-lobby-shell[data-theme-id] .host-control-guidance,
+.private-lobby-shell[data-theme-id] .setup-summary dt {
+  color: var(--bingo-theme-text-secondary);
+}
+
+.theme-artwork {
+  color: var(--bingo-theme-text-link, var(--bingo-coral));
+  display: grid;
+  pointer-events: none;
+  user-select: none;
+}
+
+.theme-artwork > * {
+  grid-area: 1 / 1;
+}
+
+.theme-art-vector {
+  color: inherit;
+  height: 100%;
+  position: relative;
+  width: 100%;
+  z-index: 1;
+}
+
+.theme-art-fallback {
+  align-self: center;
+  color: var(--bingo-theme-text-secondary, var(--bingo-text-muted));
+  font-size: clamp(2rem, 7vw, 4rem);
+  justify-self: center;
+  line-height: 1;
+  opacity: 0.3;
+  z-index: 0;
+}
+
+.theme-artwork[data-loaded="false"] .theme-art-vector {
+  opacity: 0;
+}
+
+.theme-artwork[data-loaded="true"] .theme-art-fallback {
+  opacity: 0;
+}
+
 .lobby-masthead {
   align-items: end;
   display: flex;
@@ -335,6 +388,13 @@ h2 {
   gap: 1.5rem;
   justify-content: space-between;
   padding: 1.5rem 0 2.5rem;
+  position: relative;
+}
+
+.theme-masthead-art {
+  height: clamp(4.5rem, 15vw, 7rem);
+  margin-left: auto;
+  width: clamp(4.5rem, 15vw, 7rem);
 }
 
 .lobby-masthead h1 {
@@ -385,6 +445,18 @@ h2 {
   background: var(--bingo-ink);
   border-color: var(--bingo-ink);
   color: #ffffff;
+}
+
+.private-lobby-shell[data-theme-id] .share-panel,
+.private-lobby-shell[data-theme-id] .live-game-panel {
+  background: var(--bingo-theme-surface-inverse);
+  border-color: var(--bingo-theme-border);
+  color: var(--bingo-theme-text-inverse);
+}
+
+.private-lobby-shell[data-theme-id] .share-panel .eyebrow,
+.private-lobby-shell[data-theme-id] .live-game-panel .eyebrow {
+  color: var(--bingo-theme-text-inverse);
 }
 
 .share-panel button:focus-visible,
@@ -615,6 +687,30 @@ h2 {
 .current-call {
   background: var(--bingo-gold);
   color: var(--bingo-ink);
+  isolation: isolate;
+  overflow: hidden;
+  position: relative;
+}
+
+.private-lobby-shell[data-theme-id] .current-call {
+  background: var(--bingo-theme-ball-current-background);
+  border-color: var(--bingo-theme-ball-current-border);
+  color: var(--bingo-theme-ball-current-text);
+}
+
+.theme-call-art {
+  inset: -1.25rem -0.5rem -1.25rem auto;
+  opacity: 0.18;
+  position: absolute;
+  width: min(48%, 10rem);
+  z-index: 0;
+}
+
+.theme-art-content {
+  display: grid;
+  gap: 0.35rem;
+  position: relative;
+  z-index: 1;
 }
 
 .current-call span,
@@ -675,7 +771,59 @@ h2 {
     );
   border-color: var(--bingo-coral);
   grid-column: 1 / -1;
+  isolation: isolate;
   overflow: hidden;
+  position: relative;
+}
+
+.private-lobby-shell[data-theme-id] .outcome-panel[data-outcome="checking"] {
+  background: var(--bingo-theme-result-checking-background);
+  color: var(--bingo-theme-result-checking-text);
+}
+
+.private-lobby-shell[data-theme-id] .outcome-panel[data-outcome="winner"] {
+  background: var(--bingo-theme-result-winner-background);
+  color: var(--bingo-theme-result-winner-text);
+}
+
+.private-lobby-shell[data-theme-id] .outcome-panel[data-outcome="complete"] {
+  background: var(--bingo-theme-result-other-winner-background);
+  color: var(--bingo-theme-result-other-winner-text);
+}
+
+.private-lobby-shell[data-theme-id] .outcome-panel .eyebrow {
+  color: inherit;
+}
+
+.outcome-panel > :not(.theme-outcome-art) {
+  position: relative;
+  z-index: 1;
+}
+
+.theme-outcome-art {
+  height: min(17rem, 70vw);
+  opacity: 0.2;
+  position: absolute;
+  right: -1.5rem;
+  top: -1.5rem;
+  width: min(17rem, 70vw);
+  z-index: 0;
+}
+
+.theme-outcome-art .theme-art-vector {
+  animation: theme-art-arrive var(--bingo-theme-motion-celebration, 700ms) ease-out 1 both;
+}
+
+@keyframes theme-art-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(0.75rem) scale(0.94);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .outcome-panel[data-outcome="checking"] {
@@ -853,7 +1001,35 @@ h2 {
 
 .card-panel {
   grid-column: 1 / -1;
+  isolation: isolate;
+  overflow: hidden;
   padding-inline: 0.75rem;
+  position: relative;
+}
+
+.card-panel > :not(.theme-card-decoration):not(.theme-dauber-art) {
+  position: relative;
+  z-index: 1;
+}
+
+.theme-card-decoration {
+  bottom: 0.5rem;
+  height: 8rem;
+  opacity: 0.1;
+  position: absolute;
+  right: 0.5rem;
+  width: 8rem;
+  z-index: 0;
+}
+
+.theme-dauber-art {
+  height: 3.5rem;
+  opacity: 0.55;
+  position: absolute;
+  right: 1rem;
+  top: 1rem;
+  width: 3.5rem;
+  z-index: 0;
 }
 
 .bingo-card-scroll {
@@ -883,6 +1059,10 @@ h2 {
   padding-bottom: 0.35rem;
 }
 
+.private-lobby-shell[data-theme-id] .bingo-card th {
+  color: var(--bingo-theme-card-header-background);
+}
+
 .bingo-card td {
   padding: 0;
 }
@@ -906,6 +1086,12 @@ h2 {
   width: 100%;
 }
 
+.private-lobby-shell[data-theme-id] .bingo-card-cell {
+  background: var(--bingo-theme-card-uncalled-background);
+  border-color: var(--bingo-theme-card-uncalled-border);
+  color: var(--bingo-theme-card-uncalled-text);
+}
+
 .bingo-card-cell[aria-disabled="true"] {
   cursor: not-allowed;
 }
@@ -915,15 +1101,40 @@ h2 {
   border-color: #8a5a00;
 }
 
+.private-lobby-shell[data-theme-id] .bingo-card-cell[data-state="called"] {
+  background: var(--bingo-theme-card-called-background);
+  border-color: var(--bingo-theme-card-called-border);
+  border-style: double;
+  color: var(--bingo-theme-card-called-text);
+}
+
 .bingo-card-cell[data-state="marked"],
 .bingo-card-cell[data-state="free"] {
   background: #cdeee1;
   border-color: #17634c;
 }
 
+.private-lobby-shell[data-theme-id] .bingo-card-cell[data-state="marked"] {
+  background: var(--bingo-theme-card-marked-background);
+  border-color: var(--bingo-theme-card-marked-border);
+  color: var(--bingo-theme-card-marked-text);
+}
+
+.private-lobby-shell[data-theme-id] .bingo-card-cell[data-state="free"] {
+  background: var(--bingo-theme-card-free-background);
+  border-color: var(--bingo-theme-card-free-border);
+  color: var(--bingo-theme-card-free-text);
+}
+
 .bingo-card-cell[data-state="unavailable"] {
   background: #eceff1;
   border-style: dashed;
+}
+
+.private-lobby-shell[data-theme-id] .bingo-card-cell[data-state="unavailable"] {
+  background: var(--bingo-theme-card-unavailable-background);
+  border-color: var(--bingo-theme-card-unavailable-border);
+  color: var(--bingo-theme-card-unavailable-text);
 }
 
 .bingo-card-value {
@@ -1090,9 +1301,32 @@ h2 {
   html {
     scroll-behavior: auto;
   }
+
+  .theme-art-vector {
+    animation: none !important;
+    transform: none !important;
+    transition: none !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .theme-artwork {
+    display: none;
+  }
+
+  .private-lobby-shell[data-theme-id] .bingo-card-cell,
+  .private-lobby-shell[data-theme-id] .current-call,
+  .private-lobby-shell[data-theme-id] .lobby-panel {
+    background-image: none;
+    border-width: 0.1875rem;
+  }
 }
 
 @media (forced-colors: active) {
+  .theme-artwork {
+    display: none;
+  }
+
   .bingo-board,
   .create-form,
   .join-form,

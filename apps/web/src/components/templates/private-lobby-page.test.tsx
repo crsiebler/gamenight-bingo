@@ -45,6 +45,7 @@ function snapshotFor(
     resultSettledAt?: string;
     resultTriggeringCallPosition?: number;
     round?: "waiting" | "active" | "paused" | "co-winner-window" | "result" | "ended" | null;
+    themeId?: string;
     winnerParticipantIds?: readonly string[];
   } = {},
 ): Snapshot {
@@ -142,7 +143,7 @@ function snapshotFor(
       id: "lobby-1",
       code: "ABC234",
       hostParticipantId: "participant-host",
-      themeId: "animals",
+      themeId: options.themeId ?? "animals",
       ...(options.round !== undefined && options.round !== "waiting" && options.round !== null
         ? { status: "active" as const, roundId: "round-1" }
         : { status: "waiting" as const }),
@@ -319,6 +320,134 @@ function deferred<T>() {
 }
 
 describe("PrivateLobbyPage", () => {
+  it("loads only the selected theme sprite while preserving semantic game content", async () => {
+    const { container } = render(
+      <PrivateLobbyPage
+        code="ABC234"
+        loadSnapshot={async () =>
+          snapshotFor("host", {
+            absentPlayerOverridden: true,
+            calledBalls: [1],
+            round: "active",
+            themeId: "nature",
+          })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Live game status" })).toBeVisible();
+    const shell = container.querySelector("main.private-lobby-shell");
+    expect(shell).toHaveAttribute("data-theme-id", "nature");
+    expect(shell).toHaveStyle({
+      "--bingo-theme-canvas": "#f3f8ef",
+      "--bingo-theme-text-primary": "#172d27",
+    });
+
+    const artwork = Array.from(container.querySelectorAll<SVGElement>("[data-theme-asset]"));
+    expect(artwork.map((asset) => asset.dataset["themeAsset"])).toEqual(
+      expect.arrayContaining(["icon", "call-ball", "card-decoration", "dauber"]),
+    );
+    expect(
+      new Set(
+        artwork.map((asset) => asset.querySelector("use")?.getAttribute("href")?.split("#")[0]),
+      ),
+    ).toEqual(new Set(["/theme-assets/nature.svg"]));
+    expect(artwork.every((asset) => asset.getAttribute("aria-hidden") === "true")).toBe(true);
+    expect(artwork.every((asset) => asset.getAttribute("focusable") === "false")).toBe(true);
+    expect(container.querySelectorAll(".theme-art-fallback")).toHaveLength(artwork.length);
+    expect(
+      Array.from(container.querySelectorAll(".theme-artwork")).every(
+        (asset) => asset.getAttribute("data-loaded") === "false",
+      ),
+    ).toBe(true);
+    const spritePreload = container.querySelector("img[data-theme-sprite-preload]");
+    expect(spritePreload).toHaveAttribute("src", "/theme-assets/nature.svg");
+    fireEvent.load(spritePreload as HTMLImageElement);
+    await waitFor(() =>
+      expect(
+        Array.from(container.querySelectorAll(".theme-artwork")).every(
+          (asset) => asset.getAttribute("data-loaded") === "true",
+        ),
+      ).toBe(true),
+    );
+    expect(screen.getByText("Current call")).toBeVisible();
+    expect(screen.getAllByText("B 1")[0]).toBeVisible();
+    expect(screen.getByRole("region", { name: "Your card" })).toBeVisible();
+  });
+
+  it("uses respectful selected-theme scenes without changing result semantics", async () => {
+    const { container, rerender } = render(
+      <PrivateLobbyPage
+        code="ABC234"
+        loadSnapshot={async () =>
+          snapshotFor("player", {
+            absentPlayerOverridden: true,
+            calledBalls: [1],
+            continuationPatternId: null,
+            round: "result",
+            themeId: "pirates",
+            winnerParticipantIds: ["participant-grace"],
+          })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    expect(await screen.findByRole("heading", { name: /bingo.*you won/i })).toBeVisible();
+    expect(container.querySelector('[data-theme-asset="winner"] use')).toHaveAttribute(
+      "href",
+      "/theme-assets/pirates.svg#winner",
+    );
+
+    rerender(
+      <PrivateLobbyPage
+        code="ABC234"
+        loadSnapshot={async () =>
+          snapshotFor("host", {
+            absentPlayerOverridden: true,
+            calledBalls: [1],
+            continuationPatternId: null,
+            round: "result",
+            themeId: "sports",
+            winnerParticipantIds: ["participant-grace"],
+          })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Round complete" })).toBeVisible();
+    expect(container.querySelector('[data-theme-asset="other-winner"] use')).toHaveAttribute(
+      "href",
+      "/theme-assets/sports.svg#other-winner",
+    );
+    expect(screen.getByText(/robin won one line.*thanks for playing/i)).toBeVisible();
+  });
+
+  it("falls back to the complete unthemed UI for an unknown persisted theme", async () => {
+    const { container } = render(
+      <PrivateLobbyPage
+        code="ABC234"
+        loadSnapshot={async () => snapshotFor("host", { round: "active", themeId: "classic" })}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Live game status" })).toBeVisible();
+    expect(container.querySelectorAll("[data-theme-asset]")).toHaveLength(0);
+    expect(screen.getByRole("region", { name: "Your card" })).toBeVisible();
+    expect(screen.getByText("classic")).toBeVisible();
+  });
+
   it("shows the full co-winner check before any settled winner scene", async () => {
     render(
       <PrivateLobbyPage

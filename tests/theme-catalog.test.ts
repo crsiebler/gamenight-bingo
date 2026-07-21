@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, expectTypeOf, it } from "vitest";
 
 import * as themeExports from "../packages/themes/src/index.js";
-import type { CatalogThemeId } from "../packages/themes/src/index.js";
+import type { CatalogThemeId, ThemeDefinition } from "../packages/themes/src/index.js";
 
 const EXPECTED_THEMES = [
   ["animals", "Animals"],
@@ -26,6 +26,7 @@ type ColorSet = Record<(typeof COLOR_SET_KEYS)[number], string>;
 type ThemeFixture = {
   id: string;
   name: string;
+  visuals: ThemeDefinition["visuals"];
   moodboard: {
     atmosphere: string;
     motifs: readonly string[];

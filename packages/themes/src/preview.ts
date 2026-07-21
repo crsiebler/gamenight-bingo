@@ -152,11 +152,11 @@ This document is generated from \`packages/themes/src/catalog.ts\`. The catalog 
 - \`prefers-contrast: more\` removes decorative treatments, strengthens ${themeAccessibilityPolicy.highContrast.borderWidthPx}px borders, and underlines links.
 - \`forced-colors: active\` uses system colors and preserves state labels, glyphs, and border styles.
 - \`${themeAccessibilityPolicy.reducedMotion.mediaQuery}\` removes decorative motion, displays final state immediately, and preserves live announcements.
-- Future art and sound must remain optional decoration; core play remains usable when an asset fails.
+- Theme art and future sound remain optional decoration; core play remains usable when an asset fails.
 
 ## Original And Respectful Direction
 
-All theme work must be original and must not imitate protected characters, logos, team marks, official seals, catchphrases, costumes, fonts, or trade dress. Themes avoid cultural caricatures, gender assumptions, disability stereotypes, gore, militaristic victory framing, and hostile treatment of participants who did not win. Future asset work belongs to US-054 and must follow these constraints.
+All theme work must be original and must not imitate protected characters, logos, team marks, official seals, catchphrases, costumes, fonts, or trade dress. Themes avoid cultural caricatures, gender assumptions, disability stereotypes, gore, militaristic victory framing, and hostile treatment of participants who did not win. Generated visual sprites follow these constraints; future audio and nongenerated assets must do the same.
 
 ${themes}`;
 }
