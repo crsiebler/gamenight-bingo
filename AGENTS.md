@@ -342,10 +342,25 @@ then refactor while green.
 - PostgreSQL lock-coordination tests must roll back and release checked-out
   clients in `finally` blocks and await blocked operations during cleanup so a
   failed synchronization assertion cannot hang the suite.
+- Keep Node test files serialized when they can share `TEST_DATABASE_URL`;
+  repository cleanup and Socket.IO recovery tests must never mutate one database
+  concurrently.
 - Use multi-client Socket.IO tests for ordering, presence, reconnects, timers,
   and co-winner behavior.
 - Use React Testing Library for component behavior and Playwright for browser
   journeys. Frontend stories also require manual browser verification.
+- Enable the complete Playwright project set with
+  `PLAYWRIGHT_BROWSER_MATRIX=all`; keep native Safari/mobile and retained
+  previous-stable coverage explicit in `docs/browser-test-matrix.md` rather than
+  describing WebKit or device emulation as native execution.
+- The production-mode Playwright harness serves HTTP, so WebKit cannot carry the
+  required `Secure` participant cookie there. Keep its authenticated journey on
+  the documented native HTTPS release check rather than weakening cookie
+  security; WebKit projects still run the noncredential browser checks locally.
+- Give each full-stack Playwright invocation a fresh, empty, migrated database
+  that is not shared with Vitest or another browser run; the browser preflight
+  requires `E2E_DATABASE_CONFIRMED_NONPRODUCTION=true` and rejects retained
+  lobby state rather than deleting it. Run one matrix project per invocation.
 - Use fake timers for reconnect, pause grace, automatic calling, co-winner, and
   inactivity behavior; avoid wall-clock-dependent tests. Bound deferred
   coordination with timer functions captured before fake timers are installed,

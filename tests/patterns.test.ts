@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { describe, expect, test } from "vitest";
 
 import {
@@ -23,6 +24,41 @@ function maskWith(...indexes: number[]): string {
     .join("")
     .match(/.{5}/g)!
     .join("/");
+}
+
+function expectedProgress(
+  pattern: (typeof patternCatalog)[number],
+  calledCells: readonly boolean[],
+  markedCells: readonly boolean[],
+) {
+  const candidates = pattern.masks.map((mask) => {
+    const requiredCellIndexes = Array.from(mask.replaceAll("/", "")).flatMap((cell, index) =>
+      cell === "#" && index !== 12 ? [index] : [],
+    );
+    const remainingCellIndexes = requiredCellIndexes.filter(
+      (index) => !calledCells[index] || !markedCells[index],
+    );
+    return { requiredCellIndexes, remainingCellIndexes };
+  });
+  const selected = candidates.reduce((best, candidate) =>
+    candidate.remainingCellIndexes.length < best.remainingCellIndexes.length ? candidate : best,
+  );
+  const complete = selected.remainingCellIndexes.length === 0;
+  const nearWinCellIndex =
+    !complete &&
+    selected.remainingCellIndexes.length === 1 &&
+    calledCells[selected.remainingCellIndexes[0]!] === true &&
+    markedCells[selected.remainingCellIndexes[0]!] === false
+      ? selected.remainingCellIndexes[0]!
+      : null;
+
+  return {
+    complete,
+    requiredCellCount: selected.requiredCellIndexes.length,
+    satisfiedCellCount: selected.requiredCellIndexes.length - selected.remainingCellIndexes.length,
+    remainingRequiredCellCount: selected.remainingCellIndexes.length,
+    nearWinCellIndex,
+  };
 }
 
 const expectedLines = [
@@ -480,6 +516,43 @@ describe("canonical core pattern catalog", () => {
 });
 
 describe("pattern matching", () => {
+  test("preserves progress invariants across every canonical pattern", () => {
+    const cardState = fc.array(fc.boolean(), { minLength: 25, maxLength: 25 });
+
+    for (const pattern of patternCatalog) {
+      fc.assert(
+        fc.property(
+          cardState,
+          cardState,
+          cardState,
+          (calledCandidate, markedCandidate, addedCandidate) => {
+            const calledCells = calledCandidate;
+            const markedCells = markedCandidate.map(
+              (marked, index) => marked && calledCells[index]!,
+            );
+            const addedMarks = addedCandidate.map((marked, index) => marked && calledCells[index]!);
+            const moreMarkedCells = markedCells.map(
+              (marked, index) => marked || addedMarks[index]!,
+            );
+            const progress = calculatePatternProgress(pattern, { calledCells, markedCells });
+            const moreProgress = calculatePatternProgress(pattern, {
+              calledCells,
+              markedCells: moreMarkedCells,
+            });
+
+            expect(progress).toEqual(expectedProgress(pattern, calledCells, markedCells));
+            expect(moreProgress).toEqual(expectedProgress(pattern, calledCells, moreMarkedCells));
+            expect(moreProgress.remainingRequiredCellCount).toBeLessThanOrEqual(
+              progress.remainingRequiredCellCount,
+            );
+            if (progress.complete) expect(moreProgress.complete).toBe(true);
+          },
+        ),
+        { numRuns: 25 },
+      );
+    }
+  });
+
   test("requires an exact mask, tolerates extra daubs, and does not transform it", () => {
     const pattern = PatternDefinitionSchema.parse({
       id: "shape-asymmetric",

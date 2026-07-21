@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -418,6 +419,33 @@ describe("lobby inactivity state machine", () => {
   const ttlMs = 30 * 60 * 1_000;
   const lastActivityAt = 10_000;
   const expiryAt = lastActivityAt + ttlMs;
+
+  it("preserves the exact inactivity boundary across generated eligible lobbies", () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom("waiting", "completed", "abandoned"),
+        fc.integer({ min: 0, max: Number.MAX_SAFE_INTEGER - 1_000_000 }),
+        fc.integer({ min: 1, max: 1_000_000 }),
+        (status, generatedLastActivityAt, generatedTtlMs) => {
+          const state: LobbyInactivityState = {
+            status,
+            lastActivityAt: generatedLastActivityAt,
+          };
+          const generatedExpiryAt = generatedLastActivityAt + generatedTtlMs;
+
+          expect(expireInactiveLobby(state, generatedExpiryAt - 1, generatedTtlMs)).toMatchObject({
+            ok: false,
+            error: { code: "LOBBY_NOT_INACTIVE" },
+          });
+          expect(expireInactiveLobby(state, generatedExpiryAt, generatedTtlMs)).toEqual({
+            ok: true,
+            state: { status: "expired", expiredAt: generatedExpiryAt },
+          });
+        },
+      ),
+      { numRuns: 100 },
+    );
+  });
 
   it.each(["waiting", "completed", "abandoned"] as const)(
     "expires an inactive %s lobby at the configured boundary",

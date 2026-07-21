@@ -77,6 +77,10 @@ Next story: US-001
 - Theme visual assets are canonical theme metadata rendered into one external SVG sprite per theme; generate sprites and review documents with `bun scripts/generate-theme-assets.ts`, preload only the selected lobby sprite, and keep every SVG decorative, unfocusable, static-capable, and backed by semantic HTML plus a load-failure fallback.
 - Project-original theme audio uses canonical cue metadata and one generated mono PCM WAV sprite per theme; create/resume browser audio only from explicit opt-in, fetch only the selected theme, persist only validated mute/volume preferences, and trigger cues only from fresh authoritative events rather than snapshots.
 - Keep tracked media in one canonical inventory that generates `docs/assets.md`; enforce aggregate selected-theme visual/audio budgets, bind nongenerated provenance to content digests, and add AVIF/WebP only when an approved raster source actually exists.
+- Full-stack Playwright journeys start both the production Next server and game-server authority against a dedicated migrated browser-test database; require `E2E_DATABASE_CONFIRMED_NONPRODUCTION=true`, run one matrix project per invocation, and do not share that database concurrently or sequentially with repository integration suites whose final capacity fixtures may intentionally remain committed.
+- Keep the default Playwright project portable and enable the complete desktop/mobile engine set with `PLAYWRIGHT_BROWSER_MATRIX=all`; document native Safari/mobile and retained previous-stable coverage separately because WebKit and device emulation are not native execution.
+- Serialize Node Vitest files that share `TEST_DATABASE_URL`; PostgreSQL repository cleanup and Socket.IO database-backed recovery tests cannot safely run against the same database concurrently.
+- The production-mode Playwright harness serves HTTP, so WebKit cannot carry the required `Secure` participant cookie there; run its noncredential checks locally and assign the authenticated Safari/iOS Safari journey to the release owner over production-like HTTPS rather than weakening cookie security.
 
 Append-only iteration log
 -------------------------
@@ -5572,3 +5576,123 @@ Targeted re-review outcome for US-056 at 2026-07-21 05:26 MST:
 - Explicit multi-theme applicability, aggregate multi-file budgets, fail-closed asset-location discovery, and visible fallback assertions resolve all initial QA findings.
 - `code-reviewer` and `documentation-engineer` had already returned empty finding lists. No in-scope critical, high, or medium findings remain; the review stabilization loop passed.
 - Residual risk is limited to fallback visibility being component-tested rather than browser-tested; broader cross-browser and every-theme regression coverage remains assigned to US-058.
+
+## 2026-07-21 05:56:57 MST - US-057
+- What was implemented
+  - Added generated invariant coverage for every canonical pattern/progress path and exact inactivity expiry boundaries while retaining the existing card, draw, mode, co-winner, transition, PostgreSQL, and Socket.IO suites.
+  - Added an opt-in seven-project Playwright matrix for managed Chromium, installed Chrome/Edge, Firefox, WebKit, iPhone WebKit emulation, and Android Chromium emulation, with explicit native and previous-stable manual coverage documentation.
+  - Added a real two-context host/player journey that starts Next, the Socket.IO authority, and PostgreSQL; it covers create/join, aggregate presence, host-only round control, calls, authoritative marking, waiting-player privacy, same-device rejoin with fresh tickets, and restored snapshots.
+- Files changed: `AGENTS.md`, `README.md`, `playwright.config.ts`, `vitest.config.ts`, `packages/database/scripts/assert-empty-e2e-database.ts`, `docs/browser-test-matrix.md`, `tests/domain-state-machine.test.ts`, `tests/patterns.test.ts`, `tests/e2e/gameplay.journey.spec.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-057 - Add gameplay, browser, and recovery test suites`
+- Auto approval: `enabled`
+- Checks:
+  - `PLAYWRIGHT_BROWSER_MATRIX=all bunx playwright test --list --project=firefox` (expected fail before configuration because only Chromium existed; pass after implementation)
+  - `bunx vitest run tests/patterns.test.ts tests/domain-state-machine.test.ts` (pass; 46 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `TEST_DATABASE_URL=<approved isolated migrated database> bun run test` (pass; 39 files and 805 tests including PostgreSQL and Socket.IO multi-client/restart coverage)
+  - Browser database preflight against a retained-lobby database (expected fail with the safe fresh-database error; pass as part of the final fresh-database E2E run)
+  - `TEST_DATABASE_URL=<dedicated isolated migrated browser database> PLAYWRIGHT_BROWSER_MATRIX=all bun run test:e2e -- --project=chrome` (pass; 6 stable-Chrome tests)
+  - `PLAYWRIGHT_BROWSER_MATRIX=all bunx playwright test --list` (pass; 42 tests across 7 projects)
+  - `PLAYWRIGHT_BROWSER_CHANNEL=chrome bun run test:e2e` (pass; 2 database-independent tests and 4 expected database-backed skips)
+  - `bun run lint` (pass)
+  - `bun run format:check` (blocked by 57 unrelated pre-existing untracked browser/Lighthouse artifacts; all intended files pass focused Prettier)
+  - Focused Prettier check for all intended files (pass)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `test-automator`, `websocket-engineer`
+  - Used: `test-automator`, `websocket-engineer` for acceptance-coverage mapping, deterministic realtime/browser risks, suite extension points, and focused command recommendations
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and configuration/security-triggered `security-engineer`; targeted re-review planned for `code-reviewer` and `qa-expert`
+  - Findings: fixed sampled/circular pattern coverage, retained browser-database accumulation, missing exact role/presence assertions, and a shared-database Vitest file race exposed during post-review checks
+- Decisions (why):
+  - Extended the existing deep PostgreSQL and Socket.IO suites only where coverage was missing instead of duplicating their established ticket, snapshot, presence, pause, co-winner, and restart scenarios.
+  - Kept the complete browser matrix opt-in so contributors without every managed/system browser can still run the portable default or one installed channel, while the full project list remains executable and reviewable.
+  - Used separate migrated databases for Vitest integration and browser journeys because the integration suite's final active-lobby-limit fixture can legitimately block later lobby creation and expose synthetic recovery state to the game server.
+  - Serialized Node test files because repository cleanup and PostgreSQL-backed Socket.IO recovery otherwise race through the same `TEST_DATABASE_URL`; DOM files remain independently runnable.
+  - Tested the later participant as waiting because the public creation flow commits the first-round roster before revealing the code; the journey verifies that this participant receives calls and presence but no foreign/current-round card.
+- **Learnings for future iterations:**
+  - Playwright's WebKit and device descriptors provide valuable compatibility coverage but are not evidence of native Safari, iOS Safari, or Android Chrome execution.
+  - A page reload after the final socket closes exercises the same-device rejoin contract: the browser must obtain a new session/ticket before the private snapshot is restored.
+  - Browser test databases should not be reused after capacity/recovery integration suites unless their final durable fixtures are explicitly designed for browser startup.
+- Known issues / follow-ups:
+  - Edge, managed Firefox/WebKit, and native/previous-stable browser targets are unavailable in this local environment; their exact automated or manual coverage requirements are documented in `docs/browser-test-matrix.md`.
+  - Root formatting remains blocked only by unrelated untracked review artifacts, which were left untouched and unstaged.
+- Next iteration start:
+  - If review passes, implement US-058 accessibility and every-theme regression coverage; otherwise resume any recorded blocking finding.
+---
+
+Initial review remediation for US-057 at 2026-07-21 06:21 MST:
+- `code-reviewer` and `qa-expert` produced three merged blocking roots: sampled catalog properties with a circular completion assertion, browser database accumulation, and missing exact host-role/presence assertions. `security-engineer` returned no findings.
+- Replaced catalog sampling with generated states for every canonical pattern and an independent mask-derived full progress oracle; removed an invalid absolute-satisfied-count monotonic assumption after FastCheck found a flexible-path switch counterexample.
+- Added a read-only browser database preflight that rejects any retained lobby before starting the authority, documented a fresh empty migrated database per invocation, and verified the dirty-database failure before a fresh stable-Chrome run passed all six tests.
+- Added exact two-participant roster assertions before and after recovery plus explicit player-side absence of Start round and Call Next controls.
+- Post-review full-suite runs exposed database repository cleanup racing the PostgreSQL-backed Socket.IO restart test in a separate Vitest file; serialized Node test files, then passed all 805 tests on a fresh migrated database in 21.73 seconds.
+- Targeted re-review is limited to `code-reviewer` and `qa-expert` because the security review returned no findings and all substantive fixes address correctness and test reliability.
+
+Targeted re-review outcome for US-057 at 2026-07-21 06:24 MST:
+- `code-reviewer` returned an empty actionable finding list. `qa-expert` identified two remaining medium blockers.
+- The browser recovery helper proves the authorized HTTP snapshot and private state return but does not assert that the replacement Socket.IO connection reaches `Connected` or `Recovered`, so fresh-ticket realtime recovery is not fully covered by the journey.
+- Only installed stable Chrome executed locally. Matrix discovery and the native/version checklist do not prove managed Edge/Firefox/WebKit/mobile-emulation projects or native/previous-stable targets pass.
+- Per the one-targeted-re-review limit, no further substantive fix or specialist review is permitted in this iteration. `US-057` remains `passes: false`, `prd.json` remains unchanged, and no commit was created.
+- Next iteration start: assert post-reload realtime readiness for both contexts, run the managed matrix where browser binaries are available, record native/previous-stable results or the exact external execution owner, rerun all checks on fresh isolated databases, and restart the complete staged review loop.
+
+## 2026-07-21 06:34:29 MST - US-057
+- What was implemented
+  - Resumed the blocked cross-layer test story and required both host and player reload recovery paths to reach an explicit `Connected` or `Recovered` realtime state before restored private-state assertions continue.
+  - Installed Playwright-managed Chromium, Firefox, and WebKit hermetically in the ignored workspace dependency tree and executed every locally available desktop/mobile project against a fresh migrated database per full-stack invocation.
+  - Kept the mandated `Secure` participant cookie unchanged after WebKit rejected it over the HTTP production harness; WebKit desktop/iPhone projects now run every noncredential check locally, while the release owner is explicitly responsible for the authenticated native Safari/iOS Safari journey over production-like HTTPS and all previous-stable checks.
+- Files changed: `AGENTS.md`, `README.md`, `docs/browser-test-matrix.md`, `packages/database/scripts/assert-empty-e2e-database.ts`, `playwright.config.ts`, `tests/domain-state-machine.test.ts`, `tests/e2e/gameplay.journey.spec.ts`, `tests/patterns.test.ts`, `vitest.config.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-057 - Add gameplay, browser, and recovery test suites`
+- Auto approval: `enabled`
+- Checks:
+  - `TEST_DATABASE_URL=<fresh migrated Vitest database> bun run test` (pass; 39 files and 805 tests including PostgreSQL and Socket.IO multi-client/restart coverage)
+  - `bunx vitest run tests/patterns.test.ts tests/domain-state-machine.test.ts` (pass; 46 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `bun install --frozen-lockfile` (pass; 394 installs checked with no changes)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun run format:check` (fails only on 57 unrelated pre-existing untracked browser/Lighthouse artifacts)
+  - Fresh database-backed full-stack projects: stable Chrome, managed Chromium, managed Firefox, and Android Chromium (pass; 6 tests each; final stable-Chrome rerun used the explicit nonproduction acknowledgement and exact matrix-project selector)
+  - Fresh database-backed WebKit and iPhone WebKit projects (pass; 5 applicable tests each, authenticated HTTP-harness journey skipped for the documented Secure-cookie constraint)
+  - Edge project launch (unavailable; Microsoft Edge is not installed in this environment)
+  - `PLAYWRIGHT_BROWSER_MATRIX=all bunx playwright test --list` (pass in the prior iteration; 42 discovered tests across 7 projects)
+  - `git diff --check && git diff --cached --check` (pass)
+- Implementation agents:
+  - Recommended: `test-automator`, `websocket-engineer`
+  - Used: no additional agents; both recommended advisers already guided US-057, and this resumed iteration addressed two concrete targeted-review blockers
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and browser-configuration-triggered `security-engineer` planned for the revised complete staged diff
+  - Findings: fixed shared-database all-project execution, missing nonproduction acknowledgement, full-table preflight scanning, and incomplete restored-host assertions; targeted re-review pending
+- Decisions (why):
+  - Required realtime readiness in the shared reload helper because HTTP snapshot restoration alone does not prove a replacement single-use ticket established a working Socket.IO connection.
+  - Used one fresh migrated database per browser project because browser startup rejects retained lobby state and cross-project reuse can make admission/recovery results order-dependent.
+  - Skipped only the WebKit authenticated journey under the HTTP harness because accepting or sending the production `Secure` cookie there would require weakening a security invariant; production-like native HTTPS coverage is the faithful validation boundary.
+- **Learnings for future iterations:**
+  - Matrix discovery proves configuration only; launch each available project and report unavailable binaries separately from application failures.
+  - Browser-engine compatibility and native/version certification are distinct: managed WebKit and device emulation cannot certify native Safari/iOS Safari or retained previous-stable releases.
+- Known issues / follow-ups:
+  - The release owner must record native current/previous Safari, current iOS Safari, current Android Chrome, current/previous Chrome, Edge, and Firefox results as documented; this environment has no Microsoft Edge or retained previous-stable/native mobile installations.
+  - Hermetic managed browser binaries remain ignored under `node_modules`; the fresh local test databases retain non-destructive fixtures.
+  - Root formatting remains blocked only by unrelated untracked review artifacts, which remain untouched and unstaged.
+- Next iteration start:
+  - If review passes, implement US-058 accessibility and every-theme regression coverage; otherwise resume any recorded blocking finding.
+---
+
+Initial review remediation for resumed US-057 at 2026-07-21 06:45:22 MST:
+- `code-reviewer` and `security-engineer` produced two blocking medium roots: a database-backed all-project matrix invocation could share one database across concurrent projects, and the empty-database preflight lacked an explicit nonproduction acknowledgement. `code-reviewer` also reported one cheap recovery-role assertion gap; `qa-expert` reported only the expected pre-final-PRD bookkeeping comment, which was discarded because Ralph intentionally stages `prd.json` after review passes.
+- Added failing command-level checks first: a database-backed matrix without an exact project selector listed all 42 tests, and a direct fresh-database preflight succeeded without an explicit safety acknowledgement.
+- Required `E2E_DATABASE_CONFIRMED_NONPRODUCTION=true` for both Playwright configuration and the direct preflight, required one exact `PLAYWRIGHT_MATRIX_PROJECT` for database-backed matrix runs, constrained the configured project list to that selection, and changed retained-state detection from `COUNT(*)` to `EXISTS ... LIMIT 1`.
+- Updated contributor/browser documentation for one fresh database per selected project and strengthened recovery coverage to require restored host role, connected presence, and host-only Call Next availability after the replacement realtime connection is ready.
+- Testing decision:
+  - Change type: bug fix and test-harness hardening.
+  - Test-first required: yes for the fail-closed configuration/preflight behavior; the host-role change strengthens existing acceptance coverage without production behavior.
+  - Red: the unguarded matrix and preflight commands succeeded before implementation; the first argv-based guard then exposed Playwright worker config reloads and was replaced with a persistent environment selector.
+  - Green: missing selector and missing acknowledgement now fail with actionable errors, the acknowledged empty preflight passes, the exact Chrome selector lists only six tests, and the fresh database-backed stable-Chrome project passes all six tests.
+- Post-fix checks: a fresh database-backed root suite passes 39 files and 805 tests; stable Chrome passes all six browser tests; typecheck is included in the root suite; lint, tracked formatting, and diff checks pass.
+- Targeted re-review is limited to `code-reviewer` for matrix/recovery fixes and `security-engineer` for the nonproduction/preflight fix; QA produced no substantive blocking finding.
+
+Targeted re-review outcome for resumed US-057 at 2026-07-21 06:45:22 MST:
+- `code-reviewer` and `security-engineer` returned empty actionable finding lists against the revised complete staged diff.
+- The exact matrix selector, explicit nonproduction acknowledgement, read-only existence preflight, restored realtime/host assertions, and one-fresh-database documentation resolve both initial blocking roots and the cheap recovery gap.
+- Residual risk is limited to nonproduction status remaining an explicit operator assertion, freshness remaining point-in-time across independent processes, final post-fix matrix execution using stable Chrome while earlier fresh runs covered managed Chromium/Firefox/Android/WebKit, and external Edge/native/previous-stable coverage assigned to the release owner.
+- No in-scope critical, high, or medium findings remain; US-057 can be marked passing and committed after the required metadata update and final consistency check.

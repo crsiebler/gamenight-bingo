@@ -341,6 +341,7 @@ bun run db:generate
 DATABASE_URL='<approved-local-or-test-url>' bun run db:migrate:deploy
 TEST_DATABASE_URL='<migrated-test-url>' bun run test:database
 bun run test:e2e
+E2E_DATABASE_CONFIRMED_NONPRODUCTION=true TEST_DATABASE_URL='<fresh-empty-migrated-browser-test-url>' PLAYWRIGHT_BROWSER_MATRIX=all PLAYWRIGHT_MATRIX_PROJECT='<one-project>' bun run test:e2e
 ```
 
 Vitest, not Bun's built-in test framework, is the test runner. The complete
@@ -351,7 +352,13 @@ should run the narrow affected suite while developing and all required root
 checks before committing. Playwright browser checks require a managed Chromium
 installation from `bunx playwright install chromium`. To verify against an
 installed stable Google Chrome instead, run
-`PLAYWRIGHT_BROWSER_CHANNEL=chrome bun run test:e2e`.
+`PLAYWRIGHT_BROWSER_CHANNEL=chrome bun run test:e2e`. The complete automated
+project list and the required native/previous-stable manual coverage are in the
+[browser test matrix](docs/browser-test-matrix.md); Playwright device emulation
+must not be reported as native mobile-browser coverage. Full-stack browser runs
+require the explicit nonproduction acknowledgement, fail closed unless their
+dedicated database contains no existing lobbies, and run one project per fresh
+database.
 The generic Vitest run skips database integration tests when `TEST_DATABASE_URL`
 is absent; database changes must also run `test:database` against PostgreSQL 16
 after applying the committed migrations. Never run migration or integration-test
