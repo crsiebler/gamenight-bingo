@@ -244,10 +244,14 @@ semantic color roles, focus treatment, and motion policy. Review the generated
 gallery](docs/theme-moodboards.html). Original per-theme vector sprites are
 described by that catalog and reviewed in the generated [visual asset
 gallery](docs/theme-assets.html); the private lobby requests only its selected
-theme. Future audio and any nongenerated-asset provenance also belong to that
-package. Every theme must preserve readable game state, visible focus, high
-contrast, reduced motion, mute controls, and functional fallbacks when a
-decorative asset fails.
+theme. Each theme also has one project-original generated WAV sprite containing
+call, daub, near-win, winner, and respectful other-player-won cues. The browser
+requests only the selected theme's audio and only after `Enable sounds` is
+activated; mute and volume persist locally, but every page load starts locked
+until a new user gesture. Every theme preserves readable game state, visible
+focus, high contrast, reduced motion, and functional play when visual or audio
+assets fail. Regenerate the committed audio sprites with
+`bun scripts/generate-theme-audio.ts`.
 
 ## Realtime And Reconnects
 

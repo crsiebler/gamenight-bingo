@@ -19,12 +19,35 @@ import { patternCatalog } from "@gamenight-bingo/patterns";
 import { metadata, revalidate } from "../../app/lobbies/[code]/page.js";
 import { PrivateLobbyFlowError } from "../../lib/private-lobby-flow.js";
 import type { PrivateLobbyRealtimeHandlers } from "../../lib/private-lobby-realtime.js";
+import type { ThemeAudioController, ThemeAudioSnapshot } from "../../lib/theme-audio.js";
 import { PrivateLobbyPage } from "./private-lobby-page.js";
 
 const NOW = "2026-07-18T12:00:00.000Z";
 const patterns = patternCatalog.filter(({ id }) =>
   ["standard-one-line", "shape-x", "letter-x"].includes(id),
 );
+
+function fakeThemeAudio() {
+  let snapshot: ThemeAudioSnapshot = { status: "locked", muted: false, volume: 0.65 };
+  const listeners = new Set<() => void>();
+  const publish = (next: ThemeAudioSnapshot) => {
+    snapshot = next;
+    for (const listener of listeners) listener();
+  };
+  const controller: ThemeAudioController = {
+    getSnapshot: () => snapshot,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    enable: vi.fn(async () => publish({ ...snapshot, status: "ready" })),
+    play: vi.fn(),
+    setMuted: vi.fn((muted) => publish({ ...snapshot, muted })),
+    setVolume: vi.fn((volume) => publish({ ...snapshot, volume })),
+    dispose: vi.fn(),
+  };
+  return controller;
+}
 
 function snapshotFor(
   role: "host" | "player" | "waiting" = "host",
@@ -5038,5 +5061,252 @@ describe("PrivateLobbyPage", () => {
         "NEXT_PUBLIC_GAME_SERVER_URL must be one HTTP or HTTPS origin without credentials, path, query, or fragment.",
       );
     }
+  });
+
+  it("keeps theme audio locked until an explicit sound-settings gesture", async () => {
+    const audio = fakeThemeAudio();
+    const createThemeAudio = vi.fn(() => audio);
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createThemeAudio={createThemeAudio}
+        loadSnapshot={async () => snapshotFor("player", { round: "active", themeId: "ghosts" })}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const settings = await screen.findByRole("group", { name: "Sound settings" });
+    expect(createThemeAudio).toHaveBeenCalledWith(expect.objectContaining({ id: "ghosts" }));
+    expect(within(settings).getByText(/sounds are off until you enable them/i)).toBeVisible();
+    expect(audio.enable).not.toHaveBeenCalled();
+
+    fireEvent.click(within(settings).getByRole("button", { name: "Enable sounds" }));
+    await waitFor(() => expect(audio.enable).toHaveBeenCalledOnce());
+    expect(within(settings).getByRole("button", { name: "Mute sounds" })).toHaveFocus();
+    expect(within(settings).getByRole("slider", { name: "Sound volume" })).toHaveValue("65");
+
+    fireEvent.change(within(settings).getByRole("slider", { name: "Sound volume" }), {
+      target: { value: "35" },
+    });
+    expect(audio.setVolume).toHaveBeenCalledWith(0.35);
+    fireEvent.click(within(settings).getByRole("button", { name: "Mute sounds" }));
+    expect(audio.setMuted).toHaveBeenCalledWith(true);
+    expect(
+      screen.getByRole("region", { name: "Live game status" }).compareDocumentPosition(settings) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("plays only fresh authoritative cues and keeps snapshots silent", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const audio = fakeThemeAudio();
+    const baseline = snapshotFor("player", {
+      absentPlayerOverridden: true,
+      calledBalls: [1],
+      eventSequence: 1,
+      round: "active",
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        createThemeAudio={() => audio}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Enable sounds" }));
+    await waitFor(() => expect(audio.enable).toHaveBeenCalledOnce());
+    expect(audio.play).not.toHaveBeenCalled();
+
+    const call = ActiveLobbyEventSchema.parse({
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "call",
+      eventSequence: 2,
+      occurredAt: NOW,
+      call: { id: "call-2", roundId: "round-1", position: 2, ball: 17, calledAt: NOW },
+    });
+    act(() => handlers?.onLobbyEvent(call));
+    act(() => handlers?.onLobbyEvent(call));
+    act(() =>
+      handlers?.onPrivateEvent?.(
+        ParticipantPrivateEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "near-win",
+          occurredAt: NOW,
+          requiredBall: 17,
+        }),
+      ),
+    );
+    act(() =>
+      handlers?.onPrivateEvent?.(
+        ParticipantPrivateEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "mark-result",
+          commandId: "command-private",
+          occurredAt: NOW,
+          mark: { id: "mark-live", cardId: baseline.ownCard?.id, ball: 17, markedAt: NOW },
+        }),
+      ),
+    );
+
+    const settled = snapshotFor("player", {
+      calledBalls: [1, 17],
+      eventSequence: 3,
+      resultTriggeringCallPosition: 2,
+      round: "result",
+      winnerParticipantIds: ["participant-grace"],
+    });
+    const result = settled.round?.stage === "result" ? settled.round.result : null;
+    if (result === null) throw new Error("Missing result fixture.");
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "co-winner-result",
+          eventSequence: 3,
+          occurredAt: NOW,
+          result,
+        }),
+      ),
+    );
+    act(() => handlers?.onSnapshot(settled));
+
+    expect(audio.play).toHaveBeenCalledTimes(4);
+    expect(vi.mocked(audio.play).mock.calls.map(([role]) => role)).toEqual([
+      "call",
+      "near-win",
+      "daub",
+      "win",
+    ]);
+  });
+
+  it("keeps snapshot reconciliation silent after one fresh mark acknowledgement", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const audio = fakeThemeAudio();
+    const initial = snapshotFor("player", {
+      calledBalls: [1],
+      eventSequence: 1,
+      round: "active",
+    });
+    const marked = snapshotFor("player", {
+      calledBalls: [1],
+      eventSequence: 1,
+      markedBalls: [1],
+      round: "active",
+    });
+    const refresh = deferred<Snapshot>();
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(initial)
+      .mockReturnValueOnce(refresh.promise);
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        createMarkCommandSession={() => ({ run: async () => privateAck() })}
+        createThemeAudio={() => audio}
+        enableRealtime
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Enable sounds" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /b.*1.*called - mark.*available to mark/i }),
+    );
+    await screen.findByText("Mark committed. Refreshing your card...");
+    expect(audio.play).toHaveBeenCalledTimes(1);
+
+    await act(async () => refresh.resolve(marked));
+    await screen.findByRole("button", { name: /b.*1.*marked/i });
+    expect(audio.play).toHaveBeenCalledTimes(1);
+    expect(audio.play).toHaveBeenCalledWith("daub", `mark:${initial.ownCard?.id}:1`);
+
+    act(() => handlers?.onSnapshot(marked));
+    expect(audio.play).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replay a settled result cue when the host ends that result", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const audio = fakeThemeAudio();
+    const checking = snapshotFor("player", {
+      calledBalls: [1],
+      eventSequence: 1,
+      round: "co-winner-window",
+    });
+    const settled = snapshotFor("player", {
+      calledBalls: [1],
+      eventSequence: 2,
+      round: "result",
+      winnerParticipantIds: ["participant-host"],
+    });
+    const result = settled.round?.stage === "result" ? settled.round.result : null;
+    if (result === null) throw new Error("Missing result fixture.");
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        createThemeAudio={() => audio}
+        enableRealtime
+        loadSnapshot={async () => checking}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Enable sounds" }));
+
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "co-winner-result",
+          eventSequence: 2,
+          occurredAt: NOW,
+          result,
+        }),
+      ),
+    );
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "round-end",
+          eventSequence: 3,
+          occurredAt: NOW,
+          round: {
+            id: "round-1",
+            lobbyId: "lobby-1",
+            patternId: "standard-one-line",
+            callConfiguration: { mode: "manual" },
+            stage: "ended",
+            startedAt: NOW,
+            endedAt: NOW,
+            result,
+          },
+        }),
+      ),
+    );
+
+    expect(vi.mocked(audio.play).mock.calls.map(([role]) => role)).toEqual(["other-winner"]);
   });
 });

@@ -103,7 +103,7 @@ type ThemeModule = {
   themeCssVariables?: (theme: ThemeFixture) => Readonly<Record<string, string>>;
 };
 
-const moduleUnderTest = themeExports as ThemeModule;
+const moduleUnderTest = themeExports as unknown as ThemeModule;
 
 function parseHex(hex: string): [number, number, number] {
   expect(hex, `expected an opaque six-digit hex color, received ${hex}`).toMatch(/^#[0-9a-f]{6}$/i);

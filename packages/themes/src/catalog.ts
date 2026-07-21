@@ -100,12 +100,33 @@ export type ThemeVisualAssets = {
   readonly concepts: Readonly<Record<ThemeAssetRole, string>>;
 };
 
+export const themeAudioRoles = ["call", "daub", "near-win", "win", "other-winner"] as const;
+
+export type ThemeAudioRole = (typeof themeAudioRoles)[number];
+
+export type ThemeAudioCue = {
+  readonly offsetSeconds: number;
+  readonly durationSeconds: number;
+  readonly concept: string;
+};
+
+export type ThemeAudioAssets = {
+  readonly spriteUrl: `/theme-audio/${string}.wav`;
+  readonly provenance: {
+    readonly author: "GameNight Bingo";
+    readonly license: "Project-original";
+    readonly source: "Procedurally generated from canonical theme metadata";
+  };
+  readonly cues: Readonly<Record<ThemeAudioRole, ThemeAudioCue>>;
+};
+
 export type ThemeDefinition = {
   readonly id: string;
   readonly name: string;
   readonly moodboard: ThemeMoodboard;
   readonly tokens: ThemeTokens;
   readonly visuals: ThemeVisualAssets;
+  readonly audio: ThemeAudioAssets;
 };
 
 type ThemePalette = {
@@ -202,6 +223,33 @@ function visualAssets(id: string, name: string, input: ThemeVisualInput): ThemeV
   };
 }
 
+function audioAssets(id: string, name: string, subject: string): ThemeAudioAssets {
+  const original = (action: string) => `Original ${name} ${subject} ${action}`;
+  return {
+    spriteUrl: `/theme-audio/${id}.wav`,
+    provenance: {
+      author: "GameNight Bingo",
+      license: "Project-original",
+      source: "Procedurally generated from canonical theme metadata",
+    },
+    cues: {
+      call: { offsetSeconds: 0, durationSeconds: 0.32, concept: original("call chime") },
+      daub: { offsetSeconds: 0.36, durationSeconds: 0.24, concept: original("daub tap") },
+      "near-win": {
+        offsetSeconds: 0.64,
+        durationSeconds: 0.48,
+        concept: original("near-win lift"),
+      },
+      win: { offsetSeconds: 1.16, durationSeconds: 0.72, concept: original("winner fanfare") },
+      "other-winner": {
+        offsetSeconds: 1.92,
+        durationSeconds: 0.6,
+        concept: original("respectful congratulations chime"),
+      },
+    },
+  };
+}
+
 function defineTheme<const Id extends string, const Name extends string>(input: {
   readonly id: Id;
   readonly name: Name;
@@ -218,6 +266,7 @@ function defineTheme<const Id extends string, const Name extends string>(input: 
     },
     tokens: tokens(input.palette),
     visuals: visualAssets(input.id, input.name, input.visuals),
+    audio: audioAssets(input.id, input.name, input.visuals.subject),
   };
 }
 

@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+  type FormEvent,
+} from "react";
 
 import {
   SnapshotSchema,
@@ -38,6 +45,7 @@ import {
   type PrivateLobbyRealtimeConnection,
   type PrivateLobbyRealtimeHandlers,
 } from "@/lib/private-lobby-realtime";
+import { createThemeAudioController, type ThemeAudioController } from "@/lib/theme-audio";
 
 type PatternOption = {
   category: "standard" | "shape" | "letter" | "number" | "christmas";
@@ -59,6 +67,7 @@ type PrivateLobbyPageProps = {
     run(): Promise<CommandAck>;
   };
   connectRealtime?: (handlers: PrivateLobbyRealtimeHandlers) => PrivateLobbyRealtimeConnection;
+  createThemeAudio?: (theme: ThemeDefinition) => ThemeAudioController;
   enableRealtime?: boolean;
   realtimeServerUrl?: string;
 };
@@ -115,6 +124,85 @@ function ThemeArtwork({
         <use href={`${theme.visuals.spriteUrl}#${role}`} />
       </svg>
     </span>
+  );
+}
+
+function ThemeAudioControls({ controller }: { controller: ThemeAudioController }) {
+  const actionRef = useRef<HTMLButtonElement>(null);
+  const controlsRef = useRef<HTMLFieldSetElement>(null);
+  const restoreActionFocusRef = useRef(false);
+  const audio = useSyncExternalStore(
+    controller.subscribe,
+    controller.getSnapshot,
+    controller.getSnapshot,
+  );
+  const status =
+    audio.status === "locked"
+      ? "Sounds are off until you enable them. Game meaning never depends on sound."
+      : audio.status === "loading"
+        ? "Loading the selected theme sounds..."
+        : audio.status === "unavailable"
+          ? "Sounds are unavailable. Gameplay is unaffected."
+          : audio.muted
+            ? "Theme sounds are muted."
+            : "Optional theme sounds are ready.";
+
+  useEffect(() => {
+    if (!restoreActionFocusRef.current || audio.status === "loading") return;
+    restoreActionFocusRef.current = false;
+    const active = document.activeElement;
+    if (active === document.body || active === null || controlsRef.current?.contains(active)) {
+      actionRef.current?.focus();
+    }
+  }, [audio.status]);
+
+  return (
+    <fieldset className="theme-audio-controls" ref={controlsRef}>
+      <legend>Sound settings</legend>
+      <p aria-live="polite" role="status">
+        {status}
+      </p>
+      {audio.status === "ready" ? (
+        <>
+          <Button
+            onClick={() => controller.setMuted(!audio.muted)}
+            ref={actionRef}
+            type="button"
+            variant="outline"
+          >
+            {audio.muted ? "Unmute sounds" : "Mute sounds"}
+          </Button>
+          <label>
+            <span>Sound volume</span>
+            <input
+              aria-valuetext={`${Math.round(audio.volume * 100)} percent`}
+              max="100"
+              min="0"
+              onChange={(event) => controller.setVolume(Number(event.currentTarget.value) / 100)}
+              type="range"
+              value={Math.round(audio.volume * 100)}
+            />
+          </label>
+        </>
+      ) : (
+        <Button
+          disabled={audio.status === "loading"}
+          onClick={() => {
+            restoreActionFocusRef.current = true;
+            void controller.enable();
+          }}
+          ref={actionRef}
+          type="button"
+          variant="outline"
+        >
+          {audio.status === "loading"
+            ? "Loading sounds..."
+            : audio.status === "unavailable"
+              ? "Retry sounds"
+              : "Enable sounds"}
+        </Button>
+      )}
+    </fieldset>
   );
 }
 
@@ -194,6 +282,23 @@ function outcomeIdentityFor(snapshot: Snapshot): string | null {
     round.stage,
     round.id,
     round.patternId,
+    result.triggeringCallId,
+    result.openedAt,
+    result.closesAt,
+    result.settledAt,
+    ...result.winnerParticipantIds,
+  ].join(":");
+}
+
+function resultAudioIdentityFor(snapshot: Snapshot): string | null {
+  const result =
+    snapshot.round?.stage === "result" || snapshot.round?.stage === "ended"
+      ? snapshot.round.result
+      : null;
+  if (result === null || snapshot.round === null) return null;
+  return [
+    snapshot.round.id,
+    snapshot.round.patternId,
     result.triggeringCallId,
     result.openedAt,
     result.closesAt,
@@ -530,6 +635,7 @@ export function PrivateLobbyPage({
   origin,
   createCommandSession = defaultCreateCommandSession,
   createMarkCommandSession = defaultCreateMarkCommandSession,
+  createThemeAudio = createThemeAudioController,
   connectRealtime,
   enableRealtime = false,
   realtimeServerUrl,
@@ -558,11 +664,13 @@ export function PrivateLobbyPage({
   const pendingMarkRef = useRef<PendingMarkReconciliation | null>(null);
   const unresolvedMarkRef = useRef<UnresolvedMark | null>(null);
   const snapshotRef = useRef<Snapshot | null>(null);
+  const themeAudioRef = useRef<ThemeAudioController | null>(null);
   const liveConnectionRef = useRef<PrivateLobbyRealtimeConnection | null>(null);
   const resyncRequestedRef = useRef(false);
   const recoveringRef = useRef(false);
   const connectionStateRef = useRef<PrivateLobbyConnectionState>("snapshot-syncing");
   const outcomeAnnouncementIdentityRef = useRef<string | null>(null);
+  const resultAudioIdentityRef = useRef<string | null>(null);
   const callHistoryRef = useRef<HTMLOListElement>(null);
   const followCallHistoryRef = useRef(true);
   const liveGameHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -605,6 +713,7 @@ export function PrivateLobbyPage({
   const [endConfirmationOpen, setEndConfirmationOpen] = useState(false);
   const [restoreEndRoundFocus, setRestoreEndRoundFocus] = useState(false);
   const [loadedThemeSpriteUrl, setLoadedThemeSpriteUrl] = useState<string | null>(null);
+  const [themeAudio, setThemeAudio] = useState<ThemeAudioController | null>(null);
   const [commandFocusTarget, setCommandFocusTarget] = useState<
     "host-controls" | "live-game" | "outcome" | "setup" | null
   >(null);
@@ -613,6 +722,7 @@ export function PrivateLobbyPage({
     snapshot === null &&
     !snapshotPending &&
     (snapshotErrorCode === "NOT_FOUND" || snapshotErrorCode === "LOBBY_EXPIRED");
+  const selectedAudioTheme = snapshot === null ? undefined : getTheme(snapshot.lobby.themeId);
 
   function setSetupDraftDirty(dirty: boolean) {
     setupDirtyRef.current = dirty;
@@ -910,6 +1020,7 @@ export function PrivateLobbyPage({
         }
         if (!stale) {
           snapshotRef.current = next;
+          resultAudioIdentityRef.current = resultAudioIdentityFor(next);
           setSnapshot(next);
         }
         reconcileOutcomeAnnouncement(next);
@@ -978,6 +1089,25 @@ export function PrivateLobbyPage({
       refreshPromiseRef.current = null;
     };
   }, [code, loadSnapshot]);
+
+  useEffect(() => {
+    if (selectedAudioTheme === undefined) {
+      themeAudioRef.current?.dispose();
+      themeAudioRef.current = null;
+      setThemeAudio(null);
+      return;
+    }
+    const controller = createThemeAudio(selectedAudioTheme);
+    themeAudioRef.current?.dispose();
+    themeAudioRef.current = controller;
+    setThemeAudio(controller);
+    return () => {
+      if (themeAudioRef.current === controller) {
+        controller.dispose();
+        themeAudioRef.current = null;
+      }
+    };
+  }, [createThemeAudio, selectedAudioTheme?.id]);
 
   useEffect(() => {
     if (origin === undefined && typeof window !== "undefined") {
@@ -1053,6 +1183,7 @@ export function PrivateLobbyPage({
           next.round?.stage === "active" && next.round.callConfiguration.mode === "automatic";
         if (event.type === "call") {
           setCallAnnouncement(`New call: ${ballLabel(event.call.ball)}`);
+          themeAudioRef.current?.play("call", `call:${event.call.id}`);
         }
         if (event.type === "co-winner-window") {
           outcomeAnnouncementIdentityRef.current = outcomeIdentityFor(next);
@@ -1072,6 +1203,27 @@ export function PrivateLobbyPage({
         } else {
           reconcileOutcomeAnnouncement(next);
         }
+        if (
+          event.type === "co-winner-result" ||
+          event.type === "stage" ||
+          event.type === "round-end"
+        ) {
+          const resultIdentity = resultAudioIdentityFor(next);
+          const result =
+            next.round?.stage === "result" || next.round?.stage === "ended"
+              ? next.round.result
+              : null;
+          if (resultIdentity !== null && result !== null) {
+            if (resultIdentity !== resultAudioIdentityRef.current) {
+              const selfWon = result.winnerParticipantIds.includes(next.self.id);
+              themeAudioRef.current?.play(
+                selfWon ? "win" : "other-winner",
+                `result:${resultIdentity}`,
+              );
+            }
+          }
+          resultAudioIdentityRef.current = resultIdentity;
+        }
         if (requiresAutomaticTimer && (event.type === "call" || event.type === "stage")) {
           requestResync(event.eventSequence);
         }
@@ -1083,6 +1235,10 @@ export function PrivateLobbyPage({
         if (current === null) return;
         if (event.type === "near-win") {
           setMarkMessage(`Near win: ${ballLabel(event.requiredBall)} is still needed.`);
+          themeAudioRef.current?.play(
+            "near-win",
+            `near-win:${event.occurredAt}:${event.requiredBall}`,
+          );
           return;
         }
         if (current.ownCard?.id !== event.mark.cardId) {
@@ -1106,6 +1262,7 @@ export function PrivateLobbyPage({
         snapshotRef.current = next;
         setSnapshot(next);
         reconcilePendingState(next, current);
+        themeAudioRef.current?.play("daub", `mark:${event.mark.cardId}:${event.mark.ball}`);
       },
       onSnapshot(next) {
         if (terminalDeliveryClosedRef.current) return;
@@ -1122,6 +1279,7 @@ export function PrivateLobbyPage({
         const recovering = recoveringRef.current;
         const roundChanged = current?.round?.id !== accepted.round?.id;
         snapshotRef.current = accepted;
+        resultAudioIdentityRef.current = resultAudioIdentityFor(accepted);
         resyncRequestedRef.current = false;
         setSnapshot(accepted);
         const confirmedCommand = reconcilePendingState(accepted, current);
@@ -1536,6 +1694,9 @@ export function PrivateLobbyPage({
         acknowledgement.scope === "active-lobby" ? acknowledgement.eventSequence : null,
     };
     pendingMarkRef.current = pending;
+    if (!acknowledgement.idempotentReplay) {
+      themeAudioRef.current?.play("daub", `mark:${card.id}:${ball}`);
+    }
     setMarkMessage("Mark committed. Refreshing your card...");
     try {
       const next = await refreshSnapshot("Refreshing your card...", { mandatory: true });
@@ -1601,7 +1762,7 @@ export function PrivateLobbyPage({
     );
   }
 
-  const activeTheme = getTheme(snapshot.lobby.themeId);
+  const activeTheme = selectedAudioTheme;
   const themeName = activeTheme?.name;
   const themeStyle =
     activeTheme === undefined ? undefined : (themeCssVariables(activeTheme) as CSSProperties);
@@ -2121,6 +2282,8 @@ export function PrivateLobbyPage({
             )}
           </section>
         ) : null}
+
+        {themeAudio === null ? null : <ThemeAudioControls controller={themeAudio} />}
 
         {hasOutcome && roundStage !== "co-winner-window" ? null : cardPanel}
 

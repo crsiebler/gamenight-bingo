@@ -417,6 +417,11 @@ then refactor while green.
   one external sprite per theme with `bun scripts/generate-theme-assets.ts`.
   Private UI must preload only the selected sprite, keep artwork decorative and
   unfocusable, and preserve semantic HTML plus a static fallback on load failure.
+- Keep project-original audio roles, cue boundaries, and provenance on the
+  canonical theme definition and regenerate one WAV sprite per theme with
+  `bun scripts/generate-theme-audio.ts`. Audio must remain inert until explicit
+  opt-in, load only the selected theme, persist only mute/volume preferences,
+  and play only for fresh authoritative events rather than snapshots.
 
 ## Accessibility
 

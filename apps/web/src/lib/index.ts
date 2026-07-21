@@ -25,3 +25,10 @@ export {
   type PrivateLobbyRealtimeHandlers,
   type PrivateLobbyRealtimeOptions,
 } from "./private-lobby-realtime";
+export {
+  createThemeAudioController,
+  type ThemeAudioBackend,
+  type ThemeAudioController,
+  type ThemeAudioSnapshot,
+  type ThemeAudioStorage,
+} from "./theme-audio";

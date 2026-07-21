@@ -407,6 +407,44 @@ h2 {
   margin-bottom: 0;
 }
 
+.theme-audio-controls {
+  align-items: center;
+  background: var(--bingo-theme-surface, #ffffff);
+  border: 0.125rem solid var(--bingo-theme-border, #173f5f);
+  border-radius: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  margin: 0;
+  min-width: 0;
+  padding: 0.75rem 1rem 1rem;
+}
+
+.theme-audio-controls legend {
+  font-weight: 900;
+  padding: 0 0.35rem;
+}
+
+.theme-audio-controls p {
+  flex: 1 1 18rem;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.theme-audio-controls label {
+  align-items: center;
+  display: flex;
+  flex: 1 1 14rem;
+  font-weight: 800;
+  gap: 0.75rem;
+}
+
+.theme-audio-controls input[type="range"] {
+  min-height: 2.75rem;
+  min-width: 8rem;
+  width: 100%;
+}
+
 .private-lobby-grid {
   display: grid;
   gap: 1.25rem;
