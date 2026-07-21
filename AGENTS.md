@@ -206,8 +206,9 @@ invalid counts, timestamps, or durations.
   stable error schemas or private `no-store` headers.
 - Authenticate and authorize every private read and mutation; a lobby code is a
   locator, not proof of identity or host authority.
-- Apply origin/CSRF checks, payload limits, and independent rate limits where
-  required by the PRD.
+- Compare mutations against the configured canonical web origin rather than a
+  request URL derived from proxy-controlled host data, require the first-party
+  JSON mutation header, and apply payload limits plus independent rate limits.
 - Derive requester rate-limit keys only at a trusted proxy boundary that
   overwrites or appends the observed address and prevents direct origin access.
   Require an authenticated proxy marker that clients cannot supply, hash
@@ -497,6 +498,9 @@ then refactor while green.
   privacy-safe.
 - Mark private pages `noindex`, `nofollow`, and `noarchive`; keep third-party
   analytics and public structured data off private routes.
+- Generate a per-request CSP nonce in the Next proxy and pass the nonce-bearing
+  policy through request headers so framework scripts receive it; production
+  `script-src` must never fall back to `unsafe-inline`.
 - Validate environment configuration before serving traffic without echoing
   secret values.
 - Parse process environment only at runtime entry points through

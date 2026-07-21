@@ -105,7 +105,7 @@ describe("public create-lobby flow", () => {
       expect(init).toMatchObject({
         method: "POST",
         credentials: "same-origin",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", "x-gamenight-request": "mutation" },
       });
     }
   });

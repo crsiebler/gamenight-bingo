@@ -3470,6 +3470,20 @@ describe("authenticated Socket.IO authority", () => {
     if (replacement.status === "reserved") replacement.release();
   });
 
+  test("hardens raw HTTP responses without reflecting request data", async () => {
+    const harness = await createHarness();
+    const privateMarker = "private-ticket-marker";
+
+    const response = await fetch(`${harness.url}/missing?ticket=${privateMarker}`);
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("x-frame-options")).toBe("DENY");
+    expect(await response.text()).not.toContain(privateMarker);
+  });
+
   test("consumes a strict handshake ticket and stores only persisted identity", async () => {
     const credential = ticket(1);
     const harness = await createHarness({
@@ -3990,6 +4004,63 @@ describe("authenticated Socket.IO authority", () => {
         commandId: null,
       });
     }
+    expect(harness.executed).toEqual([]);
+  });
+
+  test("accepts packets below the transport payload cap and disconnects oversized packets", async () => {
+    const credentials = [ticket(42), ticket(43)];
+    const heartbeatRecorded = deferred<AuthenticatedRealtimeIdentity>();
+    const harness = await createHarness({
+      tickets: new Map(credentials.map((credential) => [ticketHash(credential), identities.host])),
+      recordHeartbeat: async (identity) => {
+        heartbeatRecorded.resolve(identity);
+        return true;
+      },
+    });
+    const payloadCap = 16 * 1024;
+    const validPayload = {
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "heartbeat",
+    };
+    const encodedSize = (payload: unknown) =>
+      Buffer.byteLength(`42${JSON.stringify(["v1:command", payload])}`);
+    const boundaryPayload = (encodedBytes: number) => {
+      const payload = {
+        schemaVersion: CONTRACT_SCHEMA_VERSION,
+        type: "chat",
+        padding: "",
+      };
+      return {
+        ...payload,
+        padding: "a".repeat(encodedBytes - encodedSize(payload)),
+      };
+    };
+    const acceptedBoundaryPayload = boundaryPayload(payloadCap - 1);
+    const oversizedPayload = boundaryPayload(payloadCap + 1);
+
+    expect(encodedSize(validPayload)).toBeLessThan(payloadCap);
+    expect(encodedSize(acceptedBoundaryPayload)).toBe(payloadCap - 1);
+    expect(encodedSize(oversizedPayload)).toBe(payloadCap + 1);
+
+    const acceptedClient = await harness.connect(credentials[0]!);
+    acceptedClient.emit("v1:command", validPayload);
+    await expect(
+      waitForSignal(heartbeatRecorded.promise, "the valid below-cap heartbeat"),
+    ).resolves.toEqual(identities.host);
+
+    const validationError = once<unknown>(acceptedClient, "v1:error");
+    acceptedClient.emit("v1:command", acceptedBoundaryPayload);
+    expect(ErrorSchema.parse(await validationError)).toMatchObject({
+      code: "INVALID_PAYLOAD",
+      commandId: null,
+    });
+    expect(acceptedClient.connected).toBe(true);
+
+    const oversizedClient = await harness.connect(credentials[1]!);
+    const disconnected = once<void>(oversizedClient, "disconnect");
+    oversizedClient.emit("v1:command", oversizedPayload);
+    await disconnected;
+
     expect(harness.executed).toEqual([]);
   });
 

@@ -11,11 +11,12 @@ export type RuntimeConfig = Readonly<{
   databaseUrl?: string;
   publicGameServerUrl?: string;
   trustedProxySecret?: string;
+  webOrigin?: string;
 }>;
 
 type RuntimeConfigProperty = Exclude<
   keyof RuntimeConfig,
-  "databaseUrl" | "publicGameServerUrl" | "trustedProxySecret"
+  "databaseUrl" | "publicGameServerUrl" | "trustedProxySecret" | "webOrigin"
 >;
 
 type RuntimeConfigDefinition = Readonly<{
@@ -82,6 +83,23 @@ const CONFIG_DEFINITIONS: readonly RuntimeConfigDefinition[] = [
 const PUBLIC_HTTP_ORIGIN =
   /^https?:\/\/(?:localhost|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?|\[[0-9a-f:.]+\])(?::(\d{1,5}))?$/i;
 const PUBLIC_HTTP_URL = z.url({ protocol: /^https?$/ });
+const RuntimeUrl = (
+  globalThis as unknown as {
+    readonly URL: new (value: string) => { readonly origin: string };
+  }
+).URL;
+
+function isCanonicalPublicHttpOrigin(value: string): boolean {
+  const match = PUBLIC_HTTP_ORIGIN.exec(value);
+  const port = match?.[1] === undefined ? null : Number(match[1]);
+  return (
+    PUBLIC_HTTP_URL.safeParse(value).success &&
+    match !== null &&
+    (port === null || (port >= 1 && port <= 65_535)) &&
+    new RuntimeUrl(value).origin === value
+  );
+}
+
 export class RuntimeConfigurationError extends Error {
   readonly code = "RUNTIME_CONFIG_INVALID";
   readonly issues: readonly string[];
@@ -100,6 +118,7 @@ export function parseRuntimeConfig(
     databaseUrl?: string;
     publicGameServerUrl?: string;
     trustedProxySecret?: string;
+    webOrigin?: string;
   } = {
     ...RUNTIME_CONFIG_DEFAULTS,
   };
@@ -148,15 +167,20 @@ export function parseRuntimeConfig(
     }
   }
 
+  const webOrigin = environment["WEB_ORIGIN"];
+  if (webOrigin !== undefined) {
+    if (!isCanonicalPublicHttpOrigin(webOrigin)) {
+      issues.push(
+        "WEB_ORIGIN must be an HTTP or HTTPS origin without credentials, path, query, or fragment.",
+      );
+    } else {
+      configuration.webOrigin = webOrigin;
+    }
+  }
+
   const publicGameServerUrl = environment["NEXT_PUBLIC_GAME_SERVER_URL"];
   if (publicGameServerUrl !== undefined) {
-    const match = PUBLIC_HTTP_ORIGIN.exec(publicGameServerUrl);
-    const port = match?.[1] === undefined ? null : Number(match[1]);
-    if (
-      !PUBLIC_HTTP_URL.safeParse(publicGameServerUrl).success ||
-      match === null ||
-      (port !== null && (port < 1 || port > 65_535))
-    ) {
+    if (!isCanonicalPublicHttpOrigin(publicGameServerUrl)) {
       issues.push(
         "NEXT_PUBLIC_GAME_SERVER_URL must be one HTTP or HTTPS origin without credentials, path, query, or fragment.",
       );

@@ -2466,6 +2466,26 @@ describeDatabase("PostgreSQL durable game state", () => {
     });
   });
 
+  test("persists SQL metacharacters as literal username data", async () => {
+    const connection = await connect();
+    const state = createLobbyState();
+    await createPersistedLobby(connection, state);
+    const username = "Robert'); DROP TABLE participants;--";
+    const participant = newParticipant(state.lobby.id, username);
+
+    await expect(
+      connection.lobbyStates.reserveParticipant(participant, { maxPlayersPerLobby: 3 }),
+    ).resolves.toEqual({ ok: true, participantId: participant.id });
+
+    const stored = await connection.lobbyStates.findById(state.lobby.id);
+    expect(stored?.participants).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: participant.id, username })]),
+    );
+    await expect(pool.query("SELECT COUNT(*) FROM participants")).resolves.toMatchObject({
+      rowCount: 1,
+    });
+  });
+
   test("admits a normalized participant and session in one transaction", async () => {
     const connection = await connect();
     const state = createLobbyState();
@@ -4368,6 +4388,21 @@ describeDatabase("PostgreSQL durable game state", () => {
     expect(columns).toContain("token_hash");
     expect(columns).not.toContain("token");
     expect(columns).not.toContain("session_token");
+
+    const persistedColumns = await pool.query<{ column_name: string }>(
+      `SELECT column_name
+         FROM information_schema.columns
+        WHERE table_schema = 'public'`,
+    );
+    expect(persistedColumns.rows.map(({ column_name }) => column_name)).not.toEqual(
+      expect.arrayContaining([
+        "device_id",
+        "device_fingerprint",
+        "ip_address",
+        "remote_address",
+        "user_agent",
+      ]),
+    );
 
     const cascadeResult = await pool.query<{
       table_name: string;

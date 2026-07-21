@@ -1,10 +1,13 @@
 import { readFile } from "node:fs/promises";
 
+import { NextRequest } from "next/server";
 import { describe, expect, test } from "vitest";
 
 import { CONTRACT_SCHEMA_VERSION, SnapshotSchema } from "@gamenight-bingo/contracts";
 
 import { PARTICIPANT_SESSION_COOKIE_NAME } from "./participant-session.js";
+import nextConfig from "../next.config.js";
+import { proxy } from "./proxy.js";
 import {
   createInMemoryRateLimiter,
   createLobbyEntryHttpHandler,
@@ -26,6 +29,41 @@ test("routes a bare private lobby path through the shared dispatcher", async () 
   for (const method of ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
     expect(route).toContain(`export const ${method} = handleLobbyEntryRequest;`);
   }
+});
+
+test("configures browser security headers for every route", async () => {
+  expect(nextConfig.headers).toBeTypeOf("function");
+  if (nextConfig.headers === undefined) return;
+
+  const rules = await nextConfig.headers();
+  const allRouteHeaders = Object.fromEntries(
+    rules
+      .filter((rule) => rule.source === "/(.*)")
+      .flatMap((rule) => rule.headers)
+      .map(({ key, value }) => [key.toLowerCase(), value]),
+  );
+
+  expect(allRouteHeaders).toMatchObject({
+    "permissions-policy": expect.stringContaining("camera=()"),
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+  });
+});
+
+test("creates a per-request nonce CSP without allowing arbitrary inline scripts", () => {
+  const first = proxy(new NextRequest("https://bingo.test/lobbies/ABC234"));
+  const second = proxy(new NextRequest("https://bingo.test/lobbies/ABC234"));
+  const firstPolicy = first.headers.get("content-security-policy");
+  const secondPolicy = second.headers.get("content-security-policy");
+  const scriptPolicy = firstPolicy
+    ?.split(";")
+    .find((directive) => directive.trim().startsWith("script-src"));
+
+  expect(firstPolicy).toMatch(/script-src 'self' 'nonce-[A-Za-z0-9+/=]+' 'strict-dynamic'/);
+  expect(firstPolicy).toContain("connect-src 'self' ws://localhost:3000");
+  expect(scriptPolicy).not.toContain("'unsafe-inline'");
+  expect(secondPolicy).not.toBe(firstPolicy);
 });
 
 test("rejects unsupported private methods before looking up a lobby", async () => {
@@ -215,6 +253,8 @@ function createDependencies(
     maxPlayersPerLobby: 25,
     maxActiveLobbies: 100,
     realtimeTicketTtlSeconds: 60,
+    allowedOrigin: "https://bingo.test",
+    allowedThemeIds: new Set(["classic"]),
     ...overrides,
   };
 }
@@ -226,6 +266,9 @@ function request(path: string, init: RequestInit = {}): Request {
   }
   if ((init.method ?? "GET") === "POST" && !headers.has("origin")) {
     headers.set("origin", "https://bingo.test");
+  }
+  if ((init.method ?? "GET") === "POST" && !headers.has("x-gamenight-request")) {
+    headers.set("x-gamenight-request", "mutation");
   }
   return new Request(`https://bingo.test${path}`, { ...init, headers });
 }
@@ -767,7 +810,11 @@ describe("lobby entry HTTP API", () => {
     const handle = createLobbyEntryHttpHandler(createDependencies(createStore()));
     const streamed = new Request("https://bingo.test/api/v1/lobbies", {
       method: "POST",
-      headers: { "content-type": "application/json", origin: "https://bingo.test" },
+      headers: {
+        "content-type": "application/json",
+        origin: "https://bingo.test",
+        "x-gamenight-request": "mutation",
+      },
       body,
       duplex: "half",
     } as RequestInit & { duplex: "half" });
@@ -813,6 +860,250 @@ describe("lobby entry HTTP API", () => {
     await expect(handle(oversized)).resolves.toMatchObject({ status: 413 });
     await expect(handle(wrongMediaType)).resolves.toMatchObject({ status: 415 });
     expect(writes).toBe(0);
+  });
+
+  test("compares mutations with the configured origin instead of the request host", async () => {
+    let writes = 0;
+    const handle = createLobbyEntryHttpHandler(
+      createDependencies(
+        createStore({
+          createLobbyWithHost: async () => {
+            writes += 1;
+            return { ok: true, entry };
+          },
+        }),
+      ),
+    );
+    const response = await handle(
+      new Request("https://attacker.example/api/v1/lobbies", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: "https://attacker.example",
+          "x-gamenight-request": "mutation",
+        },
+        body: JSON.stringify({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          commandId: "command-host-spoof",
+          username: "Host",
+          themeId: "classic",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    expect(writes).toBe(0);
+  });
+
+  test("requires the first-party JSON mutation header before persistence", async () => {
+    let writes = 0;
+    const handle = createLobbyEntryHttpHandler(
+      createDependencies(
+        createStore({
+          createLobbyWithHost: async () => {
+            writes += 1;
+            return { ok: true, entry };
+          },
+        }),
+      ),
+    );
+    const response = await handle(
+      new Request("https://bingo.test/api/v1/lobbies", {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "https://bingo.test" },
+        body: JSON.stringify({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          commandId: "command-csrf",
+          username: "Host",
+          themeId: "classic",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    expect(writes).toBe(0);
+  });
+
+  test("rejects invalid mutation boundaries across every mutation dispatcher", async () => {
+    let lobbyLookups = 0;
+    let entryWrites = 0;
+    let commandExecutions = 0;
+    const store = createStore({
+      findActiveLobbyIdByCode: async () => {
+        lobbyLookups += 1;
+        return "lobby-1";
+      },
+      createLobbyWithHost: async () => {
+        entryWrites += 1;
+        return { ok: true, entry };
+      },
+      joinLobbyWithSession: async () => {
+        entryWrites += 1;
+        return { ok: true, entry };
+      },
+    });
+    const handle = createLobbyEntryHttpHandler(
+      createDependencies(store, {
+        roundCommandExecutor: {
+          execute: async ({ command }) => {
+            commandExecutions += 1;
+            return {
+              ok: true,
+              acknowledgement: {
+                commandId: command.commandId,
+                scope: "active-lobby",
+                eventSequence: 1,
+                occurredAt: NOW,
+                idempotentReplay: false,
+              },
+            };
+          },
+        },
+      }),
+    );
+    const routes = [
+      {
+        path: "/api/v1/lobbies",
+        body: {
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          commandId: "command-create-boundary",
+          username: "Host",
+          themeId: "classic",
+        },
+      },
+      {
+        path: "/api/v1/lobbies/ABC234/participants",
+        body: {
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          commandId: "command-join-boundary",
+          username: "Guest",
+        },
+      },
+      {
+        path: "/api/v1/lobbies/ABC234/rounds/current/start",
+        body: {
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          commandId: "command-start-boundary",
+          type: "start-round",
+        },
+      },
+    ] as const;
+    const invalidBoundaries = [
+      { origin: "https://bingo.test", mutationHeader: null },
+      { origin: "https://bingo.test", mutationHeader: "read" },
+      { origin: "https://evil.test", mutationHeader: "mutation" },
+    ] as const;
+
+    for (const route of routes) {
+      for (const boundary of invalidBoundaries) {
+        const headers = new Headers({
+          "content-type": "application/json",
+          origin: boundary.origin,
+        });
+        if (boundary.mutationHeader !== null) {
+          headers.set("x-gamenight-request", boundary.mutationHeader);
+        }
+        const mutation = new Request(`https://bingo.test${route.path}`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(route.body),
+        });
+
+        const response = await handle(mutation);
+
+        expect(response.status).toBe(403);
+        expect(mutation.bodyUsed).toBe(false);
+      }
+    }
+    expect(lobbyLookups).toBe(0);
+    expect(entryWrites).toBe(0);
+    expect(commandExecutions).toBe(0);
+  });
+
+  test("rejects unknown themes before creating a lobby", async () => {
+    let writes = 0;
+    const handle = createLobbyEntryHttpHandler(
+      createDependencies(
+        createStore({
+          createLobbyWithHost: async () => {
+            writes += 1;
+            return { ok: true, entry };
+          },
+        }),
+      ),
+    );
+    const response = await handle(
+      request("/api/v1/lobbies", {
+        method: "POST",
+        body: JSON.stringify({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          commandId: "command-theme",
+          username: "Host",
+          themeId: "unknown-theme",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(writes).toBe(0);
+  });
+
+  test("rejects malformed UTF-8 and query parameters before creating a lobby", async () => {
+    let writes = 0;
+    const handle = createLobbyEntryHttpHandler(
+      createDependencies(
+        createStore({
+          createLobbyWithHost: async () => {
+            writes += 1;
+            return { ok: true, entry };
+          },
+        }),
+      ),
+    );
+    const prefix = Buffer.from(
+      `{"schemaVersion":${CONTRACT_SCHEMA_VERSION},"commandId":"command-utf8","username":"Ho`,
+      "utf8",
+    );
+    const suffix = Buffer.from(`st","themeId":"classic"}`, "utf8");
+    const malformedBody = Buffer.concat([prefix, Buffer.from([0x80]), suffix]);
+    const malformed = await handle(
+      new Request("https://bingo.test/api/v1/lobbies", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: "https://bingo.test",
+          "x-gamenight-request": "mutation",
+        },
+        body: malformedBody,
+      }),
+    );
+    const queried = await handle(
+      request("/api/v1/lobbies?admin=true", {
+        method: "POST",
+        body: JSON.stringify({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          commandId: "command-query",
+          username: "Host",
+          themeId: "classic",
+        }),
+      }),
+    );
+
+    expect(malformed.status).toBe(400);
+    expect(queried.status).toBe(404);
+    expect(writes).toBe(0);
+  });
+
+  test("adds security and privacy headers to private API errors", async () => {
+    const handle = createLobbyEntryHttpHandler(createDependencies(createStore()));
+
+    const response = await handle(request("/api/v1/lobbies/ABC234/unknown"));
+
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("x-frame-options")).toBe("DENY");
+    expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow, noarchive");
   });
 
   test("returns same-device status without treating the lobby code as identity", async () => {

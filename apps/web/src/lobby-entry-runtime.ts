@@ -9,6 +9,7 @@ import {
 import { connectDatabase } from "@gamenight-bingo/database";
 import { generateLobbyCode } from "@gamenight-bingo/domain";
 import { patternCatalog } from "@gamenight-bingo/patterns";
+import { themeCatalog } from "@gamenight-bingo/themes";
 
 import {
   createInMemoryRateLimiter,
@@ -27,6 +28,7 @@ const rateLimiter = createInMemoryRateLimiter(
   60_000,
 );
 const trustedProxySecret = runtimeConfig.trustedProxySecret;
+const allowedOrigin = runtimeConfig.webOrigin ?? "http://localhost:3000";
 
 type LobbyEntryHandler = ReturnType<typeof createLobbyEntryHttpHandler>;
 const runtimeGlobal = globalThis as typeof globalThis & {
@@ -57,6 +59,8 @@ const handler =
       maxPlayersPerLobby: runtimeConfig.maxPlayersPerLobby,
       maxActiveLobbies: runtimeConfig.maxActiveLobbies,
       realtimeTicketTtlSeconds: runtimeConfig.realtimeTicketTtlSeconds,
+      allowedOrigin,
+      allowedThemeIds: new Set(themeCatalog.map(({ id }) => id)),
     }),
   );
 runtimeGlobal.lobbyEntryHandler = handler;

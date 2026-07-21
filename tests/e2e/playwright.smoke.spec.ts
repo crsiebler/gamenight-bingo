@@ -50,9 +50,25 @@ test.describe("versioned private API routing", () => {
 
   test("marks private lobby documents no-store and noindex", async ({ request }) => {
     const response = await request.get("/lobbies/ABC234");
+    const contentSecurityPolicy = response.headers()["content-security-policy"];
+    const scriptPolicy = contentSecurityPolicy
+      ?.split(";")
+      .find((directive) => directive.trim().startsWith("script-src"));
+    const webOrigin = new URL(response.url());
+    const webSocketOrigin = `${webOrigin.protocol === "https:" ? "wss:" : "ws:"}//${webOrigin.host}`;
 
     expect(response.status()).toBe(200);
     expect(response.headers()["cache-control"]).toContain("no-store");
+    expect(contentSecurityPolicy).toContain("frame-ancestors 'none'");
+    expect(contentSecurityPolicy).toContain(`connect-src 'self' ${webSocketOrigin}`);
+    expect(contentSecurityPolicy).toContain("http://localhost:4100 ws://localhost:4100");
+    expect(scriptPolicy).toMatch(/'nonce-[A-Za-z0-9+/=]+' 'strict-dynamic'/);
+    expect(scriptPolicy).not.toContain("'unsafe-inline'");
+    expect(response.headers()["permissions-policy"]).toContain("camera=()");
+    expect(response.headers()["referrer-policy"]).toBe("no-referrer");
+    expect(response.headers()["x-content-type-options"]).toBe("nosniff");
+    expect(response.headers()["x-frame-options"]).toBe("DENY");
+    expect(response.headers()["x-robots-tag"]).toBe("noindex, nofollow, noarchive");
     expect(await response.text()).toContain(
       '<meta name="robots" content="noindex, nofollow, noarchive"',
     );
@@ -113,6 +129,9 @@ test.describe("versioned private API routing", () => {
 
       expect(response.status()).toBe(404);
       expect(response.headers()["cache-control"]).toBe("no-store");
+      expect(response.headers()["referrer-policy"]).toBe("no-referrer");
+      expect(response.headers()["x-content-type-options"]).toBe("nosniff");
+      expect(response.headers()["x-robots-tag"]).toBe("noindex, nofollow, noarchive");
       await expect(response.json()).resolves.toMatchObject({
         schemaVersion: 1,
         type: "error",

@@ -173,11 +173,11 @@ isolated PostgreSQL integration suite.
 
 The game-server listener settings are:
 
-| Variable           | Default                 | Purpose                                       |
-| ------------------ | ----------------------- | --------------------------------------------- |
-| `GAME_SERVER_HOST` | `127.0.0.1`             | Socket.IO listener address                    |
-| `GAME_SERVER_PORT` | `3001`                  | Socket.IO listener port, from 1 through 65535 |
-| `WEB_ORIGIN`       | `http://localhost:3000` | Exact browser origin allowed to connect       |
+| Variable           | Default                 | Purpose                                        |
+| ------------------ | ----------------------- | ---------------------------------------------- |
+| `GAME_SERVER_HOST` | `127.0.0.1`             | Socket.IO listener address                     |
+| `GAME_SERVER_PORT` | `3001`                  | Socket.IO listener port, from 1 through 65535  |
+| `WEB_ORIGIN`       | `http://localhost:3000` | Exact browser origin allowed for HTTP/realtime |
 
 The optional browser build variable `NEXT_PUBLIC_GAME_SERVER_URL` selects an
 absolute public Socket.IO origin, such as `http://localhost:3001` for separate
@@ -186,10 +186,13 @@ Socket.IO on the web origin. It is public routing configuration and must never
 contain a credential or ticket.
 
 `WEB_ORIGIN` must be one HTTP or HTTPS origin without credentials, path, query,
-or fragment. Hosted ingress terminates TLS and forwards WebSocket upgrades to
-the configured game-server listener. The web rate limiter treats the rightmost
-`X-Forwarded-For` address as requester identity only when the terminating proxy
-also supplies `X-Gamenight-Trusted-Proxy` with the configured
+or fragment. The web process compares every mutation `Origin` with this value
+and also requires its first-party JSON mutation header; the game server uses the
+same exact origin for transport admission. Hosted ingress terminates TLS and
+forwards WebSocket upgrades to the configured game-server listener. The web
+rate limiter treats the rightmost `X-Forwarded-For` address as requester
+identity only when the terminating proxy also supplies
+`X-Gamenight-Trusted-Proxy` with the configured
 `TRUSTED_PROXY_SECRET`. The optional secret must contain at least 32 characters;
 when absent, every request safely uses the bounded unidentified-requester bucket.
 Hosted ingress must strip client-supplied copies of both headers, inject the

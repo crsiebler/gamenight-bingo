@@ -11,6 +11,8 @@ import {
   type SameDeviceSessionStatusResponse,
 } from "@gamenight-bingo/contracts";
 
+import { MUTATION_REQUEST_HEADERS } from "../http-security.js";
+
 export type LobbyEntrySelection =
   | { readonly action: "join"; readonly code: string; readonly username: string }
   | { readonly action: "rejoin"; readonly code: string };
@@ -161,7 +163,7 @@ export class LobbyEntryFlowSession {
       response = await this.#request(path, {
         method: "POST",
         credentials: "same-origin",
-        headers: { "content-type": "application/json" },
+        headers: MUTATION_REQUEST_HEADERS,
         body: JSON.stringify(command),
       });
     } catch {

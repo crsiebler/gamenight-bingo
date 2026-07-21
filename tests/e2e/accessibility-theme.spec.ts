@@ -78,7 +78,7 @@ async function postCommand(
       const response = await fetch(url, {
         body: JSON.stringify(body),
         credentials: "same-origin",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", "x-gamenight-request": "mutation" },
         method: "POST",
       });
       return { body: await response.text(), status: response.status };

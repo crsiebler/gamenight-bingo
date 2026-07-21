@@ -33,6 +33,7 @@ import {
 } from "@gamenight-bingo/contracts";
 import { normalizeLobbyCodeEntry } from "@gamenight-bingo/domain";
 
+import { MUTATION_REQUEST_HEADERS, PRIVATE_RESPONSE_HEADERS } from "./http-security.js";
 import {
   hashCanonicalParticipantSessionToken,
   PARTICIPANT_SESSION_COOKIE_NAME,
@@ -43,7 +44,7 @@ import {
 const MAX_BODY_BYTES = 4_096;
 const SESSION_ENTROPY_BYTES = 32;
 const MAX_CREDENTIAL_ATTEMPTS = 3;
-const PRIVATE_HEADERS = { "cache-control": "no-store" } as const;
+const PRIVATE_HEADERS = PRIVATE_RESPONSE_HEADERS;
 
 export type EntryRateLimitScope =
   "create" | "join" | "rejoin" | "ticket" | "status" | "snapshot" | "command";
@@ -174,6 +175,8 @@ export interface LobbyEntryHttpDependencies {
   readonly maxPlayersPerLobby: number;
   readonly maxActiveLobbies: number;
   readonly realtimeTicketTtlSeconds: number;
+  readonly allowedOrigin: string;
+  readonly allowedThemeIds: ReadonlySet<string>;
 }
 
 interface Credential {
@@ -307,16 +310,19 @@ async function parseBody(request: Request): Promise<ParsedBody | BodyError> {
     bytes.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  const text = new TextDecoder().decode(bytes);
   try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     return { ok: true, value: JSON.parse(text) as unknown };
   } catch {
     return { ok: true, value: undefined };
   }
 }
 
-function hasValidOrigin(request: Request): boolean {
-  return request.headers.get("origin") === new URL(request.url).origin;
+function hasValidMutationBoundary(request: Request, allowedOrigin: string): boolean {
+  return (
+    request.headers.get("origin") === allowedOrigin &&
+    request.headers.get("x-gamenight-request") === MUTATION_REQUEST_HEADERS["x-gamenight-request"]
+  );
 }
 
 function normalizeCode(value: string): string | null {
@@ -492,6 +498,10 @@ export function createLobbyEntryHttpHandler(dependencies: LobbyEntryHttpDependen
     const url = new URL(request.url);
     const { pathname } = url;
 
+    if (url.search.length > 0) {
+      return errorResponse("NOT_FOUND", 404, dependencies.clock());
+    }
+
     if (request.method === "GET" && pathname === "/api/v1/patterns") {
       const body = PatternCatalogResponseSchema.parse({
         schemaVersion: CONTRACT_SCHEMA_VERSION,
@@ -505,7 +515,7 @@ export function createLobbyEntryHttpHandler(dependencies: LobbyEntryHttpDependen
 
     if (request.method === "POST" && pathname === "/api/v1/lobbies") {
       const now = dependencies.clock();
-      if (!hasValidOrigin(request)) {
+      if (!hasValidMutationBoundary(request, dependencies.allowedOrigin)) {
         return errorResponse("FORBIDDEN", 403, now);
       }
       const limited = consumeRateLimit(dependencies, "create", request, null);
@@ -517,6 +527,9 @@ export function createLobbyEntryHttpHandler(dependencies: LobbyEntryHttpDependen
       const parsed = CreateLobbyRequestSchema.safeParse(parsedBody.value);
       if (!parsed.success) {
         return errorResponse("INVALID_PAYLOAD", 400, now);
+      }
+      if (!dependencies.allowedThemeIds.has(parsed.data.themeId)) {
+        return errorResponse("INVALID_PAYLOAD", 400, now, parsed.data.commandId);
       }
       for (let attempt = 0; attempt < MAX_CREDENTIAL_ATTEMPTS; attempt += 1) {
         const credential = createCredential(dependencies.randomBytes);
@@ -555,7 +568,9 @@ export function createLobbyEntryHttpHandler(dependencies: LobbyEntryHttpDependen
     if (commandMatch !== null) {
       const now = dependencies.clock();
       if (request.method !== "POST") return errorResponse("NOT_FOUND", 404, now);
-      if (!hasValidOrigin(request)) return errorResponse("FORBIDDEN", 403, now);
+      if (!hasValidMutationBoundary(request, dependencies.allowedOrigin)) {
+        return errorResponse("FORBIDDEN", 403, now);
+      }
       const code = normalizeCode(commandMatch[1] ?? "");
       if (code === null) return errorResponse("NOT_FOUND", 404, now);
       const limited = consumeRateLimit(dependencies, "command", request, null);
@@ -627,7 +642,7 @@ export function createLobbyEntryHttpHandler(dependencies: LobbyEntryHttpDependen
       (resource === "participants" ||
         resource === "session/rejoin" ||
         resource === "realtime-ticket") &&
-      !hasValidOrigin(request)
+      !hasValidMutationBoundary(request, dependencies.allowedOrigin)
     ) {
       return errorResponse("FORBIDDEN", 403, dependencies.clock());
     }

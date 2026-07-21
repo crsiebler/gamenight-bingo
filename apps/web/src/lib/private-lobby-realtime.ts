@@ -12,6 +12,8 @@ import {
   type Snapshot,
 } from "@gamenight-bingo/contracts";
 
+import { MUTATION_REQUEST_HEADERS } from "../http-security.js";
+
 export type PrivateLobbyConnectionState =
   "connected" | "expired" | "offline" | "reconnecting" | "recovered" | "snapshot-syncing";
 
@@ -79,7 +81,7 @@ async function issueRealtimeTicket(code: string): Promise<string> {
   const response = await fetch(`/api/v1/lobbies/${encodeURIComponent(code)}/realtime-ticket`, {
     body: JSON.stringify({ schemaVersion: CONTRACT_SCHEMA_VERSION }),
     credentials: "same-origin",
-    headers: { "content-type": "application/json" },
+    headers: MUTATION_REQUEST_HEADERS,
     method: "POST",
   });
   return parseRealtimeTicketResponse(response);

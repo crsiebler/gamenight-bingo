@@ -86,6 +86,7 @@ export default defineConfig({
               DATABASE_URL: testDatabaseUrl,
               NEXT_PUBLIC_GAME_SERVER_URL: "http://localhost:4100",
               TRUSTED_PROXY_SECRET: e2eTrustedProxySecret,
+              WEB_ORIGIN: "http://localhost:3100",
             },
             reuseExistingServer: false,
             timeout: 120_000,

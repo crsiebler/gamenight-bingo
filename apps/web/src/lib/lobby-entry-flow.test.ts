@@ -108,7 +108,7 @@ describe("public lobby entry flow", () => {
     expect(request).toHaveBeenCalledWith("/api/v1/lobbies/ABC234/session/rejoin", {
       method: "POST",
       credentials: "same-origin",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "x-gamenight-request": "mutation" },
       body: JSON.stringify({ schemaVersion: 1, commandId: "command-entry" }),
     });
   });

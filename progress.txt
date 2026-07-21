@@ -82,6 +82,8 @@ Next story: US-001
 - Serialize Node Vitest files that share `TEST_DATABASE_URL`; PostgreSQL repository cleanup and Socket.IO database-backed recovery tests cannot safely run against the same database concurrently.
 - The production-mode Playwright harness serves HTTP, so WebKit cannot carry the required `Secure` participant cookie there; run its noncredential checks locally and assign the authenticated Safari/iOS Safari journey to the release owner over production-like HTTPS rather than weakening cookie security.
 - Accessibility regressions combine state-focused React Testing Library coverage with browser Axe scans; derive the complete cross-theme semantic/visual matrix from canonical generated moodboards, keep Chromium screenshot baselines scoped to stable nontext artwork, and exercise real private-lobby states plus asset failures in every credential-capable browser project.
+- HTTP mutations compare `Origin` with canonical `WEB_ORIGIN`, require the shared `x-gamenight-request: mutation` JSON header, reject query parameters and malformed UTF-8 before persistence, and validate catalog-backed selections before creating durable state; private responses share no-store, noindex, framing, MIME, permissions, referrer, and per-request nonce CSP protections without `unsafe-inline` scripts.
+- Socket.IO payload-cap regressions should verify all three transport boundaries: a valid below-cap packet reaches its handler, a near-cap packet reaches application validation, and an oversized packet disconnects before command execution; assert serialized packet sizes so fixture drift cannot invalidate the boundary evidence.
 
 Append-only iteration log
 -------------------------
@@ -5828,3 +5830,123 @@ Targeted re-review outcome for resumed US-058 at 2026-07-21 08:47:15 MST:
 - The corrected browser coverage claim, successful-load-then-failure ordering, post-failure authoritative mutations/realtime result, and zero-threshold nontext baselines resolve every initial finding.
 - Residual risk remains limited to documented native Safari/iOS Safari, Edge, native forced-colors/screen-reader checks, retained previous-stable coverage, and slower-runner timeout risk for the intentionally serial randomized matrix.
 - No in-scope critical, high, or medium findings remain; US-058 can be marked passing and committed after the final consistency check.
+
+## 2026-07-21 09:13:30 MST - US-059
+- What was implemented
+  - Replaced Host-derived mutation-origin checks with validated canonical `WEB_ORIGIN` comparison and required one shared first-party JSON mutation header across create, join, rejoin, ticket, round-control, and mark clients.
+  - Added strict malformed UTF-8 and query rejection, canonical theme allowlisting before lobby persistence, and regression coverage for spoofed request hosts, missing CSRF barriers, unknown themes, SQL metacharacters, and device-data minimization.
+  - Added a production browser security-header baseline with a per-request nonce CSP, restrictive connect sources, framing, MIME, referrer, permissions, and private-route indexing controls.
+  - Hardened raw game-server HTTP errors while retaining the existing tested Socket.IO payload, exact-origin, admission, authentication, capacity, and command-rate protections.
+- Files changed: `AGENTS.md`, `README.md`, `apps/game-server/src/socket-server.ts`, `apps/game-server/src/socket-server.test.ts`, `apps/web/next.config.ts`, `apps/web/src/http-security.ts`, `apps/web/src/proxy.ts`, `apps/web/src/lobby-entry-http.ts`, `apps/web/src/lobby-entry-http.test.ts`, `apps/web/src/lobby-entry-runtime.ts`, `apps/web/src/lib/create-lobby-flow.ts`, `apps/web/src/lib/create-lobby-flow.test.ts`, `apps/web/src/lib/lobby-entry-flow.ts`, `apps/web/src/lib/lobby-entry-flow.test.ts`, `apps/web/src/lib/private-lobby-flow.ts`, `apps/web/src/lib/private-lobby-flow.test.ts`, `apps/web/src/lib/private-lobby-realtime.ts`, `packages/contracts/src/runtime-config.ts`, `packages/database/src/database.integration.test.ts`, `playwright.config.ts`, `tests/e2e/accessibility-theme.spec.ts`, `tests/e2e/gameplay.journey.spec.ts`, `tests/e2e/playwright.smoke.spec.ts`, `tests/runtime-config.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-059 - Harden security and privacy`
+- Auto approval: `enabled`
+- Checks:
+  - Focused HTTP/realtime security regressions (expected fail before implementation: 11 origin/header/theme/UTF-8/query/header/config cases; 4 canonical-origin/nonce cases failed before review remediation; all pass after implementation)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass after review remediation; 39 files and 843 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t "persists SQL metacharacters|stores only token hashes"` (pass; 2 focused tests)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun run format:check` (fails only on 61 unrelated pre-existing untracked browser/Lighthouse artifacts)
+  - `DATABASE_URL=<approved local database> TRUSTED_PROXY_SECRET=<local marker> WEB_ORIGIN=http://localhost:3000 NEXT_PUBLIC_GAME_SERVER_URL=http://localhost:3001 bun run --cwd apps/web build` (pass)
+  - Fresh migrated nonproduction database-backed Chromium `bun run test:e2e` (pass; 9 tests including security headers, analytics absence, authenticated gameplay, and all themes)
+  - `bun audit --production` (pass for the story gate: no critical vulnerabilities; 2 moderate transitive advisories reported)
+  - `bun install --frozen-lockfile` (pass; 396 installs checked with no changes)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `security-engineer`, `security-auditor`
+  - Used: `security-engineer`, `security-auditor` for concrete trust-boundary gaps, privacy evidence, deterministic attack cases, transport hardening, and dependency-audit scope
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, `security-engineer`; targeted re-review planned for all three after substantive fixes
+  - Findings: fixed noncanonical accepted origins, removed redundant untestable transport-default declarations, and replaced production `unsafe-inline` script CSP with per-request nonces before targeted re-review
+- Decisions (why):
+  - Used canonical `WEB_ORIGIN` rather than `request.url` because reverse-proxy Host data is not an authority for CSRF decisions; the localhost default fails closed when a hosted origin is not configured.
+  - Added a custom JSON mutation header in addition to exact Origin and SameSite cookies because ordinary cross-site form submissions cannot supply it without a CORS preflight.
+  - Removed redundant declarations of Socket.IO/Node defaults after review because they added no independently testable protection; retained the established behaviorally tested transport limits and raw-response hardening.
+  - Did not update dependencies because the production audit found no critical vulnerability, only two moderate transitive advisories, and broad dependency churn is not required by this story.
+- **Learnings for future iterations:**
+  - Every browser mutation adapter and direct E2E HTTP mutation helper must use the shared mutation header or the request is intentionally rejected before rate limiting/body/database work.
+  - Next's TypeScript config transpiler resolves imported TypeScript helpers through extensionless specifiers, unlike application ESM source, which retains emitted `.js` specifiers.
+  - Security response headers need both direct handler coverage and live production Next coverage because framework routing and proxy behavior can alter final headers.
+  - Exact browser-origin comparisons require configuration to reject noncanonical default ports, hostname casing, and abbreviated IP forms rather than preserving values browsers normalize.
+- Known issues / follow-ups:
+  - `bun audit --production` reports moderate advisories in transitive `@hono/node-server` and PostCSS paths; neither is critical, and compatibility/reachability analysis should precede any later dependency update.
+  - Root formatting remains blocked only by unrelated untracked review artifacts; every tracked file passes Prettier.
+  - The fresh nonproduction browser database was retained without destructive cleanup.
+- Next iteration start:
+  - If review passes, implement US-060 single-instance load and latency verification; otherwise resume any recorded blocking finding.
+---
+
+Initial review remediation for US-059 at 2026-07-21 09:24 MST:
+- `code-reviewer` and `qa-expert` identified one shared medium canonical-origin blocker: valid URL syntax still admitted noncanonical default ports, host casing, and abbreviated IPv4 forms that browsers normalize before sending `Origin`, causing every legitimate mutation to fail closed.
+- `qa-expert` identified that newly declared raw HTTP/Socket.IO default limits lacked behavioral regression evidence. Removed those redundant declarations rather than exposing implementation-only test seams; existing suites continue to exercise the custom 16 KiB payload cap, exact origin, dual admission/authentication rates, connection capacities, terminal transport closure, and command limits.
+- `security-engineer` identified a medium production CSP blocker because `script-src 'unsafe-inline'` weakened the new header baseline. Moved CSP generation into the Next proxy, generated a fresh nonce per request, passed the nonce-bearing policy downstream for framework scripts, retained only development `unsafe-eval`, and added unit plus live production-browser assertions that script policy has a nonce/`strict-dynamic` and no `unsafe-inline`.
+- Added failing regressions for uppercase hosts, default ports, abbreviated IPv4, and nonce uniqueness before remediation. Focused suites, lint, production build, typecheck, and a fresh nine-test Chromium full-stack run pass afterward.
+- Targeted re-review is limited to `code-reviewer`, `qa-expert`, and `security-engineer` because each initial blocking domain received substantive code/test changes.
+
+Targeted re-review outcome for US-059 at 2026-07-21 09:31 MST:
+- `code-reviewer` and `security-engineer` returned empty actionable finding lists. Canonical origin equality and production nonce CSP are resolved; Chromium browser evidence passed, with native WebKit nonce behavior remaining a residual release risk.
+- `qa-expert` identified one remaining medium acceptance-evidence blocker: the remediation text claims the existing suite behaviorally exercises the configured 16 KiB Socket.IO payload cap, but no below/above-boundary transport test proves it.
+- The next iteration must add a real Socket.IO payload-boundary regression that accepts a valid packet below the cap and rejects or disconnects an oversized packet, then rerun all US-059 checks and restart the complete staged review loop. If the cap is not part of the intended acceptance evidence, remove the unsupported claim and document the remaining transport-test risk instead.
+- Per the one-targeted-re-review limit, no further substantive implementation changes or commit are permitted in this iteration. `US-059` remains `passes: false`, and `prd.json` remains unchanged.
+
+## 2026-07-21 09:36:52 MST - US-059
+- What was implemented
+  - Resumed the blocked security/privacy story and added a real authenticated WebSocket payload-cap regression for the configured 16 KiB Socket.IO transport boundary.
+  - Proved that a valid heartbeat below the cap reaches its persistence handler, a near-cap packet reaches strict application validation without disconnecting, and an oversized packet disconnects before command execution.
+  - Asserted exact encoded Socket.IO packet sizes one byte below and above the cap so future fixture changes cannot silently weaken the boundary test.
+  - Added cross-dispatcher Origin/CSRF rejection coverage and explicitly allowed the canonical same-origin WebSocket endpoint in CSP when no separate game-server URL is configured.
+- Files changed: `AGENTS.md`, `README.md`, `apps/game-server/src/socket-server.test.ts`, `apps/game-server/src/socket-server.ts`, `apps/web/next.config.ts`, `apps/web/src/http-security.ts`, `apps/web/src/lib/create-lobby-flow.test.ts`, `apps/web/src/lib/create-lobby-flow.ts`, `apps/web/src/lib/lobby-entry-flow.test.ts`, `apps/web/src/lib/lobby-entry-flow.ts`, `apps/web/src/lib/private-lobby-flow.test.ts`, `apps/web/src/lib/private-lobby-flow.ts`, `apps/web/src/lib/private-lobby-realtime.ts`, `apps/web/src/lobby-entry-http.test.ts`, `apps/web/src/lobby-entry-http.ts`, `apps/web/src/lobby-entry-runtime.ts`, `apps/web/src/proxy.ts`, `packages/contracts/src/runtime-config.ts`, `packages/database/src/database.integration.test.ts`, `playwright.config.ts`, `tests/e2e/accessibility-theme.spec.ts`, `tests/e2e/gameplay.journey.spec.ts`, `tests/e2e/playwright.smoke.spec.ts`, `tests/runtime-config.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-059 - Harden security and privacy`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts -t "accepts packets below the transport payload cap and disconnects oversized packets"` (pass; 1 test)
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts` (pass; 101 tests and 3 database-backed skips)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass after review fixes; typecheck, 39 files, and 845 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree after formatting the new test)
+  - `bun run format:check` (fails only on 61 unrelated pre-existing untracked browser/Lighthouse artifacts)
+  - `bun install --frozen-lockfile` (pass; 396 installs checked with no changes)
+  - `bun audit --production` (pass for the story gate; no critical vulnerabilities, with the same 2 moderate transitive advisories recorded previously)
+  - `DATABASE_URL=<approved local database> ... bun run --cwd apps/web build` (pass after review fixes)
+  - Fresh migrated nonproduction database-backed Chromium run (8 of 9 passed before the dynamic same-origin CSP assertion correction; focused production private-header rerun passed afterward)
+- Implementation agents:
+  - Recommended: `security-engineer`, `security-auditor`
+  - Used: skipped in this resumed iteration because both recommended agents already advised US-059 and the remaining work followed one concrete targeted-review blocker
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, `security-engineer`; targeted re-review planned for `code-reviewer` and `qa-expert`
+  - Findings: fixed same-origin WebSocket CSP omission, broad payload-fixture tolerances, and incomplete mutation-dispatcher Origin/CSRF coverage
+- Decisions (why):
+  - Tested the real Socket.IO WebSocket transport rather than exporting or asserting the `maxHttpBufferSize` option because acceptance requires observable boundary behavior, not implementation text.
+  - Used separate single-use credentials for accepted and oversized clients because the oversized transport must disconnect without conflating that behavior with ticket replay.
+  - Kept the production 16 KiB cap unchanged because the missing evidence was test coverage and the existing implementation enforced the intended boundary.
+  - Testing decision: the payload and dispatcher work completes regression coverage for existing security behavior, while the CSP omission is a bug fix requiring test-first evidence; the CSP assertion failed against `connect-src 'self'` before implementation and all focused plus full database-backed checks passed after remediation.
+- **Learnings for future iterations:**
+  - A malformed but transport-valid near-cap packet is useful for proving application validation remains reachable below the transport cap, while a separate valid heartbeat proves ordinary accepted traffic still reaches its handler.
+  - Socket.IO packet-size assertions must include the Engine.IO and Socket.IO message prefixes rather than measuring only the JSON payload.
+- Known issues / follow-ups:
+  - `bun audit --production` still reports moderate transitive advisories in `@hono/node-server` and PostCSS; no critical vulnerability is present, and dependency changes remain outside this story.
+  - Root formatting remains blocked only by unrelated untracked browser/Lighthouse artifacts; every tracked file passes Prettier.
+- Next iteration start:
+  - If review passes, implement US-060 single-instance load and latency verification; otherwise remediate any merged blocking finding within the one-re-review limit.
+---
+
+Initial review remediation for resumed US-059 at 2026-07-21 09:50:27 MST:
+- `code-reviewer` identified one medium same-origin realtime blocker: with `NEXT_PUBLIC_GAME_SERVER_URL` omitted, CSP depended on inconsistent browser treatment of `'self'` for `ws:`/`wss:` traffic.
+- `qa-expert` identified two medium acceptance-evidence blockers: 15/17 KiB fixtures tolerated almost 1 KiB of cap drift, and negative Origin/mutation-header coverage exercised only lobby creation rather than every mutation dispatcher branch. `security-engineer` returned no actionable findings.
+- Added the failing default-policy assertion first, then derived an explicit WebSocket origin from canonical `WEB_ORIGIN`, shared strict HTTP-origin parsing with the optional separate game-server URL, and retained production nonce behavior.
+- Derived packet padding from actual Engine.IO/Socket.IO framing overhead so fixtures serialize to exactly 16,383 and 16,385 bytes. Added a nine-case mutation matrix covering missing/wrong first-party headers and mismatched origins across create, participant-entry, and round-command branches; every request remains body-unread and performs no lookup, write, or command execution.
+- Testing decision:
+  - Change type: security bug fix plus regression-coverage hardening.
+  - Test-first required: yes for the same-origin CSP behavior; coverage-only payload/dispatcher changes exercised existing behavior directly.
+  - Red: focused HTTP tests failed because the default policy emitted only `connect-src 'self'`; the new dispatcher matrix passed against the shared existing guard.
+  - Green: focused HTTP tests passed 2 cases, the exact payload-boundary test passed, and the full approved-database suite passed all 845 tests.
+- Post-fix checks: production Next build, lint, tracked formatting, typecheck/full tests, and diff checks pass. A fresh nine-test Chromium run passed eight tests and exposed one hard-coded test-port expectation; after deriving the WebSocket source from the actual response URL, a fresh focused production-browser run passed.
+- Targeted re-review is limited to `code-reviewer` for the CSP fix and `qa-expert` for exact payload fixtures plus cross-dispatcher coverage; `security-engineer` returned an empty finding list.
+
+Targeted re-review outcome for resumed US-059 at 2026-07-21 09:53:22 MST:
+- `code-reviewer` and `qa-expert` returned empty actionable finding lists against the complete revised staged diff.
+- Explicit same-origin WebSocket CSP sources, shared strict origin parsing, exact one-byte payload-boundary fixtures, and the cross-dispatcher Origin/CSRF matrix resolve all three initial review findings.
+- No in-scope critical, high, or medium findings remain; the review stabilization loop passed.
+- Residual risk is limited to browser-level CSP enforcement being exercised in Chromium rather than native Safari/WebKit or Firefox, plus the final Chromium evidence being one eight-of-nine full run followed by a passing fresh focused header rerun after a test-only dynamic-port correction.

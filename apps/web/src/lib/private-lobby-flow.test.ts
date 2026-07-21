@@ -260,7 +260,7 @@ describe("private lobby flow", () => {
         init: {
           method: "POST",
           credentials: "same-origin",
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", "x-gamenight-request": "mutation" },
           body: {
             schemaVersion: CONTRACT_SCHEMA_VERSION,
             type: "configure",
@@ -275,7 +275,7 @@ describe("private lobby flow", () => {
         init: {
           method: "POST",
           credentials: "same-origin",
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", "x-gamenight-request": "mutation" },
           body: {
             schemaVersion: CONTRACT_SCHEMA_VERSION,
             type: "start-round",
@@ -288,7 +288,7 @@ describe("private lobby flow", () => {
         init: {
           method: "POST",
           credentials: "same-origin",
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", "x-gamenight-request": "mutation" },
           body: {
             schemaVersion: CONTRACT_SCHEMA_VERSION,
             type: "pause-round",
@@ -301,7 +301,7 @@ describe("private lobby flow", () => {
         init: {
           method: "POST",
           credentials: "same-origin",
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", "x-gamenight-request": "mutation" },
           body: {
             schemaVersion: CONTRACT_SCHEMA_VERSION,
             type: "resume-round",
@@ -314,7 +314,7 @@ describe("private lobby flow", () => {
         init: {
           method: "POST",
           credentials: "same-origin",
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", "x-gamenight-request": "mutation" },
           body: {
             schemaVersion: CONTRACT_SCHEMA_VERSION,
             type: "call-next",
@@ -327,7 +327,7 @@ describe("private lobby flow", () => {
         init: {
           method: "POST",
           credentials: "same-origin",
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", "x-gamenight-request": "mutation" },
           body: {
             schemaVersion: CONTRACT_SCHEMA_VERSION,
             type: "continue-round",
@@ -341,7 +341,7 @@ describe("private lobby flow", () => {
         init: {
           method: "POST",
           credentials: "same-origin",
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", "x-gamenight-request": "mutation" },
           body: {
             schemaVersion: CONTRACT_SCHEMA_VERSION,
             type: "end-round",
@@ -354,7 +354,7 @@ describe("private lobby flow", () => {
         init: {
           method: "POST",
           credentials: "same-origin",
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", "x-gamenight-request": "mutation" },
           body: {
             schemaVersion: CONTRACT_SCHEMA_VERSION,
             type: "override-absence",

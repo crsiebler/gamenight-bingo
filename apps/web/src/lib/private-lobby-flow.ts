@@ -17,6 +17,8 @@ import {
   type Snapshot,
 } from "@gamenight-bingo/contracts";
 
+import { MUTATION_REQUEST_HEADERS } from "../http-security.js";
+
 type Requester = (path: string, init?: RequestInit) => Promise<Response>;
 
 export type WaitingLobbyCommand =
@@ -206,7 +208,7 @@ export class WaitingLobbyCommandSession {
       response = await this.#request(path, {
         method: "POST",
         credentials: "same-origin",
-        headers: { "content-type": "application/json" },
+        headers: MUTATION_REQUEST_HEADERS,
         body: JSON.stringify(command),
       });
     } catch {
@@ -269,7 +271,7 @@ export class MarkCardCommandSession {
       response = await this.#request(`/api/v1/lobbies/${this.#selection.code}/cards/own/marks`, {
         method: "POST",
         credentials: "same-origin",
-        headers: { "content-type": "application/json" },
+        headers: MUTATION_REQUEST_HEADERS,
         body: JSON.stringify(command),
       });
     } catch {

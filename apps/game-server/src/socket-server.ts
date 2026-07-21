@@ -344,7 +344,13 @@ export function createGameServer(options: GameServerOptions): GameServer {
     connectionsPerSession,
   );
   const httpServer = createServer((_request, response) => {
-    response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+    response.writeHead(404, {
+      "cache-control": "no-store",
+      "content-type": "text/plain; charset=utf-8",
+      "referrer-policy": "no-referrer",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY",
+    });
     response.end("Not found.");
   });
   const io = new Server<

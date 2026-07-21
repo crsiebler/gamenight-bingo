@@ -10,6 +10,8 @@ import {
   type LobbyEntryResponse,
 } from "@gamenight-bingo/contracts";
 
+import { MUTATION_REQUEST_HEADERS } from "../http-security.js";
+
 export type CreateLobbySelection = {
   username: string;
   themeId: string;
@@ -108,7 +110,7 @@ export class CreateLobbyFlowSession {
       response = await this.#request(path, {
         method: "POST",
         credentials: "same-origin",
-        headers: { "content-type": "application/json" },
+        headers: MUTATION_REQUEST_HEADERS,
         body: JSON.stringify(body),
       });
     } catch {

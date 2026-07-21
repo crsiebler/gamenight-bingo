@@ -126,19 +126,22 @@ describe("runtime configuration", () => {
     });
   });
 
-  it("parses web connection and trusted-proxy settings without exposing their values", () => {
+  it("parses web connection, canonical origin, and trusted-proxy settings without exposing their values", () => {
     const databaseUrl = "postgresql://runtime-private-marker";
     const trustedProxySecret = "trusted-proxy-private-marker-value";
+    const webOrigin = "https://bingo.example.com";
 
     expect(
       parseRuntimeConfig({
         DATABASE_URL: databaseUrl,
         TRUSTED_PROXY_SECRET: trustedProxySecret,
+        WEB_ORIGIN: webOrigin,
       }),
     ).toEqual({
       ...EXPECTED_DEFAULTS,
       databaseUrl,
       trustedProxySecret,
+      webOrigin,
     });
 
     const error = captureConfigurationError({
@@ -150,6 +153,22 @@ describe("runtime configuration", () => {
       "TRUSTED_PROXY_SECRET must contain at least 32 characters when configured.",
     ]);
     expect(error.message).not.toContain("short-private-marker");
+  });
+
+  it.each([
+    "https://example.com/path",
+    "https://user@example.com",
+    "javascript:alert(1)",
+    "https://EXAMPLE.com",
+    "https://example.com:443",
+    "http://127.1",
+  ])("rejects the invalid canonical web origin %s without reflecting it", (webOrigin) => {
+    const error = captureConfigurationError({ WEB_ORIGIN: webOrigin });
+
+    expect(error.issues).toContain(
+      "WEB_ORIGIN must be an HTTP or HTTPS origin without credentials, path, query, or fragment.",
+    );
+    expect(error.message).not.toContain(webOrigin);
   });
 
   it.each(ENVIRONMENT_KEYS)("rejects a noninteger %s override", (key) => {

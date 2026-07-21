@@ -69,7 +69,7 @@ async function callNextThroughHttp(page: Page, code: string) {
           type: "call-next",
         }),
         credentials: "same-origin",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", "x-gamenight-request": "mutation" },
         method: "POST",
       });
       return { body: await response.text(), status: response.status };
