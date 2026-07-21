@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 
 import {
+  renderAssetInventoryMarkdown,
   renderThemeAssetGalleryHtml,
   renderThemeMoodboardHtml,
   renderThemeMoodboardMarkdown,
@@ -22,6 +23,7 @@ for (const theme of themeCatalog) {
 }
 
 writeFileSync(new URL("../docs/theme-assets.html", import.meta.url), renderThemeAssetGalleryHtml());
+writeFileSync(new URL("../docs/assets.md", import.meta.url), renderAssetInventoryMarkdown());
 writeFileSync(
   new URL("../docs/theme-moodboards.html", import.meta.url),
   renderThemeMoodboardHtml(),

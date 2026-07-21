@@ -18,6 +18,12 @@ export {
   type ThemeVisualMotif,
 } from "./catalog.js";
 export { renderThemeAudioSprite } from "./audio.js";
+export {
+  assetBudgets,
+  assetInventory,
+  assetOptimizationPolicy,
+  renderAssetInventoryMarkdown,
+} from "./asset-inventory.js";
 export { renderThemeAssetGalleryHtml, renderThemeSprite, validateThemeSprite } from "./assets.js";
 export {
   renderThemeMoodboardHtml,

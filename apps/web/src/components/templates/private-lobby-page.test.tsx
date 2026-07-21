@@ -396,6 +396,17 @@ describe("PrivateLobbyPage", () => {
         ),
       ).toBe(true),
     );
+    fireEvent.error(spritePreload as HTMLImageElement);
+    await waitFor(() =>
+      expect(
+        Array.from(container.querySelectorAll(".theme-artwork")).every(
+          (asset) => asset.getAttribute("data-loaded") === "false",
+        ),
+      ).toBe(true),
+    );
+    for (const fallback of container.querySelectorAll(".theme-art-fallback")) {
+      expect(fallback).toBeVisible();
+    }
     expect(screen.getByText("Current call")).toBeVisible();
     expect(screen.getAllByText("B 1")[0]).toBeVisible();
     expect(screen.getByRole("region", { name: "Your card" })).toBeVisible();

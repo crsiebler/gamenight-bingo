@@ -76,6 +76,7 @@ Next story: US-001
 - Public privacy/lifecycle copy receives only allowlisted runtime duration values from the server entry point; definitive session/lobby errors latch all snapshot and realtime delivery closed, while an unavailable-lobby view must discard the old locator/private content, focus its terminal heading once, and link only to fresh create/join flows.
 - Theme visual assets are canonical theme metadata rendered into one external SVG sprite per theme; generate sprites and review documents with `bun scripts/generate-theme-assets.ts`, preload only the selected lobby sprite, and keep every SVG decorative, unfocusable, static-capable, and backed by semantic HTML plus a load-failure fallback.
 - Project-original theme audio uses canonical cue metadata and one generated mono PCM WAV sprite per theme; create/resume browser audio only from explicit opt-in, fetch only the selected theme, persist only validated mute/volume preferences, and trigger cues only from fresh authoritative events rather than snapshots.
+- Keep tracked media in one canonical inventory that generates `docs/assets.md`; enforce aggregate selected-theme visual/audio budgets, bind nongenerated provenance to content digests, and add AVIF/WebP only when an approved raster source actually exists.
 
 Append-only iteration log
 -------------------------
@@ -5515,3 +5516,59 @@ Targeted re-review outcome for US-055 at 2026-07-21 05:03 MST:
 - Browser specialists confirmed 320x720 live-status priority, 44px controls, no overflow, selected-only loading, focus recovery without stealing deliberately moved focus, and nonblocking Retry sounds behavior.
 - No in-scope critical, high, or medium findings remain; the review stabilization loop passed.
 - Residual risk is limited to near-win audio awaiting the existing authoritative HTTP-to-private-event transport gap, realtime cue browser exercise being unavailable in the review authority, and cached sprites limiting deterministic manual offline fetch checks. The staged implementation does not infer private feedback, and focused server-event, injected failure, queue, retry, and snapshot-silence tests pass.
+
+## 2026-07-21 05:15:54 MST - US-056
+- What was implemented
+  - Added a canonical inventory for every tracked SVG, WAV, and PDF with generated/nongenerated classification, delivery scope, complete reference provenance, and SHA-256 binding for the four supplied PDFs.
+  - Added generated asset documentation covering aggregate 500,000-byte compressed visual and 1,000,000-byte raw opt-in audio budgets, selected-only loading, visual/audio failure behavior, and the audited AVIF/WebP policy.
+  - Kept current scalable SVG assets in their native vector form because no suitable raster runtime asset exists; documented AVIF, WebP, then source-format fallback for future approved raster media.
+  - Added tests that reject unregistered tracked media, provenance drift, stale generated outputs, over-budget selected-theme aggregates, raster-policy drift, generated-document drift, and loss of the private-lobby sprite failure fallback.
+- Files changed: `AGENTS.md`, `README.md`, `apps/web/src/components/templates/private-lobby-page.test.tsx`, `docs/assets.md`, `packages/themes/src/asset-inventory.ts`, `packages/themes/src/index.ts`, `scripts/generate-theme-assets.ts`, `tests/asset-optimization.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-056 - Optimize and document assets`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run tests/asset-optimization.test.ts` (expected fail before implementation with 5 missing inventory/policy/documentation failures; pass after implementation with 5 tests)
+  - `bunx vitest run tests/asset-optimization.test.ts tests/theme-assets.test.ts tests/theme-audio.test.ts` (pass; 3 files and 12 tests)
+  - `bunx vitest run apps/web/src/components/templates/private-lobby-page.test.tsx -t "loads only the selected theme sprite"` (pass; explicit load-then-error fallback coverage)
+  - `bun scripts/generate-theme-assets.ts` (pass; generated sprites and asset documentation)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `bun run test` (pass; 38 files passed, 1 database file skipped, 668 tests passed, and 135 database-backed tests skipped)
+  - `bun run format:check` (blocked only by 57 unrelated pre-existing untracked browser/Lighthouse artifacts); focused intended-file Prettier check (pass)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `performance-engineer`
+  - Used: `performance-engineer` for aggregate budget, raster suitability, provenance inventory, documentation, and regression-test guidance
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and documentation-triggered `documentation-engineer` planned for the complete staged diff
+  - Findings: fixed aggregate theme scoping/multi-file budget coverage and fail-closed tracked-asset discovery; also added the cheap explicit fallback-visibility assertion
+- Decisions (why):
+  - Did not rasterize the generated SVG sprites because AVIF/WebP copies would duplicate tiny scalable vectors, lose `currentColor` behavior, and provide no suitable raster optimization target.
+  - Used aggregate per-theme budget checks rather than one-file assumptions so future selected-theme variants cannot bypass the 500 KB visual or 1 MB audio limits.
+  - Recorded unknown PDF authorship and licensing explicitly instead of inferring rights from absent metadata; SHA-256 ties each approval record to the reviewed bytes.
+  - Extended the existing visual generation command to produce the inventory document so canonical metadata and human-readable policy cannot drift.
+- **Learnings for future iterations:**
+  - Asset budgets must sum every file delivered for one selected theme rather than checking individual files independently.
+  - AVIF/WebP requirements apply only to suitable raster sources; generated SVG should remain vector unless a measured delivery need justifies a raster derivative.
+  - A complete tracked-media comparison turns provenance from a best-effort document into a fail-closed repository contract.
+- Known issues / follow-ups:
+  - Database-backed tests remain skipped without `TEST_DATABASE_URL`; this story changes no database behavior.
+  - Root `bun run format:check` remains blocked by unrelated untracked browser/Lighthouse artifacts; all intended files pass focused Prettier.
+  - Pre-existing untracked browser/Lighthouse artifacts remain untouched and unstaged.
+- Next iteration start:
+  - If review passes, add the cross-layer gameplay/browser/recovery suites in US-057; otherwise resume any recorded blocking finding.
+---
+
+Initial review remediation for US-056 at 2026-07-21 05:23 MST:
+- `code-reviewer` and `documentation-engineer` returned empty actionable finding lists. `qa-expert` identified two medium blockers and one low follow-up.
+- Replaced optional single-theme scoping with an explicit theme-ID list on every inventory entry, required nonempty scope for delivered assets, and removed one-file assumptions so every file applicable to a selected theme contributes to its aggregate budget.
+- Replaced extension guessing with a fail-closed policy: every tracked file under `apps/web/public` and every non-HTML/Markdown file under `docs` must be registered, regardless of extension or case.
+- Added the low-cost fallback visibility assertion after a simulated selected-sprite error while retaining semantic call/card assertions.
+- Post-fix focused tests pass 6 tests with 108 unrelated component cases skipped; root tests pass typecheck with 668 tests and 135 database skips; lint, intended formatting, generation parity, and staged/unstaged whitespace checks pass.
+- Targeted re-review is limited to `qa-expert` because both blocking findings and the low follow-up came from QA; the other initial specialists returned empty findings.
+
+Targeted re-review outcome for US-056 at 2026-07-21 05:26 MST:
+- `qa-expert` returned an empty actionable finding list against the complete revised staged diff.
+- Explicit multi-theme applicability, aggregate multi-file budgets, fail-closed asset-location discovery, and visible fallback assertions resolve all initial QA findings.
+- `code-reviewer` and `documentation-engineer` had already returned empty finding lists. No in-scope critical, high, or medium findings remain; the review stabilization loop passed.
+- Residual risk is limited to fallback visibility being component-tested rather than browser-tested; broader cross-browser and every-theme regression coverage remains assigned to US-058.
