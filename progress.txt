@@ -68,7 +68,10 @@ Next story: US-001
 - Browser realtime adapters retry transient ticket, handshake, and retryable server failures with bounded delays and a fresh single-use ticket; strict non-retryable ticket errors terminate in an explicit expired state rather than looping or reusing credentials.
 - Replayable browser commands retain their original pre-command reconciliation baseline because live state may already include an ambiguous first attempt before its same-ID replay acknowledgement arrives.
 - Retained round commands stay bound to their original round, while absence overrides stay bound to an exact participant presence generation; recheck the latest authoritative snapshot both when it arrives and after an ambiguous response, and treat a later lobby sequence as proof that an acknowledged command was included even when the state has since advanced.
-- When stage-changing controls or native dialogs disappear, restore or move focus after the conditional UI unmounts to a surviving control or section heading; handling Escape in parallel with the native dialog cancel event can lose focus to the document body.
+- When authoritative updates remove or disable focused controls, recover focus after the render based on meaningful control/outcome availability rather than only stage changes; keep card focus while co-winner marks remain valid, move it when settlement locks the card, and let the native dialog cancel event own Escape handling.
+- Outcome views derive complete winner names and window duration only from the authoritative snapshot plus authorized roster, keep the open co-winner window distinct from settled results, and bind transient live announcements to an exact round/pattern/window/result identity across HTTP and realtime snapshot acceptance so unrelated events preserve them, changed outcomes clear them, and reconnect snapshots restore visible results silently.
+- Long-lived browser realtime handlers read current readiness from refs rather than render-time closures; when outcome layout changes reading order, keep announcement nodes mounted and reorder only visible panels.
+- Responsive decorative wordmarks need browser-level bounding checks based on rendered content width, not only the grid item's box; reserve an explicit track plus readable separation at the breakpoint where multi-column layout begins.
 
 Append-only iteration log
 -------------------------
@@ -4878,3 +4881,352 @@ Targeted re-review outcome for US-049 at 2026-07-18 13:10:00 MST:
 - Next iteration start:
   - Implement US-051 winner and result states.
 ---
+
+## 2026-07-20 14:33:31 MST - US-051
+- What was implemented
+  - Added a prominent authoritative outcome panel that distinguishes the full two-second co-winner check from settled results and never exposes provisional winner names.
+  - Added celebratory self-winner and respectful other-participant scenes with complete roster-resolved winner lists, explicit current-pattern context, and role-aware continuation/end guidance while retaining the existing authorized host controls.
+  - Added event-only result announcements, stable focus when Call Next disappears, responsive and forced-colors presentation, and restored-snapshot behavior that remains visible without replaying historical outcomes.
+- Files changed: `apps/web/src/app/globals.css`, `apps/web/src/components/templates/private-lobby-page.tsx`, `apps/web/src/components/templates/private-lobby-page.test.tsx`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-051 - Build winner and result states`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/components/templates/private-lobby-page.test.tsx` (expected fail before implementation with 3 missing outcome-state failures; review regressions then failed in 4 focus, duration, intermediate-copy, and announcement paths; pass after remediation with 74 tests)
+  - Focused reconnect-announcement regression (expected fail because a restored result replayed `Results confirmed`; pass after event-only announcement implementation)
+  - `bun run test` (pass; typecheck, 33 files passed, 1 database file skipped, 600 tests passed, and 135 database-backed tests skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - Focused Prettier check for all intended source/test files (pass)
+  - `bun install --frozen-lockfile` (pass; 393 installs checked with no changes)
+  - `DATABASE_URL=<non-secret loopback placeholder> bun run --cwd apps/web build` (pass)
+  - `bun run test:e2e` (pass; smoke test passed and 2 database-backed route tests skipped without `TEST_DATABASE_URL`)
+  - `git diff --check` (pass)
+  - Manual dev-browser journeys against an isolated migrated local PostgreSQL database (pass; final mark showed the co-winner check before the settled self-winner result, reconnect restored silently, and a waiting participant saw nonterminal `One Line complete` copy plus the authoritative next step)
+  - Mobile browser verification at 320 CSS pixels (pass; no horizontal overflow and winner content/actions remained readable)
+  - Mobile Lighthouse snapshot (accessibility 100 and best practices 100)
+- Implementation agents:
+  - Recommended: none in story notes; selected `frontend-developer`, `accessibility-tester` within the complex-story standard-mode budget
+  - Used: `frontend-developer`, `accessibility-tester` for authoritative outcome structure, respectful copy, focus/live-region behavior, edge cases, and test recommendations
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, `ui-designer`, and `ux-researcher`; targeted re-review planned for all four because remediation touched correctness, tests, visual copy, and accessibility behavior
+  - Findings: fixed overwritten outcome focus after acknowledged Call Next, premature live-announcement clearing during resync, hard-coded window duration, unbounded co-winner announcements, repeated round-end results, and terminal wording during continuable stages
+- Decisions (why):
+  - Kept winner projection in the browser as an allowlisted join from the strict result participant IDs to the authorized snapshot roster because the server already validates every winner reference and no new contract or authority rule was needed.
+  - Reused the existing host command controls instead of duplicating actions in the result scene so authorization, idempotency, confirmation, and reconciliation remain centralized.
+  - Made outcome announcements event-driven while leaving snapshot-restored result content visible because reconnect must restore state without replaying historical celebrations.
+  - Used static typography, borders, headings, winner text, and a semantic list rather than sound or required animation so the complete outcome remains available under reduced motion, forced colors, and assistive technology.
+- **Learnings for future iterations:**
+  - The strict snapshot contract guarantees settled winner IDs reference playing participants in the bounded authorized roster, so result UI can resolve names without fallback IDs or additional client requests.
+  - Realtime outcome announcements must be transient event state rather than a direct derivation from snapshot stage; otherwise every reconnect or unrelated presence update can replay a settled result.
+  - A fresh isolated local database avoids accumulated active-lobby admission fixtures during end-to-end browser setup; retain it non-destructively after verification unless explicit deletion is approved.
+- Known issues / follow-ups:
+  - Database-backed Vitest and Playwright route suites were not required for this UI-only story and remained skipped in the standard commands without `TEST_DATABASE_URL`; the focused real browser journey used an isolated migrated local database.
+  - The isolated `gamenight_bingo_us051_browser` database retains the non-destructive browser fixture, and pre-existing untracked browser/Lighthouse artifacts remain untouched and unstaged.
+- Next iteration start:
+  - If review passes, implement US-052 privacy notice and expired state; otherwise resume any recorded blocking finding.
+---
+
+Targeted re-review outcome for US-051 at 2026-07-20 14:49:59 MST:
+- `code-reviewer`, `qa-expert`, `ui-designer`, and `ux-researcher` reviewed the complete revised staged diff after the initial remediation.
+- The targeted pass found three merged blocking root causes: outcome announcements are keyed only by stage and are not reconciled through HTTP snapshot acceptance, so same-stage progression can retain stale results while unrelated presence events can erase current ones; a fresh result with pending `continuationPatternId` still gives the host terminal-round guidance; and a resultless early round end falsely announces that a confirmed result remains visible.
+- One non-blocking precision issue also remains: valid subsecond co-winner windows below 50 ms can format as `0-second`; format subsecond durations in milliseconds while addressing the blocking duration/identity path.
+- Per the one-targeted-re-review limit, US-051 remains `passes: false`; no commit was created and `prd.json` was not changed.
+- Post-remediation checks before the targeted pass were green: focused component suite passed 74 tests, root test/typecheck passed with 600 tests and 135 database skips, lint/Prettier/build passed, and the final real browser waiting-participant result scene had no console errors.
+- Next iteration start: add failing regressions for pending host guidance, resultless round-end announcements, presence-after-result preservation, HTTP refresh to a changed same-stage result, and subsecond duration formatting; key transient announcements to an exact authoritative outcome identity across every snapshot acceptance path; rerun checks; and restart the complete staged review loop.
+
+## 2026-07-20 15:17:17 MST - US-051
+- What was implemented
+  - Resumed the blocked winner/result story and replaced stage-only announcement tracking with an exact authoritative outcome identity covering round, pattern, window/result timing, triggering call, settlement, and winner set.
+  - Reconciled transient outcome announcements through HTTP refreshes, realtime snapshots, and unrelated lobby events so current results remain announced, changed same-stage results clear stale copy, and reconnect restoration stays silent.
+  - Corrected pending continuation guidance, resultless round-end announcements, exact fractional duration labels, persistent no-winner endings, full host-control focus recovery, dedicated outcome live regions, and result action ordering before the disabled card.
+- Files changed: `apps/web/src/app/globals.css`, `apps/web/src/components/templates/private-lobby-page.tsx`, `apps/web/src/components/templates/private-lobby-page.test.tsx`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-051 - Build winner and result states`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/components/templates/private-lobby-page.test.tsx` (expected fail first with 5 identity/copy/precision regressions, then with 8 review regressions covering persistent endings, separate announcements, focus, ordering, reconnect, and fractional precision; pass after implementation with 82 tests)
+  - `bun run test` (pass; typecheck, 33 files passed, 1 database file skipped, 608 tests passed, and 135 database-backed tests skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `bun run format:check` (fail only for pre-existing untracked browser/Lighthouse artifacts; no intended story file failed)
+  - Focused Prettier check for all intended story files (pass)
+  - `bun install --frozen-lockfile` (pass; 393 installs checked with no changes)
+  - `DATABASE_URL=<non-secret loopback placeholder> bun run --cwd apps/web build` (pass)
+  - `bun run test:e2e` (pass; smoke test passed and 2 database-backed route tests skipped without `TEST_DATABASE_URL`)
+  - `git diff --check && git diff --cached --check` (pass)
+  - Manual dev-browser journey against a fresh migrated local PostgreSQL database (pass; immediate corner marking showed the authoritative co-winner check before the settled self-winner scene, complete winner semantics, and valid terminal End round action)
+  - Final Chromium verification at 320 CSS pixels (pass; waiting participant restored the settled result silently, outcome preceded the unavailable card, dedicated outcome live region remained empty on snapshot restoration, no horizontal overflow, and no console errors)
+- Implementation agents:
+  - Recommended: none in story notes
+  - Used: skipped in this resumed iteration because the prior implementation advisers had already covered the UI/accessibility design and the remaining work was bounded by concrete review findings
+- Specialist review:
+  - Agents used: fresh `code-reviewer`, `qa-expert`, `ui-designer`, and `ux-researcher`; targeted re-review planned for all four because remediation touched every reported area
+  - Findings: fixed persistent resultless endings, atomic announcement replay, incomplete host-control focus recovery, mobile action separation, missing reconnect coverage, and fractional duration precision before targeted re-review
+- Decisions (why):
+  - Excluded `continuationPatternId` from outcome identity because the co-winner result event precedes the authoritative next-step projection; adding that field would incorrectly erase the live result announcement during its required resync.
+  - Included pattern, triggering call, timing, settlement, and ordered winner IDs so a later immediate result in the same round/stage cannot inherit stale announcement text.
+  - Kept HTTP and reconnect snapshots silent while clearing stale transient text because visible result content remains authoritative without replaying historical live-region announcements.
+  - Separated transient outcomes from connection/presence announcements because retaining an exact result across resync must not cause an atomic parent status to announce it again.
+  - Placed host controls before the card so result guidance and actions stay adjacent in DOM/focus order on narrow screens while retaining the single authoritative command implementation.
+- **Learnings for future iterations:**
+  - A stage discriminator is not a sufficient identity for transient accessibility announcements when one durable round can produce multiple same-stage outcomes.
+  - Browser winner verification must mark the completing number while it is still the latest call; marking an older called number after later calls correctly cannot open the co-winner window.
+- Known issues / follow-ups:
+  - Database-backed Vitest and Playwright route suites remained skipped in standard commands without `TEST_DATABASE_URL`; the affected UI behavior has focused deterministic coverage and a real browser/database journey.
+  - The fresh `gamenight_bingo_us051_resume_20260720` local database retains non-destructive browser fixtures; pre-existing untracked browser/Lighthouse artifacts remain untouched and unstaged.
+  - The final mobile result journey had no console errors; the existing Next development scroll-behavior warning remains outside this story.
+- Next iteration start:
+  - If the fresh review passes, implement US-052 privacy notice and expired state; otherwise resume any recorded blocking finding.
+---
+
+Initial review remediation for US-051 at 2026-07-20 15:31:00 MST:
+- `code-reviewer`, `qa-expert`, `ui-designer`, and `ux-researcher` reviewed the complete staged candidate.
+- Merged blocking findings covered four roots: no persistent resultless-ended scene, repeated outcome speech through a shared atomic status, focus loss from host controls other than Call Next, and result actions separated from guidance by the disabled card on mobile.
+- Fixed all blocking roots with failing regressions first, added the missing reconnect-silence test, and also fixed the specific low-severity 1,001 ms duration precision issue.
+- Post-fix checks: focused 82 tests pass; root test passes with 608 tests and 135 database skips; typecheck, lint, intended-file Prettier, production build, Playwright smoke, and whitespace checks pass.
+- Final dev-browser verification at 320 CSS pixels restored a settled result silently for a waiting participant with no horizontal overflow or console errors and confirmed outcome-before-card DOM order.
+- Targeted re-review is pending for the four specialists whose areas changed.
+
+Targeted re-review outcome for US-051 at 2026-07-20 15:38:06 MST:
+- `code-reviewer` and `ui-designer` returned no actionable findings on the revised complete staged diff.
+- `qa-expert` found one medium focus gap: a same-round `result` to `result` stage event can remove a focused Continue action when an immediately carried winner changes the pattern without changing the stage discriminator.
+- `ux-researcher` found one medium focus gap: settlement can leave focus inside the now-unavailable card instead of moving it to the newly inserted outcome heading; the co-winner window must retain card focus because additional valid marks remain possible.
+- Per the one-targeted-re-review limit, US-051 remains `passes: false`; no commit was created and `prd.json` was not changed.
+- Next iteration start: add failing realtime coverage for same-stage carried-result progression and focused-card settlement, recover focus based on meaningful outcome/action removal rather than only stage changes, rerun all checks, and restart the complete staged review loop.
+
+## 2026-07-20 15:47:06 MST - US-051
+- What was implemented
+  - Resumed the blocked winner/result story with realtime regressions for a same-stage carried result that removes Continue and for a focused card transitioning through co-winner checking into settlement.
+  - Recovered focus when a continuation action disappears without a stage-discriminator change and when settlement makes the focused card unavailable, while preserving card focus throughout the open co-winner window so valid final marks remain possible.
+  - Updated repository accessibility guidance to key focus recovery to meaningful control availability rather than stage changes alone.
+- Files changed: `AGENTS.md`, `apps/web/src/app/globals.css`, `apps/web/src/components/templates/private-lobby-page.tsx`, `apps/web/src/components/templates/private-lobby-page.test.tsx`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-051 - Build winner and result states`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/components/templates/private-lobby-page.test.tsx -t "same-stage progression|keeps card focus"` (expected fail first with 2 focus regressions; pass after implementation)
+  - `bunx vitest run apps/web/src/components/templates/private-lobby-page.test.tsx` (pass after review remediation; 88 tests)
+  - `bun run test` (first rerun exposed one timing-sensitive scroll-effect assertion; pass after awaiting the effect with typecheck, 33 files passed, 1 database file skipped, 614 tests passed, and 135 database-backed tests skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - Focused Prettier check for all intended source/test files (pass)
+  - `bun install --frozen-lockfile` (pass; 393 installs checked with no changes)
+  - `DATABASE_URL=<non-secret loopback placeholder> bun run --cwd apps/web build` (pass)
+  - `bun run test:e2e` (pass; smoke test passed and 2 database-backed route tests skipped without `TEST_DATABASE_URL`)
+  - `git diff --check && git diff --cached --check` (pass)
+  - Manual dev-browser journeys against the retained migrated local PostgreSQL database (pass; final Four Corners mark retained card focus during the co-winner check, settlement focused the self-winner heading, and a waiting participant's 320-pixel result view placed the complete outcome before live status with truthful missing-card copy and no horizontal overflow)
+- Implementation agents:
+  - Recommended: none in story notes
+  - Used: skipped because this resumed iteration was bounded by two concrete prior review findings and the prior implementation advisers had already covered the UI/accessibility design
+- Specialist review:
+  - Agents used: fresh `code-reviewer`, `qa-expert`, `ui-designer`, and `ux-researcher`; targeted re-review planned for all four because remediation touched correctness, tests, visual order, and usability
+  - Findings: fixed same-stage continuation replacement, same-stage presence disabling focused host actions, overly broad card focus movement, stale settlement mark retries, contradictory waiting-card copy, and below-fold mobile outcome order
+- Decisions (why):
+  - Detected removal of a string-valued continuation action directly instead of treating every same-stage update as a focus event, so unrelated result refreshes do not move user focus.
+  - Detected card availability transitions from playable/checking states into waiting/result/ended states, preserving focus in the co-winner window because the latest called ball may still be marked there.
+  - Targeted the authoritative outcome heading after settlement because it explains why card interaction ended and provides the next valid action guidance.
+- **Learnings for future iterations:**
+  - Focus recovery cannot rely only on round IDs and stage discriminators because stage progression can replace a result and remove controls while remaining in `result`.
+  - Card controls remain intentionally operable during the co-winner window and become unavailable only after settlement, so focus must move at that boundary rather than when the window opens.
+- Known issues / follow-ups:
+  - Database-backed Vitest and Playwright route suites remained skipped in standard commands without `TEST_DATABASE_URL`; the affected UI behavior has focused deterministic coverage and a real browser/database journey.
+  - The rapid browser setup intentionally reached the requester rate limit while advancing 62 manual calls; the UI recovered through its stable 429 path, and this synthetic setup error is unrelated to the focus behavior under test.
+  - The retained local browser database and pre-existing untracked browser/Lighthouse artifacts remain untouched and unstaged.
+- Next iteration start:
+  - If the fresh review passes, implement US-052 privacy notice and expired state; otherwise resume any recorded blocking finding.
+---
+
+Initial review remediation for US-051 at 2026-07-20 16:00:41 MST:
+- `code-reviewer`, `qa-expert`, `ui-designer`, and `ux-researcher` reviewed the complete staged candidate.
+- Five merged blocking roots were fixed test-first: same-stage host actions could be replaced or disabled without focus recovery; settlement retained an invalid unresolved-mark retry; card focus moved even from already unavailable cells; waiting participants received contradictory next-round card copy at a terminal result; and mobile outcome content followed the live panel below the initial viewport.
+- Host actions now carry semantic intent metadata and are compared with the next authoritative snapshot, including changed continuation IDs, participant absence generations, and blocking presence. Card focus moves only from a control that was operable before settlement.
+- Outcome states preserve the existing active-round order while placing the outcome and any valid host actions before live status; settlement retires unresolved mark state and terminal waiting participants receive factual current-round copy.
+- The QA low finding requesting another full mark execution in the focused card test was not added because the existing real browser journey already executed the final mark, observed card focus during the open window, and observed outcome-heading focus after settlement; the deterministic event test separately covers the exact focus boundary.
+- Post-fix checks: focused 88 tests pass; root test passes with 614 tests and 135 database skips; typecheck, lint, intended-file Prettier, production build, Playwright smoke, and whitespace checks pass.
+- Final dev-browser verification at 320 CSS pixels showed the settled waiting-player outcome before live status, truthful missing-card copy, no horizontal overflow, and no console errors; the known Next development scroll-behavior warning remains outside this story.
+- Targeted re-review is pending for the four specialists whose reported areas changed.
+
+Targeted re-review outcome for US-051 at 2026-07-20 16:05:46 MST:
+- `code-reviewer`, `qa-expert`, `ui-designer`, and `ux-researcher` reviewed the complete revised staged diff after initial remediation.
+- Three specialists identified the same medium focus root: realtime handlers capture the initial `snapshot-syncing` connection state, so benign later events can incorrectly move focus from enabled host actions, while an offline/reconnecting transition can disable a focused action without invoking focus reconciliation.
+- `code-reviewer` found two additional medium roots: a focused retained-command retry can unmount after authoritative reconciliation without a focus target, and moving the complete live-game panel between conditional positions remounts its live regions during outcome transitions so assistive technology may miss or replay announcements.
+- `ui-designer` found one medium regression: host controls now precede the card during active host play, changing the pre-story reading/focus order outside outcome states rather than reordering only outcome views.
+- Non-blocking follow-ups were also reported for more realistic carried-winner and legal co-winner test fixtures plus result-specific waiting setup copy.
+- Per the one-targeted-re-review limit, US-051 remains `passes: false`; no commit was created and `prd.json` was not changed.
+- Next iteration start: track realtime connection state through a current ref and reconcile focused host actions on authority transitions; add semantic retry focus handling; keep live regions stably mounted while reordering only visible outcome content; restore active order to Live status → Card → Host controls while keeping outcome order Outcome → Host controls → Live status → Card; add failing regressions for each root; rerun all checks; and restart the staged review loop.
+
+## 2026-07-20 16:18:37 MST - US-051
+- What was implemented
+  - Resumed the blocked winner/result story and added deterministic regressions for stale realtime readiness, authority-loss focus, disappearing command retries, live-region replacement, and active-state reading order.
+  - Tracked current realtime readiness through a ref, moved focus from newly disabled or removed host actions to a surviving heading, and preserved enabled-action focus across benign connected events.
+  - Kept all three announcement regions stably mounted while restoring active order to Live status, Card, then Host controls and retaining outcome order as Outcome, Host controls, Live status, then Card.
+- Files changed: `AGENTS.md`, `apps/web/src/app/globals.css`, `apps/web/src/components/templates/private-lobby-page.tsx`, `apps/web/src/components/templates/private-lobby-page.test.tsx`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-051 - Build winner and result states`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/components/templates/private-lobby-page.test.tsx -t "resolves an absence override retry|keeps focus on an enabled host action|moves focus when realtime authority loss|moves focus when Call Next opens a co-winner window from realtime|shows the current call"` (expected fail with the five review regressions; pass after implementation)
+  - `bunx vitest run apps/web/src/components/templates/private-lobby-page.test.tsx` (pass after review remediation; 92 tests)
+  - `bun run test` (pass after review remediation; typecheck, 33 files passed, 1 database file skipped, 618 tests passed, and 135 database-backed tests skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - Focused Prettier check for all intended story files (pass)
+  - `bun install --frozen-lockfile` (pass; 393 installs checked with no changes)
+  - `DATABASE_URL=<non-secret loopback placeholder> bun run --cwd apps/web build` (pass)
+  - `bun run test:e2e` (pass; smoke test passed and 2 database-backed route tests skipped without `TEST_DATABASE_URL`)
+  - `git diff --check && git diff --cached --check` (pass)
+  - Production dev-browser verification with browser-mocked strict snapshot responses (pass; active accessibility order Live status → Card → Host controls, 320px result order Outcome → Live status → Card for a non-host, silent restored outcome announcement, no horizontal overflow, and no console errors)
+- Implementation agents:
+  - Recommended: none in story notes
+  - Used: skipped because this resumed iteration was bounded by four concrete prior review roots and existing component patterns were clear
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, `ui-designer`, and `ux-researcher`; targeted re-review by `qa-expert`, `ui-designer`, and `ux-researcher` planned after substantive fixes
+  - Findings: fixed internal-resync focus/readiness, focused retry removal before failed refresh, and missing co-winner mark guidance before targeted re-review
+- Decisions (why):
+  - Stored realtime readiness in a ref because the one-time connection handlers otherwise captured the initial `snapshot-syncing` render and misclassified later events.
+  - Moved the visually hidden announcement regions outside the conditionally positioned live panel so visible outcome ordering can change without replacing assistive-technology state.
+  - Reordered the card conditionally rather than using CSS `order` because DOM and keyboard reading order must match the visible priority in both active and outcome states.
+- **Learnings for future iterations:**
+  - A stable socket handler must not use render-time readiness state to decide whether a currently focused action remains available.
+  - Live-region identity is part of accessibility behavior; replacing an atomic status node during layout changes can suppress or replay announcements even when its text is correct.
+- Known issues / follow-ups:
+  - Database-backed Vitest and Playwright route suites remained skipped without `TEST_DATABASE_URL`; focused UI tests and production browser snapshots cover the changed behavior.
+  - The production browser used browser-local strict snapshot mocks and did not access private credentials or persisted game data.
+  - Pre-existing browser artifacts and the untracked local production-server log remain unstaged; no local data or unrelated files were deleted.
+- Next iteration start:
+  - If review passes, implement US-052 privacy notice and expired state; otherwise resume any recorded blocking finding.
+---
+
+Initial review remediation for resumed US-051 at 2026-07-20 16:28:00 MST:
+- `code-reviewer` returned no findings; `qa-expert`, `ui-designer`, and `ux-researcher` produced three deduplicated medium roots.
+- Routed sequence-gap and invalid-event resynchronization through the same current readiness/focus transition as transport authority loss, so host actions cannot become disabled while retaining focus or a stale ready ref.
+- Captured semantic retry focus before command replay and moved it to the surviving authoritative section as soon as a successful acknowledgement removes the retry, including mandatory-refresh failure.
+- Added explicit co-winner guidance that the latest completing call remains markable before the window closes, preserving the outcome-first mobile reading order.
+- Added failing regressions for all three roots; focused tests pass 3 cases, the component suite passes 92 tests, the root suite passes typecheck with 618 tests and 135 database skips, and lint, typecheck, formatting, production build, and diff checks pass.
+- Production browser verification confirms the co-winner outcome exposes the action guidance before the still-operable card with no console errors.
+- Targeted re-review is limited to `qa-expert`, `ui-designer`, and `ux-researcher`; code review is not repeated because it returned no findings and no separate code-review root was remediated.
+
+Targeted re-review outcome for resumed US-051 at 2026-07-20 16:32:32 MST:
+- `ui-designer` returned no blocking findings; `qa-expert` and `ux-researcher` identified three remaining medium roots.
+- A focused command retry that receives a definitive non-retryable error is cleared without the successful-ack focus path, so focus can fall to the document body.
+- A called card cell disabled only because its mark is pending is excluded from settlement focus recovery; settlement can permanently lock the card while leaving focus on that obsolete cell.
+- During the open two-second co-winner window, urgent mark guidance is followed by the complete Live status panel before the card, pushing the still-valid action below the initial mobile viewport; the co-winner order must be Outcome → Card → Live status while settled outcomes retain Outcome → Host controls → Live status → Card.
+- The prior low fixture-validity and decorative wordmark observations remain non-blocking and were not changed.
+- Per the one-targeted-re-review limit, no further substantive fixes or review are permitted in this iteration. US-051 remains `passes: false`, `prd.json` remains unchanged, and no commit was created.
+- Next iteration start: add failing regressions for definitive retry failure focus, pending-mark settlement focus, and 320px co-winner card order; apply the three bounded fixes; rerun all US-051 checks and restart the complete staged review loop.
+
+## 2026-07-20 16:39:29 MST - US-051
+- What was implemented
+  - Resumed the blocked winner/result story with regressions for definitive command-retry failure focus, pending-mark settlement focus, and co-winner mobile reading order.
+  - Restored focus to the surviving authoritative section when a focused retry receives a definitive error and when settlement locks the exact card cell whose mark is still pending.
+  - Reordered the open co-winner view to Outcome, Card, then Live status so the still-valid mark action remains directly after its urgent guidance; settled outcomes retain Outcome, Host controls, Live status, then Card.
+- Files changed: `AGENTS.md`, `apps/web/src/app/globals.css`, `apps/web/src/components/templates/private-lobby-page.tsx`, `apps/web/src/components/templates/private-lobby-page.test.tsx`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-051 - Build winner and result states`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/components/templates/private-lobby-page.test.tsx -t "shows the full co-winner check|moves focus from a pending mark|restores focus when a command retry receives a definitive error"` (expected fail first with all 3 regressions; pass after implementation)
+  - `bunx vitest run apps/web/src/components/templates/private-lobby-page.test.tsx` (pass; 94 tests)
+  - `bun run test` (pass; typecheck, 33 files passed, 1 database file skipped, 620 tests passed, and 135 database-backed tests skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - Focused Prettier check for all intended story files (pass)
+  - `bun run format:check` (fails only for pre-existing untracked browser/Lighthouse artifacts; no intended story file failed)
+  - `bun install --frozen-lockfile` (pass; 393 installs checked with no changes)
+  - `DATABASE_URL=<non-secret loopback placeholder> bun run --cwd apps/web build` (pass)
+  - `bun run test:e2e` (pass; smoke test passed and 2 database-backed route tests skipped without `TEST_DATABASE_URL`)
+  - `git diff --check && git diff --cached --check` (pass)
+  - Production dev-browser verification at 320 CSS pixels with a browser-local strict snapshot mock (pass; accessibility order Outcome → Card → Live status, exact two-second guidance, mark remains available, zero horizontal overflow, and no console errors)
+- Implementation agents:
+  - Recommended: none in story notes
+  - Used: skipped because this resumed iteration was bounded by three concrete prior review findings and prior frontend/accessibility advisers had already covered the story design
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, `ui-designer`, and `ux-researcher`; targeted re-review planned for all four because remediation touched correctness, tests, visual presentation, and mobile usability
+  - Findings: fixed waiting-stage retry focus, acknowledged-mark settlement focus, first-viewport co-winner card access, and the desktop result marker wrap/clip
+- Decisions (why):
+  - Identified the focused pending cell by its card position and retained mark command rather than treating every disabled card cell as previously actionable, preserving focus on cells that were already unavailable.
+  - Reused the existing stage-based focus target selection after definitive retry failure so removed retries recover consistently with successful retry reconciliation.
+  - Changed DOM order only for the open co-winner window because settlement guidance/actions and normal active play already had the required reading order.
+- **Learnings for future iterations:**
+  - A control can be meaningfully actionable immediately before an authoritative transition even when its current `aria-disabled` state reflects an in-flight command; focus recovery must account for the exact retained command identity.
+  - During a co-winner window, the card remains an urgent valid action surface and belongs directly after the outcome guidance, ahead of lower-priority live status details.
+- Known issues / follow-ups:
+  - Database-backed Vitest and Playwright route suites remained skipped without `TEST_DATABASE_URL`; focused deterministic coverage and the production browser snapshot cover the changed UI behavior.
+  - Pre-existing untracked browser/Lighthouse artifacts remain untouched and unstaged.
+- Next iteration start:
+  - If the fresh review passes, implement US-052 privacy notice and expired state; otherwise resume any recorded blocking finding.
+---
+
+Initial review remediation for resumed US-051 at 2026-07-20 17:11:33 MST:
+- The fresh `code-reviewer`, `qa-expert`, `ui-designer`, and `ux-researcher` pass produced three merged blocking roots: waiting-stage retries could unmount without focus recovery; an acknowledged mark awaiting snapshot reconciliation was omitted from settlement focus identity; and the checking panel still pushed the urgent card action below the initial 320x812 viewport.
+- Added failing regressions before giving Start round retries a setup-specific semantic focus target and extending exact pending-mark identity through `pendingMarkRef` after acknowledgement.
+- Moved secondary winner-confirmation copy behind the card into Live status, removed provisional/decorative checking wordmarks, condensed the checking message, and applied state-specific spacing. Browser measurement improved the first 44px mark from 855-899px to 766-810px in an 812px viewport with no horizontal overflow.
+- Fixed the UI review's specific low-severity desktop marker issue by preventing wrapping and reducing the maximum decorative result size; final 1280px verification reports equal 406px client/scroll widths and one line.
+- Strengthened the conditional-class regression to use `classList.contains` after browser verification caught a missing separator that the original matcher accepted.
+- Post-fix checks: focused review regressions pass; the component suite passes 96 tests; root test passes typecheck with 622 tests and 135 database skips; lint, typecheck, intended-file formatting, production build, Playwright smoke, and diff checks pass. One unrelated join-form focus test failed once in the root run, then passed alone and in the immediate full rerun without source changes.
+- Final dev-browser checks: 320x812 co-winner order is Outcome → Card → Live status, the full first mark touch target ends at 810px, the checking wordmark is absent, and settled desktop `RESULT` stays on one unclipped line. The browser setup intentionally receives one initial mocked-route 500 before Retry installs the strict snapshot response; the final rendered states have no application error.
+- Targeted re-review is limited to the four original specialists because substantive fixes addressed findings in each area.
+
+Targeted re-review outcome for resumed US-051 at 2026-07-21 01:15:09 MST:
+- `qa-expert` and `ux-researcher` returned no actionable findings; `code-reviewer` and `ui-designer` identified the same responsive result-marker root.
+- At the `53rem` two-column breakpoint, the non-wrapping `RESULT` marker requires more width than its grid track around 848-900 CSS pixels and overlaps the confirmed-result label and heading. Delay the two-column layout, reserve enough marker width, or scale the marker within its column, then add intermediate-width regression coverage.
+- Current checks remain green: the focused component suite passes 96 tests; the root suite passes 622 tests with 135 database-backed skips; lint, intended-file formatting, production build, Playwright smoke, and staged whitespace checks pass.
+- Browser review otherwise confirmed the 320x812 co-winner order, complete first mark target visibility, no horizontal overflow, and accessibility-tree order. Live backend browser focus transitions remain covered by deterministic component tests because the review browser used strict mocked snapshots.
+- Per the one-targeted-re-review limit, US-051 remains `passes: false`; `prd.json` remains unchanged and no commit was created.
+- Next iteration start: add a failing intermediate-width result-layout regression, fix the `RESULT` marker/grid breakpoint overlap, rerun all US-051 checks and browser verification across the breakpoint, and restart the complete staged review loop.
+
+## 2026-07-21 01:25:53 MST - US-051
+- What was implemented
+  - Resumed the blocked winner/result story with a stable-Chrome layout regression that renders the production stylesheet at the exact 53rem desktop breakpoint and measures the decorative marker's rendered content against the result-details column.
+  - Increased the outcome marker track from 10rem to 17rem so `RESULT`, `BINGO`, and `ENDED` retain at least 1rem separation from result copy without changing the mobile single-column layout.
+  - Verified the complete authoritative result scene at 848px and 900px with 19-20px measured separation, no overlap, no horizontal overflow, and unchanged accessible outcome structure.
+  - Fixed review-discovered focus recovery for multi-tab dialog invalidation and immediately settled continuation, and made co-winner/setup guidance truthful for waiting participants without cards.
+- Files changed: `AGENTS.md`, `README.md`, `apps/web/src/app/globals.css`, `apps/web/src/components/templates/private-lobby-page.tsx`, `apps/web/src/components/templates/private-lobby-page.test.tsx`, `playwright.config.ts`, `tests/e2e/playwright.smoke.spec.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-051 - Build winner and result states`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx playwright test tests/e2e/playwright.smoke.spec.ts --grep "keeps the result marker clear"` (expected fail against the 10rem track: marker content ended at x=346 while details began at x=264; expected spacing regression also failed against the initial 16rem fix; pass with the 17rem track)
+  - Four focused review regressions (expected fail for waiting-player guidance/setup copy and both outcome-focus paths; pass after remediation)
+  - `bunx vitest run apps/web/src/components/templates/private-lobby-page.test.tsx` (pass; 98 tests)
+  - `bun run test` (pass after remediation; typecheck, 33 files passed, 1 database file skipped, 624 tests passed, and 135 database-backed tests skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - Focused Prettier check for all intended story files (pass)
+  - `DATABASE_URL=<documented non-secret local default> bun run --cwd apps/web build` (pass)
+  - `PLAYWRIGHT_BROWSER_CHANNEL=chrome bun run test:e2e` (pass on stable Chrome; 2 tests passed and 2 database-backed route tests skipped without `TEST_DATABASE_URL`)
+  - `bunx playwright test --list` (pass with the portable managed-Chromium default configuration)
+  - `git diff --check && git diff --cached --check` (pass)
+  - Production dev-browser verification with browser-local strict authorized snapshots (pass; 19-20px marker separation at 848px/900px, no horizontal overflow, complete result semantics, truthful waiting-result copy, and no-card co-winner guidance)
+- Implementation agents:
+  - Recommended: none in story notes
+  - Used: skipped because this resumed iteration was bounded by one concrete responsive review finding and the existing CSS/test patterns were clear
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, `ui-designer`, `ux-researcher`, and `documentation-engineer`; targeted re-review planned for `code-reviewer`, `qa-expert`, `ui-designer`, and `documentation-engineer`
+  - Findings: fixed two outcome-focus gaps, waiting-participant co-winner/setup copy, and the non-portable undocumented Chrome requirement; `ux-researcher` returned no findings
+- Decisions (why):
+  - Used an actual Playwright layout assertion instead of a CSS source-text test because the bug depends on rendered font content overflowing its grid item at a specific viewport.
+  - Reserved a 17rem marker track rather than delaying the whole private-lobby desktop layout because only the outcome wordmark needed additional width and the result details remain readable in the remaining track.
+  - Kept Playwright-managed Chromium as the portable default and exposed stable Chrome through `PLAYWRIGHT_BROWSER_CHANNEL=chrome` because the local managed browser is unavailable while clean/CI environments should not require branded Chrome.
+- **Learnings for future iterations:**
+  - `getBoundingClientRect()` reports the grid item's assigned box, not overflowing glyph width; combine the element's left edge with `scrollWidth` when testing non-wrapping decorative text.
+  - Run the production Next build before root typecheck/test rather than concurrently because `.next/types` regeneration can transiently remove files while TypeScript reads them.
+- Known issues / follow-ups:
+  - One existing equal-sequence private-mark test failed once in the root suite, then passed alone and in the immediate complete rerun without source changes; no story regression was reproduced.
+  - The database-backed Vitest and Playwright route suites remained skipped without `TEST_DATABASE_URL`.
+  - The mocked browser session correctly received a 403 for its unmocked realtime-ticket request because it had no participant cookie; the authorized snapshot result UI rendered and measured without application errors.
+  - Pre-existing untracked browser/Lighthouse artifacts remain untouched and unstaged.
+- Next iteration start:
+  - If the fresh review passes, mark US-051 complete and implement US-052 next; otherwise resume any recorded blocking finding.
+---
+
+Initial review remediation for resumed US-051 at 2026-07-21 01:45:05 MST:
+- `code-reviewer`, `qa-expert`, `ui-designer`, `ux-researcher`, and `documentation-engineer` reviewed the complete staged candidate.
+- Four merged medium roots were fixed test-first where behavioral: an invalidated End round dialog skipped a new outcome; command reconciliation overwrote outcome focus after an immediately settled continuation; waiting participants were told to mark a nonexistent card; and Playwright unconditionally required undocumented branded Chrome.
+- Also fixed the UI review's related low-severity settled waiting-copy inconsistency because it was specific, cheap, and in the same no-card outcome path.
+- Restored managed Chromium as the default, documented required browser installation and the stable-Chrome override, and retained the real 53rem browser layout regression.
+- The documentation review's low request to remove `prd.json` from the intended file list was discarded because Ralph requires the post-review passing metadata update to join the final story commit.
+- Post-fix checks: four focused regressions pass; component suite passes 98 tests; root test passes typecheck with 624 tests and 135 database skips; typecheck, lint, intended-file formatting, production build, stable-Chrome Playwright, default config listing, and whitespace checks pass.
+- Final dev-browser verification confirms truthful settled/co-winner guidance for a waiting participant; the expected unauthenticated realtime-ticket 403 remains isolated from the browser-local authorized snapshot.
+- Targeted re-review is limited to `code-reviewer`, `qa-expert`, `ui-designer`, and `documentation-engineer`; `ux-researcher` returned no findings and no separate UX root was remediated.
+
+Targeted re-review outcome for resumed US-051 at 2026-07-21 01:52:00 MST:
+- `code-reviewer`, `qa-expert`, `ui-designer`, and `documentation-engineer` returned empty actionable finding lists against the complete revised staged diff.
+- No in-scope critical, high, or medium findings remain; the review stabilization loop passed.
+- The only residual check gap is that Playwright-managed Chromium is not installed locally: its portable default configuration listed all four tests successfully, while the documented stable-Chrome override executed the browser suite with 2 passes and 2 database-backed skips.
+- US-051 is ready for its required post-review `prd.json` passing update and final consistency check.

@@ -413,13 +413,17 @@ then refactor while green.
   errors/instructions programmatically.
 - Provide visible focus, logical focus order, generous touch targets, and text
   equivalents for card and status states.
-- When a stage change or native dialog close removes the focused control, move
-  focus after that conditional UI unmounts to the surviving action or section
-  heading; let the native dialog cancel event own Escape handling.
+- When an authoritative update or native dialog close removes the focused
+  control or makes it unavailable, move focus after that conditional UI update
+  to the surviving action or section heading. Compare meaningful control and
+  outcome state rather than only stage discriminators, and let the native dialog
+  cancel event own Escape handling.
 - Never communicate called/marked, connection, pause, winner, or error state by
   color, sound, or motion alone.
 - Use controlled live regions for new calls and important state changes; avoid
-  replaying call history or flooding announcements after snapshots.
+  replaying call history or flooding announcements after snapshots. Keep live
+  region nodes mounted when conditionally reordering visible status and outcome
+  panels so assistive technology does not miss or replay updates.
 - Respect reduced motion, high contrast, zoom/reflow, and mute/volume settings.
 - Test accessibility in components and affected browser journeys. Do not accept
   critical accessibility violations.

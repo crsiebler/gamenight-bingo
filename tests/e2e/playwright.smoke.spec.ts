@@ -1,7 +1,45 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+
 import { expect, test } from "@playwright/test";
 
 test("loads the Playwright test configuration", () => {
   expect(true).toBe(true);
+});
+
+test("keeps the result marker clear of result details at the desktop breakpoint", async ({
+  page,
+}) => {
+  const globalStyles = await readFile(
+    resolve(process.cwd(), "apps/web/src/app/globals.css"),
+    "utf8",
+  );
+  await page.setViewportSize({ height: 812, width: 848 });
+  await page.setContent(`
+    <style>${globalStyles}</style>
+    <main class="private-lobby-shell">
+      <div class="private-lobby-grid">
+        <section class="lobby-panel outcome-panel">
+          <div class="outcome-lockup">
+            <div class="result-mark">RESULT</div>
+            <div data-testid="result-details">
+              <p class="eyebrow">Confirmed result</p>
+              <h2>Another player won this round</h2>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  `);
+
+  const markerBounds = await page.locator(".result-mark").evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    return { contentRight: box.x + element.scrollWidth };
+  });
+  const detailsBox = await page.getByTestId("result-details").boundingBox();
+
+  expect(detailsBox).not.toBeNull();
+  expect(markerBounds.contentRight + 16).toBeLessThanOrEqual(detailsBox!.x);
 });
 
 test.describe("versioned private API routing", () => {

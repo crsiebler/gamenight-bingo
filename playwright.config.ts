@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const testDatabaseUrl = process.env["TEST_DATABASE_URL"];
+const useStableChrome = process.env["PLAYWRIGHT_BROWSER_CHANNEL"] === "chrome";
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -25,7 +26,10 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: devices["Desktop Chrome"],
+      use: {
+        ...devices["Desktop Chrome"],
+        ...(useStableChrome ? { channel: "chrome" as const } : {}),
+      },
     },
   ],
 });

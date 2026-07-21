@@ -32,6 +32,9 @@ function snapshotFor(
     cardId?: string;
     calledBalls?: readonly number[];
     callConfiguration?: { mode: "manual" } | { mode: "automatic"; intervalSeconds: 10 };
+    coWinnerClosesAt?: string;
+    coWinnerOpenedAt?: string;
+    continuationPending?: boolean;
     eventSequence?: number | null;
     hostPresence?: "connected" | "absent";
     absentPlayerEligibility?: "playing" | "waiting";
@@ -39,7 +42,10 @@ function snapshotFor(
     markedBalls?: readonly number[];
     patternId?: string;
     continuationPatternId?: string | null;
-    round?: "waiting" | "active" | "paused" | "result" | "ended" | null;
+    resultSettledAt?: string;
+    resultTriggeringCallPosition?: number;
+    round?: "waiting" | "active" | "paused" | "co-winner-window" | "result" | "ended" | null;
+    winnerParticipantIds?: readonly string[];
   } = {},
 ): Snapshot {
   const selfId =
@@ -169,18 +175,33 @@ function snapshotFor(
           pausedAt: NOW,
         };
       }
+      if (options.round === "co-winner-window") {
+        const triggeringCallId = `call-${(options.calledBalls ?? []).length}`;
+        return {
+          ...base,
+          stage: "co-winner-window" as const,
+          startedAt: NOW,
+          window: {
+            triggeringCallId,
+            openedAt: options.coWinnerOpenedAt ?? "2026-07-18T11:59:58.000Z",
+            closesAt: options.coWinnerClosesAt ?? NOW,
+          },
+        };
+      }
       if (options.round === "result") {
         return {
           ...base,
           stage: "result" as const,
           startedAt: NOW,
-          continuationPatternId: options.continuationPatternId ?? null,
+          ...(options.continuationPending
+            ? {}
+            : { continuationPatternId: options.continuationPatternId ?? null }),
           result: {
-            triggeringCallId: "call-1",
+            triggeringCallId: `call-${options.resultTriggeringCallPosition ?? 1}`,
             openedAt: "2026-07-18T11:59:57.000Z",
             closesAt: "2026-07-18T11:59:59.000Z",
-            settledAt: NOW,
-            winnerParticipantIds: ["participant-host"],
+            settledAt: options.resultSettledAt ?? NOW,
+            winnerParticipantIds: options.winnerParticipantIds ?? ["participant-host"],
           },
         };
       }
@@ -246,7 +267,14 @@ function snapshotFor(
       ball,
       calledAt: NOW,
     })),
-    timer: null,
+    timer:
+      options.round === "co-winner-window"
+        ? {
+            kind: "co-winner",
+            triggeringCallId: `call-${(options.calledBalls ?? []).length}`,
+            deadline: options.coWinnerClosesAt ?? NOW,
+          }
+        : null,
   });
 }
 
@@ -291,6 +319,289 @@ function deferred<T>() {
 }
 
 describe("PrivateLobbyPage", () => {
+  it("shows the full co-winner check before any settled winner scene", async () => {
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        loadSnapshot={async () =>
+          snapshotFor("host", {
+            absentPlayerOverridden: true,
+            calledBalls: [1],
+            eventSequence: 7,
+            round: "co-winner-window",
+          })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const outcome = await screen.findByRole("region", { name: "Checking for co-winners" });
+    expect(within(outcome).getByText(/full 2-second co-winner check/i)).toBeVisible();
+    expect(
+      within(outcome).getByText(/latest call completes your card.*mark it now/i),
+    ).toBeVisible();
+    expect(within(outcome).queryByText(/complete winner set.*server confirms/i)).toBeNull();
+    expect(within(outcome).queryByText("B I N G O")).toBeNull();
+    expect(within(outcome).queryByText("Latest call locked")).toBeNull();
+    expect(within(outcome).queryByRole("list", { name: /confirmed winners/i })).toBeNull();
+    expect(screen.queryByRole("heading", { name: /bingo.*you won|round complete/i })).toBeNull();
+    const card = screen.getByRole("region", { name: "Your card" });
+    const liveGame = screen.getByRole("region", { name: "Live game status" });
+    expect(card.classList.contains("co-winner-card-panel")).toBe(true);
+    expect(within(liveGame).getByText(/complete winner set.*server confirms/i)).toBeVisible();
+    expect(outcome.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(card.compareDocumentPosition(liveGame) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("does not tell a waiting participant to mark a card during co-winner checking", async () => {
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        loadSnapshot={async () =>
+          snapshotFor("waiting", {
+            calledBalls: [1],
+            eventSequence: 7,
+            round: "co-winner-window",
+          })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const outcome = await screen.findByRole("region", { name: "Checking for co-winners" });
+    expect(within(outcome).getByText(/winner confirmation is in progress/i)).toBeVisible();
+    expect(within(outcome).queryByText(/mark (it|your card) now/i)).toBeNull();
+  });
+
+  it("describes the authoritative co-winner duration instead of assuming two seconds", async () => {
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        loadSnapshot={async () =>
+          snapshotFor("host", {
+            absentPlayerOverridden: true,
+            calledBalls: [1],
+            coWinnerOpenedAt: "2026-07-18T11:59:59.000Z",
+            eventSequence: 7,
+            round: "co-winner-window",
+          })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const outcome = await screen.findByRole("region", { name: "Checking for co-winners" });
+    expect(within(outcome).getByText(/full 1-second co-winner check/i)).toBeVisible();
+  });
+
+  it("preserves millisecond precision for a fractional-second duration", async () => {
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        loadSnapshot={async () =>
+          snapshotFor("host", {
+            absentPlayerOverridden: true,
+            calledBalls: [1],
+            coWinnerOpenedAt: "2026-07-18T11:59:58.999Z",
+            eventSequence: 7,
+            round: "co-winner-window",
+          })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const outcome = await screen.findByRole("region", { name: "Checking for co-winners" });
+    expect(within(outcome).getByText(/full 1.001-second co-winner check/i)).toBeVisible();
+  });
+
+  it("formats a subsecond co-winner duration in milliseconds", async () => {
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        loadSnapshot={async () =>
+          snapshotFor("host", {
+            absentPlayerOverridden: true,
+            calledBalls: [1],
+            coWinnerOpenedAt: "2026-07-18T11:59:59.960Z",
+            eventSequence: 7,
+            round: "co-winner-window",
+          })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const outcome = await screen.findByRole("region", { name: "Checking for co-winners" });
+    expect(within(outcome).getByText(/full 40-millisecond co-winner check/i)).toBeVisible();
+  });
+
+  it("celebrates the participant and names the complete authoritative co-winner set", async () => {
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        loadSnapshot={async () =>
+          snapshotFor("player", {
+            absentPlayerOverridden: true,
+            calledBalls: [1],
+            continuationPatternId: "standard-two-lines",
+            eventSequence: 8,
+            round: "result",
+            winnerParticipantIds: ["participant-grace", "participant-absent"],
+          })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const outcome = await screen.findByRole("region", { name: /bingo.*you won/i });
+    expect(within(outcome).getByRole("heading", { name: /bingo.*you won/i })).toBeVisible();
+    expect(within(outcome).getByText(/one line is complete/i)).toBeVisible();
+    expect(
+      within(outcome)
+        .getAllByRole("listitem")
+        .map((item) => item.textContent),
+    ).toEqual(["RobinYou", "Drew"]);
+    expect(
+      within(outcome).getByText(/host can continue to two lines or end the round/i),
+    ).toBeVisible();
+    expect(screen.getByRole("status", { name: "Game status announcement" })).not.toHaveTextContent(
+      /results confirmed/i,
+    );
+    expect(screen.queryByRole("button", { name: /continue to/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: /previous round/i })).toBeNull();
+  });
+
+  it("shows a respectful settled result and valid host actions without previous-round browsing", async () => {
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        loadSnapshot={async () =>
+          snapshotFor("host", {
+            absentPlayerOverridden: true,
+            calledBalls: [1],
+            continuationPatternId: "standard-two-lines",
+            eventSequence: 8,
+            round: "result",
+            winnerParticipantIds: ["participant-grace"],
+          })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const outcome = await screen.findByRole("region", { name: "One Line complete" });
+    expect(within(outcome).getByRole("heading", { name: "One Line complete" })).toBeVisible();
+    expect(
+      within(outcome).getByText(/robin completed one line.*round can continue/i),
+    ).toBeVisible();
+    expect(within(outcome).getByRole("list", { name: "Confirmed winners" })).toBeVisible();
+    const controls = screen.getByRole("region", { name: "Host controls" });
+    expect(within(controls).getByRole("button", { name: "Continue to Two Lines" })).toBeVisible();
+    expect(within(controls).getByRole("button", { name: "End round" })).toBeVisible();
+    const liveGame = screen.getByRole("region", { name: "Live game status" });
+    const card = screen.getByRole("region", { name: "Your card" });
+    expect(
+      outcome.compareDocumentPosition(controls) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      controls.compareDocumentPosition(liveGame) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(liveGame.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /previous round/i })).toBeNull();
+  });
+
+  it("tells the host when a fresh result is still waiting for its continuation decision", async () => {
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        loadSnapshot={async () =>
+          snapshotFor("host", {
+            absentPlayerOverridden: true,
+            calledBalls: [1],
+            continuationPending: true,
+            eventSequence: 8,
+            round: "result",
+          })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const controls = await screen.findByRole("region", { name: "Host controls" });
+    expect(within(controls).getByText(/waiting for the server.*next step/i)).toBeVisible();
+    expect(within(controls).queryByText(/terminal round/i)).toBeNull();
+  });
+
+  it("reserves terminal result language for a round with no continuation", async () => {
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        loadSnapshot={async () =>
+          snapshotFor("player", {
+            absentPlayerOverridden: true,
+            calledBalls: [1],
+            continuationPatternId: null,
+            eventSequence: 8,
+            round: "result",
+            winnerParticipantIds: ["participant-host"],
+          })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const outcome = await screen.findByRole("region", { name: "Round complete" });
+    expect(within(outcome).getByText(/casey won one line.*thanks for playing/i)).toBeVisible();
+    expect(within(outcome).getByText(/host can end the round/i)).toBeVisible();
+  });
+
+  it("describes a waiting participant's missing card without promising round continuation", async () => {
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        loadSnapshot={async () =>
+          snapshotFor("waiting", {
+            calledBalls: [1],
+            continuationPatternId: null,
+            eventSequence: 8,
+            round: "result",
+            winnerParticipantIds: ["participant-host"],
+          })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    await screen.findByRole("region", { name: "Round complete" });
+    const card = screen.getByRole("region", { name: "Your card" });
+    expect(within(card).getByText("You did not have a card in this round.")).toBeVisible();
+    expect(within(card).queryByText(/wait for the next round/i)).toBeNull();
+    const setup = screen.getByRole("region", { name: "Lobby setup" });
+    expect(within(setup).getByText(/this round is complete.*host to end it/i)).toBeVisible();
+    expect(within(setup).queryByText(/pending round/i)).toBeNull();
+  });
+
   it("shows the current call, chronological history, canonical progress, mode, and countdown", async () => {
     const deadline = new Date(Date.now() + 5_000).toISOString();
     const active = snapshotFor("host", {
@@ -333,9 +644,7 @@ describe("PrivateLobbyPage", () => {
     expect(
       within(roundDetails).getByRole("list", { name: /calls in chronological order/i }),
     ).toHaveAttribute("tabindex", "0");
-    expect(
-      within(liveGame).getByRole("status", { name: "New call announcement" }),
-    ).toBeEmptyDOMElement();
+    expect(screen.getByRole("status", { name: "New call announcement" })).toBeEmptyDOMElement();
     const sectionHeadings = screen
       .getAllByRole("heading", { level: 2 })
       .map(({ textContent }) => textContent);
@@ -345,6 +654,10 @@ describe("PrivateLobbyPage", () => {
     expect(sectionHeadings.indexOf("Round details")).toBeLessThan(
       sectionHeadings.indexOf("Share the lobby"),
     );
+    const card = screen.getByRole("region", { name: "Your card" });
+    const controls = screen.getByRole("region", { name: "Host controls" });
+    expect(liveGame.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(card.compareDocumentPosition(controls) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("counts down to an authoritative wait without advancing calls in the browser", async () => {
@@ -994,7 +1307,7 @@ describe("PrivateLobbyPage", () => {
         }),
       ),
     );
-    expect(history.scrollTop).toBe(500);
+    await waitFor(() => expect(history.scrollTop).toBe(500));
   });
 
   it("resets history following and call announcements when the round changes", async () => {
@@ -1946,7 +2259,9 @@ describe("PrivateLobbyPage", () => {
       /host actions are unavailable/i,
     );
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(screen.getByRole("heading", { name: "Host controls" })).toHaveFocus();
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Host controls" })).toHaveFocus(),
+    );
   });
 
   it("closes end confirmation when the current round is replaced", async () => {
@@ -2016,6 +2331,45 @@ describe("PrivateLobbyPage", () => {
     expect(within(controls).queryByRole("button", { name: /call next/i })).toBeNull();
   });
 
+  it("focuses the outcome when an open end-round dialog is replaced by co-winner checking", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const baseline = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      eventSequence: 1,
+      round: "active",
+    });
+    const checking = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      calledBalls: [1],
+      eventSequence: 2,
+      round: "co-winner-window",
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    await screen.findByRole("region", { name: "Host controls" });
+    act(() => handlers?.onSnapshot(baseline));
+    fireEvent.click(screen.getByRole("button", { name: "End round" }));
+
+    act(() => handlers?.onSnapshot(checking));
+
+    expect(screen.queryByRole("dialog", { name: "End this round?" })).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Checking for co-winners" })).toHaveFocus(),
+    );
+  });
+
   it("reconciles a continuation that immediately settles the next stage", async () => {
     const loadSnapshot = vi
       .fn<(code: string) => Promise<Snapshot>>()
@@ -2054,6 +2408,9 @@ describe("PrivateLobbyPage", () => {
     expect(await screen.findByRole("button", { name: "Continue to Blackout" })).toBeEnabled();
     expect(screen.getByRole("status", { name: "Host command status" })).toHaveTextContent(
       "Round continued.",
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Bingo - you won!" })).toHaveFocus(),
     );
   });
 
@@ -2102,7 +2459,9 @@ describe("PrivateLobbyPage", () => {
     acknowledgement.resolve(activeLobbyAck(2));
     expect(await screen.findByRole("button", { name: "Resume calling" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Pause calling" })).toBeNull();
-    expect(screen.getByRole("heading", { name: "Host controls" })).toHaveFocus();
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Host controls" })).toHaveFocus(),
+    );
     expect(screen.getByRole("status", { name: "Host command status" })).toHaveTextContent(
       /calling paused/i,
     );
@@ -2376,11 +2735,13 @@ describe("PrivateLobbyPage", () => {
     );
 
     fireEvent.click(await screen.findByRole("button", { name: "Override absence for Drew" }));
-    await screen.findByRole("button", { name: "Retry absence override" });
+    const retry = await screen.findByRole("button", { name: "Retry absence override" });
+    retry.focus();
     fireEvent.click(screen.getByRole("button", { name: "Refresh lobby" }));
 
     await screen.findByText(/absence override applied/i);
     expect(screen.queryByRole("button", { name: "Retry absence override" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Host controls" })).toHaveFocus();
     expect(run).toHaveBeenCalledOnce();
   });
 
@@ -2555,7 +2916,256 @@ describe("PrivateLobbyPage", () => {
     expect(screen.getByRole("heading", { name: "Host controls" })).toHaveFocus();
   });
 
+  it("keeps outcome focus when an acknowledged Call Next opens the co-winner window", async () => {
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          calledBalls: [1],
+          eventSequence: 1,
+          round: "active",
+        }),
+      )
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          calledBalls: [1, 16],
+          eventSequence: 2,
+          round: "co-winner-window",
+        }),
+      );
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createCommandSession={() => ({ run: async () => activeLobbyAck(2) })}
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const callNext = await screen.findByRole("button", { name: "Call Next" });
+    callNext.focus();
+    fireEvent.click(callNext);
+
+    const outcomeHeading = await screen.findByRole("heading", { name: "Checking for co-winners" });
+    await waitFor(() => expect(outcomeHeading).toHaveFocus());
+  });
+
   it("moves focus when Call Next opens a co-winner window from realtime", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const baseline = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      calledBalls: [1],
+      eventSequence: 1,
+      round: "active",
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    await screen.findByRole("region", { name: "Host controls" });
+    act(() => handlers?.onSnapshot(baseline));
+    const callNext = screen.getByRole("button", { name: "Call Next" });
+    await waitFor(() => expect(callNext).toBeEnabled());
+    callNext.focus();
+    const outcomeAnnouncement = screen.getByRole("status", { name: "Outcome announcement" });
+    const gameAnnouncement = screen.getByRole("status", { name: "Game status announcement" });
+    const callAnnouncement = screen.getByRole("status", { name: "New call announcement" });
+
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "co-winner-window",
+          eventSequence: 2,
+          occurredAt: NOW,
+          window: {
+            triggeringCallId: "call-1",
+            openedAt: NOW,
+            closesAt: "2026-07-18T12:00:03.000Z",
+          },
+        }),
+      ),
+    );
+
+    expect(screen.queryByRole("button", { name: "Call Next" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Checking for co-winners" })).toHaveFocus();
+    expect(screen.getByRole("status", { name: "Outcome announcement" })).toBe(outcomeAnnouncement);
+    expect(screen.getByRole("status", { name: "Game status announcement" })).toBe(gameAnnouncement);
+    expect(screen.getByRole("status", { name: "New call announcement" })).toBe(callAnnouncement);
+  });
+
+  it("moves focus from another host action when realtime hides the host controls", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const baseline = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      calledBalls: [1],
+      eventSequence: 1,
+      round: "active",
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    await screen.findByRole("region", { name: "Host controls" });
+    act(() => handlers?.onSnapshot(baseline));
+    const pause = screen.getByRole("button", { name: "Pause calling" });
+    await waitFor(() => expect(pause).toBeEnabled());
+    pause.focus();
+
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "co-winner-window",
+          eventSequence: 2,
+          occurredAt: NOW,
+          window: {
+            triggeringCallId: "call-1",
+            openedAt: NOW,
+            closesAt: "2026-07-18T12:00:03.000Z",
+          },
+        }),
+      ),
+    );
+
+    expect(screen.queryByRole("region", { name: "Host controls" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Checking for co-winners" })).toHaveFocus();
+  });
+
+  it("moves focus from a removed continuation action to the surviving host controls", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const baseline = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      calledBalls: [1],
+      continuationPatternId: "standard-two-lines",
+      eventSequence: 8,
+      round: "result",
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    await screen.findByRole("region", { name: "Host controls" });
+    act(() => handlers?.onSnapshot(baseline));
+    const continueRound = screen.getByRole("button", { name: "Continue to Two Lines" });
+    await waitFor(() => expect(continueRound).toBeEnabled());
+    continueRound.focus();
+
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "stage",
+          eventSequence: 9,
+          occurredAt: NOW,
+          round: {
+            id: "round-1",
+            lobbyId: "lobby-1",
+            patternId: "standard-two-lines",
+            callConfiguration: { mode: "manual" },
+            stage: "active",
+            startedAt: NOW,
+          },
+        }),
+      ),
+    );
+
+    expect(screen.queryByRole("button", { name: "Continue to Two Lines" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Host controls" })).toHaveFocus();
+  });
+
+  it("moves focus when same-stage progression removes the current continuation action", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const baseline = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      calledBalls: [1],
+      continuationPatternId: "standard-two-lines",
+      eventSequence: 8,
+      round: "result",
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    await screen.findByRole("region", { name: "Host controls" });
+    act(() => handlers?.onSnapshot(baseline));
+    const continueRound = screen.getByRole("button", { name: "Continue to Two Lines" });
+    await waitFor(() => expect(continueRound).toBeEnabled());
+    continueRound.focus();
+
+    const result = baseline.round?.stage === "result" ? baseline.round.result : null;
+    if (result === null) throw new Error("Missing settled result fixture.");
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "stage",
+          eventSequence: 9,
+          occurredAt: NOW,
+          round: {
+            id: "round-1",
+            lobbyId: "lobby-1",
+            patternId: "standard-two-lines",
+            callConfiguration: { mode: "manual" },
+            stage: "result",
+            startedAt: NOW,
+            continuationPatternId: "standard-blackout",
+            result,
+          },
+        }),
+      ),
+    );
+
+    expect(screen.queryByRole("button", { name: "Continue to Two Lines" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Continue to Blackout" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Bingo - you won!" })).toHaveFocus();
+  });
+
+  it("moves focus when same-stage presence disables the focused host action", async () => {
     let handlers: PrivateLobbyRealtimeHandlers | undefined;
     const baseline = snapshotFor("host", {
       absentPlayerOverridden: true,
@@ -2587,20 +3197,736 @@ describe("PrivateLobbyPage", () => {
       handlers?.onLobbyEvent(
         ActiveLobbyEventSchema.parse({
           schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "presence",
+          eventSequence: 2,
+          occurredAt: NOW,
+          presence: {
+            participantId: "participant-absent",
+            generation: 4,
+            status: "absent",
+            absentSince: NOW,
+            changedAt: NOW,
+            overridden: false,
+          },
+        }),
+      ),
+    );
+
+    expect(callNext).toBeDisabled();
+    expect(screen.getByRole("heading", { name: "Host controls" })).toHaveFocus();
+  });
+
+  it("keeps focus on an enabled host action after a benign connected event", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const baseline = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      calledBalls: [1],
+      eventSequence: 1,
+      round: "active",
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    await screen.findByRole("region", { name: "Host controls" });
+    act(() => handlers?.onSnapshot(baseline));
+    const callNext = screen.getByRole("button", { name: "Call Next" });
+    await waitFor(() => expect(callNext).toBeEnabled());
+    callNext.focus();
+
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "presence",
+          eventSequence: 2,
+          occurredAt: NOW,
+          presence: {
+            participantId: "participant-host",
+            generation: 1,
+            status: "connected",
+            changedAt: NOW,
+          },
+        }),
+      ),
+    );
+
+    expect(callNext).toBeEnabled();
+    expect(callNext).toHaveFocus();
+  });
+
+  it("moves focus when realtime authority loss disables a host action", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const baseline = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      calledBalls: [1],
+      eventSequence: 1,
+      round: "active",
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    await screen.findByRole("region", { name: "Host controls" });
+    act(() => handlers?.onSnapshot(baseline));
+    const callNext = screen.getByRole("button", { name: "Call Next" });
+    await waitFor(() => expect(callNext).toBeEnabled());
+    callNext.focus();
+
+    act(() => handlers?.onConnectionState("offline"));
+
+    expect(callNext).toBeDisabled();
+    expect(screen.getByRole("heading", { name: "Host controls" })).toHaveFocus();
+  });
+
+  it("moves focus when an event gap starts authoritative resynchronization", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const requestResync = vi.fn();
+    const baseline = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      calledBalls: [1],
+      eventSequence: 1,
+      round: "active",
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync };
+        }}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    await screen.findByRole("region", { name: "Host controls" });
+    act(() => handlers?.onSnapshot(baseline));
+    const callNext = screen.getByRole("button", { name: "Call Next" });
+    await waitFor(() => expect(callNext).toBeEnabled());
+    callNext.focus();
+
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "call",
+          eventSequence: 3,
+          occurredAt: NOW,
+          call: { id: "call-3", roundId: "round-1", position: 3, ball: 17, calledAt: NOW },
+        }),
+      ),
+    );
+
+    expect(requestResync).toHaveBeenCalledWith(1);
+    expect(callNext).toBeDisabled();
+    expect(screen.getByRole("heading", { name: "Host controls" })).toHaveFocus();
+  });
+
+  it("keeps card focus during the co-winner check and moves it when settlement locks the card", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const baseline = snapshotFor("player", {
+      absentPlayerOverridden: true,
+      calledBalls: [1],
+      eventSequence: 1,
+      round: "active",
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    await screen.findByRole("region", { name: "Your card" });
+    act(() => handlers?.onSnapshot(baseline));
+    const calledCell = screen.getByRole("button", {
+      name: /B: 1 Called - mark available to mark/i,
+    });
+    calledCell.focus();
+
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
           type: "co-winner-window",
           eventSequence: 2,
           occurredAt: NOW,
           window: {
             triggeringCallId: "call-1",
             openedAt: NOW,
-            closesAt: "2026-07-18T12:00:03.000Z",
+            closesAt: "2026-07-18T12:00:02.000Z",
+          },
+        }),
+      ),
+    );
+    expect(calledCell).toHaveFocus();
+
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "co-winner-result",
+          eventSequence: 3,
+          occurredAt: "2026-07-18T12:00:02.000Z",
+          result: {
+            triggeringCallId: "call-1",
+            openedAt: NOW,
+            closesAt: "2026-07-18T12:00:02.000Z",
+            settledAt: "2026-07-18T12:00:02.000Z",
+            winnerParticipantIds: ["participant-host"],
           },
         }),
       ),
     );
 
-    expect(screen.queryByRole("button", { name: "Call Next" })).toBeNull();
-    expect(screen.getByRole("heading", { name: "Live game status" })).toHaveFocus();
+    expect(screen.getByRole("heading", { name: "One Line result confirmed" })).toHaveFocus();
+    expect(calledCell).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("moves focus from a pending mark when settlement locks the card", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const baseline = snapshotFor("player", {
+      absentPlayerOverridden: true,
+      calledBalls: [1],
+      eventSequence: 1,
+      round: "co-winner-window",
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        createMarkCommandSession={() => ({ run: () => new Promise(() => undefined) })}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    await screen.findByRole("region", { name: "Checking for co-winners" });
+    act(() => handlers?.onSnapshot(baseline));
+    const calledCell = screen.getByRole("button", {
+      name: /B: 1 Called - mark available to mark/i,
+    });
+    fireEvent.click(calledCell);
+    await screen.findByText("Marking B 1...");
+    expect(calledCell).toHaveAttribute("aria-disabled", "true");
+    calledCell.focus();
+
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "co-winner-result",
+          eventSequence: 2,
+          occurredAt: NOW,
+          result: {
+            triggeringCallId: "call-1",
+            openedAt: "2026-07-18T11:59:58.000Z",
+            closesAt: NOW,
+            settledAt: NOW,
+            winnerParticipantIds: ["participant-host"],
+          },
+        }),
+      ),
+    );
+
+    expect(screen.getByRole("heading", { name: "One Line result confirmed" })).toHaveFocus();
+  });
+
+  it("moves focus from an acknowledged mark awaiting reconciliation when settlement locks the card", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const refresh = deferred<Snapshot>();
+    const baseline = snapshotFor("player", {
+      absentPlayerOverridden: true,
+      calledBalls: [1],
+      eventSequence: 1,
+      round: "co-winner-window",
+    });
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(baseline)
+      .mockImplementationOnce(() => refresh.promise);
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        createMarkCommandSession={() => ({ run: async () => privateAck() })}
+        enableRealtime
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    await screen.findByRole("region", { name: "Checking for co-winners" });
+    act(() => handlers?.onSnapshot(baseline));
+    const calledCell = screen.getByRole("button", {
+      name: /B: 1 Called - mark available to mark/i,
+    });
+    fireEvent.click(calledCell);
+    await screen.findByText("Mark committed. Refreshing your card...");
+    expect(calledCell).toHaveAttribute("aria-disabled", "true");
+    calledCell.focus();
+
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "co-winner-result",
+          eventSequence: 2,
+          occurredAt: NOW,
+          result: {
+            triggeringCallId: "call-1",
+            openedAt: "2026-07-18T11:59:58.000Z",
+            closesAt: NOW,
+            settledAt: NOW,
+            winnerParticipantIds: ["participant-host"],
+          },
+        }),
+      ),
+    );
+
+    expect(screen.getByRole("heading", { name: "One Line result confirmed" })).toHaveFocus();
+  });
+
+  it("does not move focus from a card cell that was already unavailable before settlement", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const baseline = snapshotFor("player", {
+      absentPlayerOverridden: true,
+      calledBalls: [1],
+      eventSequence: 2,
+      round: "co-winner-window",
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    await screen.findByRole("region", { name: "Checking for co-winners" });
+    act(() => handlers?.onSnapshot(baseline));
+    const uncalledCell = screen.getByRole("button", {
+      name: /I: 16 Not called cannot be marked yet/i,
+    });
+    expect(uncalledCell).toHaveAttribute("aria-disabled", "true");
+    uncalledCell.focus();
+
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "co-winner-result",
+          eventSequence: 3,
+          occurredAt: "2026-07-18T12:00:02.000Z",
+          result: {
+            triggeringCallId: "call-1",
+            openedAt: "2026-07-18T11:59:58.000Z",
+            closesAt: NOW,
+            settledAt: NOW,
+            winnerParticipantIds: ["participant-host"],
+          },
+        }),
+      ),
+    );
+
+    expect(uncalledCell).toHaveFocus();
+  });
+
+  it("removes an unresolved mark retry when settlement locks the card", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const baseline = snapshotFor("player", {
+      absentPlayerOverridden: true,
+      calledBalls: [1],
+      eventSequence: 1,
+      round: "active",
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        createMarkCommandSession={() => ({
+          run: async () => {
+            throw new PrivateLobbyFlowError(
+              "We could not confirm the server response. Retry to safely check the same command.",
+              { ambiguous: true },
+            );
+          },
+        })}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    await screen.findByRole("region", { name: "Your card" });
+    act(() => handlers?.onSnapshot(baseline));
+    fireEvent.click(screen.getByRole("button", { name: /B: 1 Called - mark available to mark/i }));
+    const retry = await screen.findByRole("button", { name: "Retry B 1 mark" });
+    retry.focus();
+
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "co-winner-result",
+          eventSequence: 2,
+          occurredAt: NOW,
+          result: {
+            triggeringCallId: "call-1",
+            openedAt: "2026-07-18T11:59:58.000Z",
+            closesAt: NOW,
+            settledAt: NOW,
+            winnerParticipantIds: ["participant-host"],
+          },
+        }),
+      ),
+    );
+
+    expect(screen.queryByRole("button", { name: "Retry B 1 mark" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "One Line result confirmed" })).toHaveFocus();
+    expect(screen.getByRole("status", { name: "Card marking status" })).toHaveTextContent(
+      /round settled before.*mark.*confirmed/i,
+    );
+  });
+
+  it("preserves a concise live result announcement through resync and announces round end once", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const baseline = snapshotFor("waiting", {
+      calledBalls: [1],
+      eventSequence: 7,
+      round: "co-winner-window",
+    });
+    const settled = snapshotFor("waiting", {
+      calledBalls: [1],
+      continuationPatternId: "standard-two-lines",
+      eventSequence: 8,
+      round: "result",
+      winnerParticipantIds: ["participant-host", "participant-grace"],
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    await screen.findByRole("region", { name: "Checking for co-winners" });
+    act(() => handlers?.onSnapshot(baseline));
+    const outcomeAnnouncement = screen.getByRole("status", { name: "Outcome announcement" });
+    const gameAnnouncement = screen.getByRole("status", { name: "Game status announcement" });
+    const callAnnouncement = screen.getByRole("status", { name: "New call announcement" });
+
+    const result = settled.round?.stage === "result" ? settled.round.result : null;
+    if (result === null) throw new Error("Missing settled result fixture.");
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "co-winner-result",
+          eventSequence: 8,
+          occurredAt: NOW,
+          result,
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("status", { name: "Outcome announcement" })).toHaveTextContent(
+        /results confirmed.*2 participants won one line/i,
+      ),
+    );
+    expect(screen.getByRole("status", { name: "Outcome announcement" })).toBe(outcomeAnnouncement);
+    expect(screen.getByRole("status", { name: "Game status announcement" })).toBe(gameAnnouncement);
+    expect(screen.getByRole("status", { name: "New call announcement" })).toBe(callAnnouncement);
+    expect(screen.getByRole("status", { name: "Game status announcement" })).not.toHaveTextContent(
+      /results confirmed/i,
+    );
+
+    act(() => handlers?.onSnapshot(settled));
+    expect(screen.getByRole("status", { name: "Outcome announcement" })).toHaveTextContent(
+      /results confirmed.*2 participants won one line/i,
+    );
+
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "presence",
+          eventSequence: 9,
+          occurredAt: NOW,
+          presence: {
+            participantId: "participant-host",
+            generation: 1,
+            status: "connected",
+            changedAt: NOW,
+          },
+        }),
+      ),
+    );
+    expect(screen.getByRole("status", { name: "Outcome announcement" })).toHaveTextContent(
+      /results confirmed.*2 participants won one line/i,
+    );
+
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "round-end",
+          eventSequence: 10,
+          occurredAt: NOW,
+          round: {
+            id: "round-1",
+            lobbyId: "lobby-1",
+            patternId: "standard-one-line",
+            callConfiguration: { mode: "manual" },
+            stage: "ended",
+            startedAt: NOW,
+            endedAt: NOW,
+            result,
+          },
+        }),
+      ),
+    );
+    expect(screen.getByRole("status", { name: "Outcome announcement" })).toHaveTextContent(
+      /round ended.*confirmed result remains visible/i,
+    );
+  });
+
+  it("restores a settled result after reconnect without replaying its announcement", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const baseline = snapshotFor("player", {
+      calledBalls: [1],
+      eventSequence: 7,
+      round: "co-winner-window",
+    });
+    const settled = snapshotFor("player", {
+      calledBalls: [1],
+      continuationPatternId: "standard-two-lines",
+      eventSequence: 8,
+      round: "result",
+      winnerParticipantIds: ["participant-grace"],
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    await screen.findByRole("region", { name: "Checking for co-winners" });
+    act(() => handlers?.onSnapshot(baseline));
+
+    const result = settled.round?.stage === "result" ? settled.round.result : null;
+    if (result === null) throw new Error("Missing settled result fixture.");
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "co-winner-result",
+          eventSequence: 8,
+          occurredAt: NOW,
+          result,
+        }),
+      ),
+    );
+    expect(screen.getByRole("status", { name: "Outcome announcement" })).toHaveTextContent(
+      /results confirmed.*you won one line/i,
+    );
+
+    act(() => handlers?.onConnectionState("offline"));
+    act(() => handlers?.onConnectionState("reconnecting"));
+    act(() => handlers?.onSnapshot(settled));
+
+    expect(screen.getByRole("region", { name: /bingo.*you won/i })).toBeVisible();
+    expect(screen.getByRole("status", { name: "Outcome announcement" })).toBeEmptyDOMElement();
+  });
+
+  it("announces a resultless early round end without claiming a confirmed result", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const baseline = snapshotFor("player", {
+      absentPlayerOverridden: true,
+      eventSequence: 1,
+      round: "active",
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    await screen.findByRole("heading", { name: "Live game status" });
+    act(() => handlers?.onSnapshot(baseline));
+
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "round-end",
+          eventSequence: 2,
+          occurredAt: NOW,
+          round: {
+            id: "round-1",
+            lobbyId: "lobby-1",
+            patternId: "standard-one-line",
+            callConfiguration: { mode: "manual" },
+            stage: "ended",
+            startedAt: NOW,
+            endedAt: NOW,
+            result: null,
+          },
+        }),
+      ),
+    );
+
+    const announcement = screen.getByRole("status", { name: "Outcome announcement" });
+    expect(announcement).toHaveTextContent(/round ended/i);
+    expect(announcement).not.toHaveTextContent(/confirmed result remains visible/i);
+    const outcome = screen.getByRole("region", { name: "Round ended" });
+    expect(within(outcome).getByText(/ended before a winner was confirmed/i)).toBeVisible();
+    expect(screen.getByText("The round has ended.")).toBeVisible();
+    expect(screen.queryByText("The round has started.")).toBeNull();
+  });
+
+  it("clears a stale live result announcement when an HTTP refresh accepts a new result", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const baseline = snapshotFor("waiting", {
+      calledBalls: [1],
+      eventSequence: 7,
+      round: "co-winner-window",
+    });
+    const priorResult = snapshotFor("waiting", {
+      calledBalls: [1],
+      continuationPatternId: "standard-two-lines",
+      eventSequence: 8,
+      round: "result",
+      winnerParticipantIds: ["participant-host", "participant-grace"],
+    });
+    const nextResult = snapshotFor("waiting", {
+      calledBalls: [1, 16],
+      continuationPatternId: null,
+      eventSequence: 9,
+      patternId: "shape-x",
+      resultTriggeringCallPosition: 2,
+      round: "result",
+      winnerParticipantIds: ["participant-host"],
+    });
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(baseline)
+      .mockResolvedValueOnce(nextResult);
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        enableRealtime
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    await screen.findByRole("region", { name: "Checking for co-winners" });
+    act(() => handlers?.onSnapshot(baseline));
+
+    const result = priorResult.round?.stage === "result" ? priorResult.round.result : null;
+    if (result === null) throw new Error("Missing settled result fixture.");
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "co-winner-result",
+          eventSequence: 8,
+          occurredAt: NOW,
+          result,
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("status", { name: "Outcome announcement" })).toHaveTextContent(
+        /results confirmed.*2 participants won one line/i,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh lobby" }));
+    await screen.findByRole("region", { name: "Round complete" });
+
+    expect(loadSnapshot).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("status", { name: "Outcome announcement" })).not.toHaveTextContent(
+      /results confirmed/i,
+    );
   });
 
   it("keeps an ambiguous start available only as a same-command retry", async () => {
@@ -2635,6 +3961,115 @@ describe("PrivateLobbyPage", () => {
     fireEvent.click(retry);
     expect(createCommandSession).toHaveBeenCalledOnce();
     expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("restores focus when a successful command retry cannot refresh", async () => {
+    const run = vi
+      .fn<() => Promise<ReturnType<typeof activeLobbyAck>>>()
+      .mockRejectedValueOnce(
+        new PrivateLobbyFlowError(
+          "We could not confirm the server response. Retry to safely check the same command.",
+          { ambiguous: true },
+        ),
+      )
+      .mockResolvedValueOnce(activeLobbyAck(2));
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          eventSequence: 1,
+          round: "active",
+        }),
+      )
+      .mockRejectedValueOnce(new Error("Snapshot unavailable."));
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createCommandSession={() => ({ run })}
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Pause calling" }));
+    const retry = await screen.findByRole("button", { name: "Retry Pause calling" });
+    retry.focus();
+    fireEvent.click(retry);
+
+    await screen.findByText(/command committed.*could not confirm.*latest lobby state/i);
+    expect(screen.queryByRole("button", { name: "Retry Pause calling" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Host controls" })).toHaveFocus();
+  });
+
+  it("restores focus when a command retry receives a definitive error", async () => {
+    const run = vi
+      .fn<() => Promise<ReturnType<typeof activeLobbyAck>>>()
+      .mockRejectedValueOnce(
+        new PrivateLobbyFlowError(
+          "We could not confirm the server response. Retry to safely check the same command.",
+          { ambiguous: true },
+        ),
+      )
+      .mockRejectedValueOnce(
+        new PrivateLobbyFlowError("The command is no longer allowed.", { retryable: false }),
+      );
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createCommandSession={() => ({ run })}
+        loadSnapshot={async () =>
+          snapshotFor("host", { absentPlayerOverridden: true, round: "active" })
+        }
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Pause calling" }));
+    const retry = await screen.findByRole("button", { name: "Retry Pause calling" });
+    retry.focus();
+    fireEvent.click(retry);
+
+    await screen.findByText("The command is no longer allowed.");
+    expect(screen.queryByRole("button", { name: "Retry Pause calling" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Host controls" })).toHaveFocus();
+  });
+
+  it("restores setup focus when a start retry receives a definitive error", async () => {
+    const run = vi
+      .fn<() => Promise<ReturnType<typeof activeLobbyAck>>>()
+      .mockRejectedValueOnce(
+        new PrivateLobbyFlowError(
+          "We could not confirm the server response. Retry to safely check the same command.",
+          { ambiguous: true },
+        ),
+      )
+      .mockRejectedValueOnce(
+        new PrivateLobbyFlowError("The round can no longer start.", { retryable: false }),
+      );
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createCommandSession={() => ({ run })}
+        loadSnapshot={async () => snapshotFor("host", { absentPlayerOverridden: true })}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Start round" }));
+    const retry = await screen.findByRole("button", { name: "Retry Start round" });
+    retry.focus();
+    fireEvent.click(retry);
+
+    await screen.findByText("The round can no longer start.");
+    expect(screen.queryByRole("button", { name: "Retry Start round" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Lobby setup" })).toHaveFocus();
   });
 
   it("requires confirmation before ending a round and restores focus after cancellation", async () => {
@@ -2722,7 +4157,7 @@ describe("PrivateLobbyPage", () => {
     expect(screen.getByRole("status", { name: "Host command status" })).toHaveTextContent(
       "Round ended.",
     );
-    expect(screen.getByRole("heading", { name: "Live game status" })).toHaveFocus();
+    expect(screen.getByRole("heading", { name: "Round ended" })).toHaveFocus();
   });
 
   it("submits the current player absence generation and never the host absence", async () => {

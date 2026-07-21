@@ -126,6 +126,72 @@ function ballLabel(ball: number): string {
   return `${["B", "I", "N", "G", "O"][Math.floor((ball - 1) / 15)]} ${ball}`;
 }
 
+function namesAsSentence(names: readonly string[]): string {
+  if (names.length < 2) return names[0] ?? "The confirmed winner";
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")}, and ${names.at(-1)}`;
+}
+
+function coWinnerDurationLabel(openedAt: string, closesAt: string): string {
+  const durationMs = Date.parse(closesAt) - Date.parse(openedAt);
+  if (durationMs < 1_000) return `${durationMs}-millisecond`;
+  const seconds = durationMs / 1_000;
+  return `${Number.isInteger(seconds) ? seconds : seconds.toFixed(3).replace(/0+$/, "")}-second`;
+}
+
+function outcomeIdentityFor(snapshot: Snapshot): string | null {
+  const round = snapshot.round;
+  if (round?.stage === "co-winner-window") {
+    return [
+      "window",
+      round.id,
+      round.patternId,
+      round.window.triggeringCallId,
+      round.window.openedAt,
+      round.window.closesAt,
+    ].join(":");
+  }
+  if (round?.stage !== "result" && round?.stage !== "ended") return null;
+  const result = round.result;
+  if (round.stage === "ended" && result === null) {
+    return ["ended", round.id, round.patternId, round.endedAt, "no-result"].join(":");
+  }
+  if (result === null) return null;
+  return [
+    round.stage,
+    round.id,
+    round.patternId,
+    result.triggeringCallId,
+    result.openedAt,
+    result.closesAt,
+    result.settledAt,
+    ...result.winnerParticipantIds,
+  ].join(":");
+}
+
+function resultAnnouncementFor(snapshot: Snapshot): string | null {
+  const result =
+    snapshot.round?.stage === "result"
+      ? snapshot.round.result
+      : snapshot.round?.stage === "ended"
+        ? snapshot.round.result
+        : null;
+  if (result === null) return null;
+  const patternName =
+    patternCatalog.find(({ id }) => id === snapshot.round?.patternId)?.name ?? "the pattern";
+  const winners = result.winnerParticipantIds.flatMap((participantId) => {
+    const participant = snapshot.participants.find(({ id }) => id === participantId);
+    return participant === undefined ? [] : [participant];
+  });
+  if (winners.some(({ id }) => id === snapshot.self.id)) {
+    if (winners.length === 1) return `Results confirmed. You won ${patternName}.`;
+    return `Results confirmed. You and ${winners.length - 1} other ${winners.length === 2 ? "participant" : "participants"} won ${patternName}.`;
+  }
+  return winners.length === 1
+    ? `Results confirmed. ${winners[0]?.username ?? "One participant"} won ${patternName}.`
+    : `Results confirmed. ${winners.length} participants won ${patternName}.`;
+}
+
 function pauseDescription(reason: "host-command" | "host-absent" | "participant-absent"): string {
   switch (reason) {
     case "host-command":
@@ -461,9 +527,15 @@ export function PrivateLobbyPage({
   const liveConnectionRef = useRef<PrivateLobbyRealtimeConnection | null>(null);
   const resyncRequestedRef = useRef(false);
   const recoveringRef = useRef(false);
+  const connectionStateRef = useRef<PrivateLobbyConnectionState>("snapshot-syncing");
+  const outcomeAnnouncementIdentityRef = useRef<string | null>(null);
   const callHistoryRef = useRef<HTMLOListElement>(null);
   const followCallHistoryRef = useRef(true);
   const liveGameHeadingRef = useRef<HTMLHeadingElement>(null);
+  const outcomeHeadingRef = useRef<HTMLHeadingElement>(null);
+  const setupHeadingRef = useRef<HTMLHeadingElement>(null);
+  const hostControlsRef = useRef<HTMLElement>(null);
+  const cardPanelRef = useRef<HTMLElement>(null);
   const hostControlsHeadingRef = useRef<HTMLHeadingElement>(null);
   const callNextButtonRef = useRef<HTMLButtonElement>(null);
   const endRoundButtonRef = useRef<HTMLButtonElement>(null);
@@ -493,10 +565,11 @@ export function PrivateLobbyPage({
   const [connectionState, setConnectionState] =
     useState<PrivateLobbyConnectionState>("snapshot-syncing");
   const [callAnnouncement, setCallAnnouncement] = useState("");
+  const [outcomeAnnouncement, setOutcomeAnnouncement] = useState("");
   const [endConfirmationOpen, setEndConfirmationOpen] = useState(false);
   const [restoreEndRoundFocus, setRestoreEndRoundFocus] = useState(false);
   const [commandFocusTarget, setCommandFocusTarget] = useState<
-    "host-controls" | "live-game" | null
+    "host-controls" | "live-game" | "outcome" | "setup" | null
   >(null);
   const [clockNow, setClockNow] = useState(() => Date.now());
 
@@ -505,21 +578,147 @@ export function PrivateLobbyPage({
     setSetupDirty(dirty);
   }
 
-  function reconcilePendingState(next: Snapshot): PendingCommandReconciliation | null {
+  function transitionConnectionState(state: PrivateLobbyConnectionState) {
+    const wasReady =
+      connectionStateRef.current === "connected" || connectionStateRef.current === "recovered";
+    const isReady = state === "connected" || state === "recovered";
+    const activeElement = document.activeElement;
     if (
-      callNextButtonRef.current !== null &&
-      document.activeElement === callNextButtonRef.current &&
-      (next.round?.stage !== "active" || next.calls.length >= 75)
+      wasReady &&
+      !isReady &&
+      hostControlsRef.current !== null &&
+      activeElement !== null &&
+      hostControlsRef.current.contains(activeElement)
     ) {
+      setCommandFocusTarget("host-controls");
+    }
+    connectionStateRef.current = state;
+    setConnectionState(state);
+  }
+
+  function reconcileOutcomeAnnouncement(next: Snapshot, clear = false) {
+    if (clear || outcomeIdentityFor(next) !== outcomeAnnouncementIdentityRef.current) {
+      outcomeAnnouncementIdentityRef.current = null;
+      setOutcomeAnnouncement("");
+    }
+  }
+
+  function reconcilePendingState(
+    next: Snapshot,
+    previous: Snapshot | null,
+  ): PendingCommandReconciliation | null {
+    const activeElement = document.activeElement;
+    const hostControlsHadFocus =
+      hostControlsRef.current !== null &&
+      activeElement !== null &&
+      hostControlsRef.current.contains(activeElement);
+    const cardHadFocus =
+      cardPanelRef.current !== null &&
+      activeElement !== null &&
+      cardPanelRef.current.contains(activeElement);
+    const focusedHostAction =
+      activeElement instanceof HTMLElement ? activeElement.dataset["hostAction"] : undefined;
+    const nextHostAuthorityUnavailable =
+      next.self.presence.status !== "connected" ||
+      (enableRealtime &&
+        connectionStateRef.current !== "connected" &&
+        connectionStateRef.current !== "recovered");
+    const nextBlockingAbsentPlayer = next.participants.some(
+      (participant) =>
+        participant.role === "player" &&
+        participant.roundEligibility === "playing" &&
+        participant.presence.status === "absent" &&
+        !participant.presence.overridden,
+    );
+    const focusedHostActionUnavailable = (() => {
+      if (focusedHostAction === undefined) return false;
+      if (nextHostAuthorityUnavailable) return true;
+      switch (focusedHostAction) {
+        case "pause-round":
+          return next.round?.stage !== "active";
+        case "resume-round":
+          return next.round?.stage !== "paused" || nextBlockingAbsentPlayer;
+        case "call-next":
+          return (
+            next.round?.stage !== "active" || next.calls.length >= 75 || nextBlockingAbsentPlayer
+          );
+        case "continue-round":
+          return (
+            next.round?.stage !== "result" ||
+            next.round.continuationPatternId !== activeElement?.getAttribute("data-pattern-id") ||
+            nextBlockingAbsentPlayer
+          );
+        case "end-round":
+          return (
+            next.round?.stage !== "active" &&
+            next.round?.stage !== "paused" &&
+            next.round?.stage !== "result"
+          );
+        case "override-absence": {
+          const participant = next.participants.find(
+            ({ id }) => id === activeElement?.getAttribute("data-participant-id"),
+          );
+          return !(
+            participant?.role === "player" &&
+            participant.roundEligibility === "playing" &&
+            participant.presence.status === "absent" &&
+            !participant.presence.overridden &&
+            String(participant.presence.generation) ===
+              activeElement?.getAttribute("data-presence-generation")
+          );
+        }
+        default:
+          return false;
+      }
+    })();
+    const roundStageChanged =
+      previous?.round?.id !== next.round?.id || previous?.round?.stage !== next.round?.stage;
+    const focusedCardIndex =
+      cardHadFocus && activeElement instanceof HTMLButtonElement
+        ? Array.from(
+            cardPanelRef.current?.querySelectorAll<HTMLButtonElement>(".bingo-card-cell") ?? [],
+          ).indexOf(activeElement)
+        : -1;
+    const focusedCardBall = previous?.ownCard?.cells[focusedCardIndex];
+    const acknowledgedMark = pendingMarkRef.current;
+    const focusedCardHasPendingMark =
+      typeof focusedCardBall === "number" &&
+      (markCommandSessionRef.current?.ball === focusedCardBall ||
+        (acknowledgedMark !== null &&
+          acknowledgedMark.cardId === previous?.ownCard?.id &&
+          acknowledgedMark.ball === focusedCardBall));
+    const focusedCardControlWasAvailable =
+      cardHadFocus &&
+      activeElement instanceof HTMLButtonElement &&
+      ((!activeElement.disabled && activeElement.getAttribute("aria-disabled") !== "true") ||
+        focusedCardHasPendingMark);
+    const cardBecameUnavailable =
+      focusedCardControlWasAvailable &&
+      previous?.round !== null &&
+      previous?.round?.stage !== "waiting" &&
+      previous?.round?.stage !== "result" &&
+      previous?.round?.stage !== "ended" &&
+      (next.round?.stage === "waiting" ||
+        next.round?.stage === "result" ||
+        next.round?.stage === "ended");
+    if (cardBecameUnavailable) {
       setCommandFocusTarget(
-        next.round?.stage === "active" ||
-          next.round?.stage === "paused" ||
-          next.round?.stage === "result"
-          ? "host-controls"
-          : "live-game",
+        next.round?.stage === "result" || next.round?.stage === "ended" ? "outcome" : "live-game",
+      );
+    } else if (hostControlsHadFocus && (roundStageChanged || focusedHostActionUnavailable)) {
+      setCommandFocusTarget(
+        (focusedHostAction === "continue-round" && next.round?.stage === "result") ||
+          next.round?.stage === "co-winner-window" ||
+          next.round?.stage === "result" ||
+          next.round?.stage === "ended"
+          ? "outcome"
+          : next.round?.stage === "active" || next.round?.stage === "paused"
+            ? "host-controls"
+            : "live-game",
       );
     }
     const retainedCommand = commandSessionRef.current;
+    const focusedCommandRetry = focusedHostAction === "retry-command";
     if (!commandPendingRef.current && retainedCommand !== null) {
       if (retainedCommand.command.type === "override-absence") {
         const state = absenceOverrideState(next, retainedCommand.command);
@@ -540,6 +739,17 @@ export function PrivateLobbyPage({
         );
       }
     }
+    if (focusedCommandRetry && commandSessionRef.current === null) {
+      setCommandFocusTarget(
+        next.round?.stage === "co-winner-window" ||
+          next.round?.stage === "result" ||
+          next.round?.stage === "ended"
+          ? "outcome"
+          : next.round?.stage === "active" || next.round?.stage === "paused"
+            ? "host-controls"
+            : "live-game",
+      );
+    }
     const pending = pendingCommandRef.current;
     const confirmedCommand =
       pending !== null && snapshotConfirmsCommand(next, pending) ? pending : null;
@@ -552,12 +762,13 @@ export function PrivateLobbyPage({
           : commandSuccessMessage(confirmedCommand.command),
       );
       if (confirmedCommand.command.type === "end-round") {
-        setCommandFocusTarget("live-game");
+        setCommandFocusTarget(next.round?.stage === "ended" ? "outcome" : "live-game");
+      } else if (confirmedCommand.command.type === "continue-round") {
+        setCommandFocusTarget(next.round?.stage === "result" ? "outcome" : "host-controls");
       } else if (
         confirmedCommand.command.type === "start-round" ||
         confirmedCommand.command.type === "pause-round" ||
         confirmedCommand.command.type === "resume-round" ||
-        confirmedCommand.command.type === "continue-round" ||
         confirmedCommand.command.type === "override-absence"
       ) {
         setCommandFocusTarget("host-controls");
@@ -566,11 +777,11 @@ export function PrivateLobbyPage({
         (next.round?.stage !== "active" || next.calls.length >= 75)
       ) {
         setCommandFocusTarget(
-          next.round?.stage === "active" ||
-            next.round?.stage === "paused" ||
-            next.round?.stage === "result"
-            ? "host-controls"
-            : "live-game",
+          next.round?.stage === "co-winner-window" || next.round?.stage === "result"
+            ? "outcome"
+            : next.round?.stage === "active" || next.round?.stage === "paused"
+              ? "host-controls"
+              : "live-game",
         );
       }
     }
@@ -601,6 +812,28 @@ export function PrivateLobbyPage({
         setMarkPendingBall(null);
         setMarkMessage(`${cardBallLabel(next, pendingMark.ball)} marked.`);
       }
+    }
+    const marksUnavailable =
+      next.round === null ||
+      next.round.stage === "waiting" ||
+      next.round.stage === "result" ||
+      next.round.stage === "ended";
+    if (
+      marksUnavailable &&
+      (markCommandSessionRef.current !== null ||
+        pendingMarkRef.current !== null ||
+        unresolvedMarkRef.current !== null)
+    ) {
+      markCommandSessionRef.current = null;
+      pendingMarkRef.current = null;
+      unresolvedMarkRef.current = null;
+      setUnresolvedMark(null);
+      setMarkPendingBall(null);
+      setMarkMessage(
+        next.round?.stage === "result" || next.round?.stage === "ended"
+          ? "The round settled before the prior mark could be confirmed."
+          : "The round changed before the prior mark could be confirmed.",
+      );
     }
     return confirmedCommand;
   }
@@ -634,7 +867,8 @@ export function PrivateLobbyPage({
           snapshotRef.current = next;
           setSnapshot(next);
         }
-        const confirmedCommand = reconcilePendingState(next);
+        reconcileOutcomeAnnouncement(next);
+        const confirmedCommand = reconcilePendingState(next, liveSnapshot);
         if (
           options.syncSetup === true ||
           snapshot === null ||
@@ -714,11 +948,13 @@ export function PrivateLobbyPage({
     const requestResync = (lastEventSequence: number | null) => {
       if (resyncRequestedRef.current) return;
       resyncRequestedRef.current = true;
-      setConnectionState("snapshot-syncing");
+      transitionConnectionState("snapshot-syncing");
       liveConnectionRef.current?.requestResync(lastEventSequence);
     };
     const handlers: PrivateLobbyRealtimeHandlers = {
       onConnectionState(state) {
+        outcomeAnnouncementIdentityRef.current = null;
+        setOutcomeAnnouncement("");
         if (state === "offline" || state === "reconnecting") recoveringRef.current = true;
         if (state === "expired") {
           snapshotRef.current = null;
@@ -729,7 +965,7 @@ export function PrivateLobbyPage({
             "Your private lobby session is not active on this device. Join or rejoin to continue.",
           );
         }
-        setConnectionState(state);
+        transitionConnectionState(state);
       },
       onLobbyEvent(event) {
         const current = snapshotRef.current;
@@ -747,11 +983,29 @@ export function PrivateLobbyPage({
         }
         snapshotRef.current = next;
         setSnapshot(next);
-        reconcilePendingState(next);
+        reconcilePendingState(next, current);
         const requiresAutomaticTimer =
           next.round?.stage === "active" && next.round.callConfiguration.mode === "automatic";
         if (event.type === "call") {
           setCallAnnouncement(`New call: ${ballLabel(event.call.ball)}`);
+        }
+        if (event.type === "co-winner-window") {
+          outcomeAnnouncementIdentityRef.current = outcomeIdentityFor(next);
+          setOutcomeAnnouncement(
+            `Checking for co-winners during the full ${coWinnerDurationLabel(event.window.openedAt, event.window.closesAt)} window.`,
+          );
+        } else if (event.type === "round-end") {
+          outcomeAnnouncementIdentityRef.current = outcomeIdentityFor(next);
+          setOutcomeAnnouncement(
+            event.round.result === null
+              ? "Round ended."
+              : "Round ended. The confirmed result remains visible.",
+          );
+        } else if (event.type === "co-winner-result" || event.type === "stage") {
+          outcomeAnnouncementIdentityRef.current = outcomeIdentityFor(next);
+          setOutcomeAnnouncement(resultAnnouncementFor(next) ?? "");
+        } else {
+          reconcileOutcomeAnnouncement(next);
         }
         if (requiresAutomaticTimer && (event.type === "call" || event.type === "stage")) {
           requestResync(event.eventSequence);
@@ -785,7 +1039,7 @@ export function PrivateLobbyPage({
         }
         snapshotRef.current = next;
         setSnapshot(next);
-        reconcilePendingState(next);
+        reconcilePendingState(next, current);
       },
       onSnapshot(next) {
         const current = snapshotRef.current;
@@ -803,7 +1057,7 @@ export function PrivateLobbyPage({
         snapshotRef.current = accepted;
         resyncRequestedRef.current = false;
         setSnapshot(accepted);
-        const confirmedCommand = reconcilePendingState(accepted);
+        const confirmedCommand = reconcilePendingState(accepted, current);
         if (confirmedCommand?.command.type === "configure") {
           setPatternId(accepted.round?.patternId ?? "");
           setCallMode(accepted.round?.callConfiguration.mode ?? "manual");
@@ -815,8 +1069,10 @@ export function PrivateLobbyPage({
           setSetupDraftDirty(false);
         }
         if (recovering || roundChanged) setCallAnnouncement("");
+        reconcileOutcomeAnnouncement(accepted, recovering || roundChanged);
         if (roundChanged) followCallHistoryRef.current = true;
-        setConnectionState(recovering ? "recovered" : "connected");
+        const readyState = recovering ? "recovered" : "connected";
+        transitionConnectionState(readyState);
         recoveringRef.current = false;
       },
     };
@@ -879,7 +1135,13 @@ export function PrivateLobbyPage({
     ) {
       endConfirmationRoundIdRef.current = null;
       setEndConfirmationOpen(false);
-      setCommandFocusTarget("live-game");
+      setCommandFocusTarget(
+        snapshot?.round?.stage === "co-winner-window" ||
+          snapshot?.round?.stage === "result" ||
+          snapshot?.round?.stage === "ended"
+          ? "outcome"
+          : "live-game",
+      );
     }
   }, [endConfirmationOpen, snapshot?.round?.id, snapshot?.round?.stage]);
 
@@ -895,7 +1157,11 @@ export function PrivateLobbyPage({
     const target =
       commandFocusTarget === "host-controls"
         ? hostControlsHeadingRef.current
-        : liveGameHeadingRef.current;
+        : commandFocusTarget === "outcome"
+          ? outcomeHeadingRef.current
+          : commandFocusTarget === "setup"
+            ? setupHeadingRef.current
+            : liveGameHeadingRef.current;
     target?.focus();
     setCommandFocusTarget(null);
   }, [commandFocusTarget, snapshot?.round?.stage]);
@@ -931,6 +1197,9 @@ export function PrivateLobbyPage({
     pendingMessage = commandPendingMessage(command),
   ) {
     if (commandPendingRef.current) return;
+    const commandRetryHadFocus =
+      document.activeElement instanceof HTMLElement &&
+      document.activeElement.dataset["hostAction"] === "retry-command";
     const key = JSON.stringify(command);
     const retainedCommand = commandSessionRef.current;
     if (
@@ -979,6 +1248,20 @@ export function PrivateLobbyPage({
       acknowledgement = await session.runner.run();
       commandSessionRef.current = null;
       setUnresolvedCommand(null);
+      if (commandRetryHadFocus) {
+        const currentStage = snapshotRef.current?.round?.stage;
+        setCommandFocusTarget(
+          command.type === "start-round" && currentStage === "waiting"
+            ? "setup"
+            : currentStage === "co-winner-window" ||
+                currentStage === "result" ||
+                currentStage === "ended"
+              ? "outcome"
+              : currentStage === "active" || currentStage === "paused"
+                ? "host-controls"
+                : "live-game",
+        );
+      }
     } catch (error) {
       const flowError =
         error instanceof PrivateLobbyFlowError
@@ -1015,6 +1298,20 @@ export function PrivateLobbyPage({
       } else {
         commandSessionRef.current = null;
         setUnresolvedCommand(null);
+      }
+      if (commandRetryHadFocus && commandSessionRef.current === null) {
+        const currentStage = snapshotRef.current?.round?.stage;
+        setCommandFocusTarget(
+          command.type === "start-round" && currentStage === "waiting"
+            ? "setup"
+            : currentStage === "co-winner-window" ||
+                currentStage === "result" ||
+                currentStage === "ended"
+              ? "outcome"
+              : currentStage === "active" || currentStage === "paused"
+                ? "host-controls"
+                : "live-game",
+        );
       }
       setCommandMessage(resultMessage);
       commandPendingRef.current = false;
@@ -1258,6 +1555,15 @@ export function PrivateLobbyPage({
       !participant.presence.overridden,
   );
   const roundStage = snapshot.round?.stage;
+  const endedWithoutResult = snapshot.round?.stage === "ended" && snapshot.round.result === null;
+  const settledResult =
+    snapshot.round?.stage === "result"
+      ? snapshot.round.result
+      : snapshot.round?.stage === "ended"
+        ? snapshot.round.result
+        : null;
+  const hasOutcome =
+    roundStage === "co-winner-window" || settledResult !== null || endedWithoutResult;
   const showHostControls =
     snapshot.self.role === "host" &&
     (roundStage === "active" ||
@@ -1277,6 +1583,57 @@ export function PrivateLobbyPage({
       ? null
       : (patternCatalog.find(({ id }) => id === continuationPatternId)?.name ??
         continuationPatternId);
+  const resultPatternName =
+    patternCatalog.find(({ id }) => id === snapshot.round?.patternId)?.name ??
+    patternName ??
+    "this pattern";
+  const winners =
+    settledResult?.winnerParticipantIds.flatMap((participantId) => {
+      const participant = snapshot.participants.find(({ id }) => id === participantId);
+      return participant === undefined ? [] : [participant];
+    }) ?? [];
+  const winnerNames = winners.map(({ username }) => username);
+  const winnerNamesSentence = namesAsSentence(winnerNames);
+  const selfWon = winners.some(({ id }) => id === snapshot.self.id);
+  const hasContinuation = typeof continuationPatternId === "string";
+  const nextStepPending = continuationPatternId === undefined;
+  const resultSummary = endedWithoutResult
+    ? "This round ended before a winner was confirmed."
+    : selfWon
+      ? `${resultPatternName} is complete. Congratulations, ${snapshot.self.username}.`
+      : hasContinuation
+        ? `${winnerNamesSentence} completed ${resultPatternName}. The round can continue.`
+        : nextStepPending
+          ? `${winnerNamesSentence} completed ${resultPatternName}.`
+          : snapshot.self.roundEligibility === "waiting"
+            ? `${winnerNamesSentence} won ${resultPatternName}. Thanks for joining the lobby; you were waiting for the next round.`
+            : `${winnerNamesSentence} won ${resultPatternName}. Thanks for playing.`;
+  const resultHeading = endedWithoutResult
+    ? "Round ended"
+    : selfWon
+      ? "Bingo - you won!"
+      : hasContinuation
+        ? `${resultPatternName} complete`
+        : nextStepPending
+          ? `${resultPatternName} result confirmed`
+          : "Round complete";
+  const coWinnerDuration =
+    snapshot.round?.stage === "co-winner-window"
+      ? coWinnerDurationLabel(snapshot.round.window.openedAt, snapshot.round.window.closesAt)
+      : null;
+  const resultNextStep = endedWithoutResult
+    ? "No winner was confirmed. This lobby does not provide previous-round browsing."
+    : snapshot.round?.stage === "ended"
+      ? "This round has ended. The confirmed result remains visible to everyone in the lobby."
+      : continuationPatternId === undefined
+        ? "Waiting for the server to confirm the available next step."
+        : continuationPatternName === null
+          ? snapshot.self.role === "host"
+            ? "Choose End round in Host controls when everyone is ready."
+            : "The host can end the round when everyone is ready."
+          : snapshot.self.role === "host"
+            ? `Choose Continue to ${continuationPatternName} or End round in Host controls.`
+            : `The host can continue to ${continuationPatternName} or end the round.`;
   const hostControlGuidance = realtimeAuthorityUncertain
     ? "Host actions become available after the realtime snapshot is synchronized."
     : !selfConnected
@@ -1286,9 +1643,11 @@ export function PrivateLobbyPage({
         : roundStage === "paused"
           ? "Calling is paused. Resume calling when everyone is ready, or end the round."
           : roundStage === "result"
-            ? continuationPatternName === null
-              ? "The result is settled. End this terminal round when everyone is ready."
-              : `The result is settled. Continue to ${continuationPatternName} or end the round.`
+            ? continuationPatternId === undefined
+              ? "The result is settled. Waiting for the server to confirm the available next step."
+              : continuationPatternName === null
+                ? "The result is settled. End this terminal round when everyone is ready."
+                : `The result is settled. Continue to ${continuationPatternName} or end the round.`
             : snapshot.round?.callConfiguration.mode === "automatic"
               ? `Automatic calling is set to every ${snapshot.round.callConfiguration.intervalSeconds} seconds. Call Next is also safe to use while no command is pending.`
               : "Manual mode only advances when you choose Call Next.";
@@ -1296,21 +1655,33 @@ export function PrivateLobbyPage({
   const waitingMessage =
     snapshot.round === null
       ? "The host is preparing the first round."
-      : snapshot.self.roundEligibility === "waiting"
-        ? "You are queued for the next round and will not play in the pending round."
-        : snapshot.round.stage === "waiting"
-          ? "Waiting for the host to start the round."
-          : "The round has started.";
+      : snapshot.round.stage === "ended"
+        ? "The round has ended."
+        : snapshot.self.roundEligibility === "waiting"
+          ? snapshot.round.stage === "result"
+            ? "This round is complete. Wait for the host to end it before the next round."
+            : "You are queued for the next round and will not play in the pending round."
+          : snapshot.round.stage === "waiting"
+            ? "Waiting for the host to start the round."
+            : "The round has started.";
   const cardUnavailableReason =
-    unresolvedMark !== null && snapshot.ownCard?.id === unresolvedMark.cardId
-      ? `the ${cardBallLabel(snapshot, unresolvedMark.ball)} mark needs confirmation`
-      : snapshot.round === null || snapshot.round.stage === "waiting"
-        ? "the round has not started"
-        : snapshot.round.stage === "result"
-          ? "the round result is being shown"
-          : snapshot.round.stage === "ended"
-            ? "the round has ended"
+    snapshot.round === null || snapshot.round.stage === "waiting"
+      ? "the round has not started"
+      : snapshot.round.stage === "result"
+        ? "the round result is being shown"
+        : snapshot.round.stage === "ended"
+          ? "the round has ended"
+          : unresolvedMark !== null && snapshot.ownCard?.id === unresolvedMark.cardId
+            ? `the ${cardBallLabel(snapshot, unresolvedMark.ball)} mark needs confirmation`
             : undefined;
+  const marksAvailable =
+    snapshot.round?.stage === "active" ||
+    snapshot.round?.stage === "paused" ||
+    snapshot.round?.stage === "co-winner-window";
+  const missingCardMessage =
+    snapshot.round?.stage === "result" || snapshot.round?.stage === "ended"
+      ? "You did not have a card in this round."
+      : "Your card is unavailable while you wait for the next round.";
   const calledBalls = new Set(snapshot.calls.map((call) => call.ball));
   const markedBalls = new Set(snapshot.ownMarks.map((mark) => mark.ball));
   const cardCells: BingoCardCell[] =
@@ -1343,8 +1714,6 @@ export function PrivateLobbyPage({
       : connectionState.charAt(0).toUpperCase() + connectionState.slice(1);
   const pauseAnnouncement =
     snapshot.round?.stage === "paused" ? pauseDescription(snapshot.round.pauseReason) : null;
-  const coWinnerAnnouncement =
-    snapshot.round?.stage === "co-winner-window" ? "Co-winner window open." : null;
   const graceAnnouncement = snapshot.participants.some(
     ({ presence }) => presence.status === "grace",
   )
@@ -1353,11 +1722,136 @@ export function PrivateLobbyPage({
   const gameStatusAnnouncement = [
     enableRealtime ? connectionLabel : null,
     pauseAnnouncement,
-    coWinnerAnnouncement,
     graceAnnouncement,
   ]
-    .filter((message) => message !== null)
+    .filter((message) => message !== null && message.length > 0)
     .join(" ");
+  const liveGamePanel = (
+    <section
+      aria-labelledby="live-game-heading"
+      className="lobby-panel live-game-panel"
+      key="live-game"
+      role="region"
+    >
+      <div className="live-game-heading">
+        <div>
+          <p className="eyebrow">On the board</p>
+          <h2
+            className="section-focus-target"
+            id="live-game-heading"
+            ref={liveGameHeadingRef}
+            tabIndex={-1}
+          >
+            Live game status
+          </h2>
+        </div>
+        {enableRealtime ? (
+          <strong className="connection-state" data-state={connectionState}>
+            {connectionLabel}
+          </strong>
+        ) : null}
+      </div>
+      <div className="live-game-summary">
+        <div className="current-call">
+          <span>Current call</span>
+          <strong>{latestCall === undefined ? "Waiting" : ballLabel(latestCall.ball)}</strong>
+        </div>
+        <div className="call-mode-status">
+          <strong>{snapshot.round === null ? "Round not configured" : callDescription}</strong>
+          {automaticCountdown === null ? null : (
+            <span>
+              {automaticCountdown === 0
+                ? "Waiting for the server to commit the next call."
+                : `Next call in ${automaticCountdown} ${automaticCountdown === 1 ? "second" : "seconds"}`}
+            </span>
+          )}
+        </div>
+      </div>
+      {snapshot.round?.stage === "paused" ? (
+        <div className="round-alert">
+          <strong>{pauseDescription(snapshot.round.pauseReason)}</strong>
+          <span>Reconnecting does not resume calling. The host must resume explicitly.</span>
+        </div>
+      ) : null}
+      {snapshot.round?.stage === "co-winner-window" ? (
+        <div className="round-alert">
+          <strong>Winner confirmation in progress</strong>
+          <span>
+            The complete winner set will appear only after the server confirms the result.
+          </span>
+        </div>
+      ) : null}
+      {snapshot.participants.some(({ presence }) => presence.status === "grace") ? (
+        <p className="grace-status">A participant is in the reconnect grace period.</p>
+      ) : null}
+    </section>
+  );
+  const statusAnnouncements = (
+    <div className="status-announcements">
+      <p
+        aria-atomic="true"
+        aria-label="Game status announcement"
+        aria-live="polite"
+        className="call-announcement"
+        role="status"
+      >
+        {gameStatusAnnouncement}
+      </p>
+      <p
+        aria-atomic="true"
+        aria-label="Outcome announcement"
+        aria-live="polite"
+        className="call-announcement"
+        role="status"
+      >
+        {outcomeAnnouncement}
+      </p>
+      <p
+        aria-atomic="true"
+        aria-label="New call announcement"
+        aria-live="polite"
+        className="call-announcement"
+        role="status"
+      >
+        {callAnnouncement}
+      </p>
+    </div>
+  );
+  const cardPanel = (
+    <section
+      aria-labelledby="card-heading"
+      className={
+        roundStage === "co-winner-window"
+          ? "lobby-panel card-panel co-winner-card-panel"
+          : "lobby-panel card-panel"
+      }
+      key="card"
+      ref={cardPanelRef}
+    >
+      <p className="eyebrow">Your numbers</p>
+      <h2 id="card-heading">Your card</h2>
+      {snapshot.ownCard === null ? (
+        <p className="waiting-note">{missingCardMessage}</p>
+      ) : (
+        <BingoCard
+          cells={cardCells}
+          onMark={(ball) => void markCard(ball)}
+          pendingBall={markPendingBall}
+          statusMessage={markMessage}
+          {...(cardUnavailableReason === undefined
+            ? {}
+            : { unavailableReason: cardUnavailableReason })}
+        />
+      )}
+      {marksAvailable &&
+      unresolvedMark !== null &&
+      snapshot.ownCard?.id === unresolvedMark.cardId ? (
+        <Button onClick={() => void markCard(unresolvedMark.ball)} type="button" variant="outline">
+          Retry {cardBallLabel(snapshot, unresolvedMark.ball)} mark
+        </Button>
+      ) : null}
+    </section>
+  );
 
   return (
     <main aria-busy={snapshotPending} className="private-lobby-shell">
@@ -1395,116 +1889,93 @@ export function PrivateLobbyPage({
           {commandMessage}
         </p>
       ) : null}
+      {statusAnnouncements}
 
       <div className="private-lobby-grid">
-        <section
-          aria-labelledby="live-game-heading"
-          className="lobby-panel live-game-panel"
-          role="region"
-        >
-          <div className="live-game-heading">
-            <div>
-              <p className="eyebrow">On the board</p>
-              <h2
-                className="section-focus-target"
-                id="live-game-heading"
-                ref={liveGameHeadingRef}
-                tabIndex={-1}
-              >
-                Live game status
-              </h2>
-            </div>
-            {enableRealtime ? (
-              <strong className="connection-state" data-state={connectionState}>
-                {connectionLabel}
-              </strong>
-            ) : null}
-          </div>
-          <div className="live-game-summary">
-            <div className="current-call">
-              <span>Current call</span>
-              <strong>{latestCall === undefined ? "Waiting" : ballLabel(latestCall.ball)}</strong>
-            </div>
-            <div className="call-mode-status">
-              <strong>{snapshot.round === null ? "Round not configured" : callDescription}</strong>
-              {automaticCountdown === null ? null : (
-                <span>
-                  {automaticCountdown === 0
-                    ? "Waiting for the server to commit the next call."
-                    : `Next call in ${automaticCountdown} ${automaticCountdown === 1 ? "second" : "seconds"}`}
-                </span>
-              )}
-            </div>
-          </div>
-          {snapshot.round?.stage === "paused" ? (
-            <div className="round-alert">
-              <strong>{pauseDescription(snapshot.round.pauseReason)}</strong>
-              <span>Reconnecting does not resume calling. The host must resume explicitly.</span>
-            </div>
-          ) : null}
-          {snapshot.round?.stage === "co-winner-window" ? (
-            <div className="round-alert">
-              <strong>Co-winner window open</strong>
-              <span>Calling is paused while completions from the latest call are confirmed.</span>
-            </div>
-          ) : null}
-          {snapshot.participants.some(({ presence }) => presence.status === "grace") ? (
-            <p className="grace-status">A participant is in the reconnect grace period.</p>
-          ) : null}
-          <p
-            aria-atomic="true"
-            aria-label="Game status announcement"
-            aria-live="polite"
-            className="call-announcement"
-            role="status"
-          >
-            {gameStatusAnnouncement}
-          </p>
-          <p
-            aria-atomic="true"
-            aria-label="New call announcement"
-            aria-live="polite"
-            className="call-announcement"
-            role="status"
-          >
-            {callAnnouncement}
-          </p>
-        </section>
+        {hasOutcome ? null : liveGamePanel}
 
-        <section aria-labelledby="card-heading" className="lobby-panel card-panel">
-          <p className="eyebrow">Your numbers</p>
-          <h2 id="card-heading">Your card</h2>
-          {snapshot.ownCard === null ? (
-            <p className="waiting-note">
-              Your card is unavailable while you wait for the next round.
-            </p>
-          ) : (
-            <BingoCard
-              cells={cardCells}
-              onMark={(ball) => void markCard(ball)}
-              pendingBall={markPendingBall}
-              statusMessage={markMessage}
-              {...(cardUnavailableReason === undefined
-                ? {}
-                : { unavailableReason: cardUnavailableReason })}
-            />
-          )}
-          {unresolvedMark !== null && snapshot.ownCard?.id === unresolvedMark.cardId ? (
-            <Button
-              onClick={() => void markCard(unresolvedMark.ball)}
-              type="button"
-              variant="outline"
-            >
-              Retry {cardBallLabel(snapshot, unresolvedMark.ball)} mark
-            </Button>
-          ) : null}
-        </section>
+        {hasOutcome ? (
+          <section
+            aria-labelledby="outcome-heading"
+            className="lobby-panel outcome-panel"
+            data-outcome={
+              roundStage === "co-winner-window"
+                ? "checking"
+                : endedWithoutResult
+                  ? "ended"
+                  : selfWon
+                    ? "winner"
+                    : "complete"
+            }
+            role="region"
+          >
+            {roundStage === "co-winner-window" ? (
+              <div className="outcome-lockup outcome-lockup-checking">
+                <div>
+                  <h2
+                    className="section-focus-target"
+                    id="outcome-heading"
+                    ref={outcomeHeadingRef}
+                    tabIndex={-1}
+                  >
+                    Checking for co-winners
+                  </h2>
+                  <p className="outcome-lead">
+                    The full {coWinnerDuration} co-winner check pauses calls.
+                  </p>
+                  <p>
+                    {snapshot.ownCard === null
+                      ? "Winner confirmation is in progress. The complete winner set appears after the window closes."
+                      : "If the latest call completes your card, mark it now before the window closes."}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="outcome-lockup">
+                <div aria-hidden="true" className="result-mark">
+                  {endedWithoutResult ? "ENDED" : selfWon ? "BINGO" : "RESULT"}
+                </div>
+                <div>
+                  <p className="eyebrow">
+                    {endedWithoutResult ? "Round status" : "Confirmed result"}
+                  </p>
+                  <h2
+                    className="section-focus-target"
+                    id="outcome-heading"
+                    ref={outcomeHeadingRef}
+                    tabIndex={-1}
+                  >
+                    {resultHeading}
+                  </h2>
+                  <p className="outcome-lead">{resultSummary}</p>
+                  {endedWithoutResult ? null : (
+                    <>
+                      <h3>Confirmed {winnerNames.length === 1 ? "winner" : "co-winners"}</h3>
+                      <ul aria-label="Confirmed winners" className="winner-list">
+                        {winners.map((winner) => (
+                          <li key={winner.id}>
+                            <strong>{winner.username}</strong>
+                            {winner.id === snapshot.self.id ? <span>You</span> : null}
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                  <p className="outcome-next-step">{resultNextStep}</p>
+                </div>
+              </div>
+            )}
+          </section>
+        ) : null}
+
+        {hasOutcome && roundStage !== "co-winner-window" ? null : cardPanel}
 
         {showHostControls ? (
           <section
             aria-busy={commandPending || pendingCommand !== null}
             aria-labelledby="host-controls-heading"
             className="lobby-panel host-controls-panel"
+            ref={hostControlsRef}
             role="region"
           >
             <p className="eyebrow">Game authority</p>
@@ -1520,6 +1991,7 @@ export function PrivateLobbyPage({
             <div className="host-round-actions">
               {roundStage === "active" ? (
                 <Button
+                  data-host-action="pause-round"
                   disabled={hostControlsUnavailable}
                   onClick={() => void runCommand({ type: "pause-round", code })}
                   type="button"
@@ -1530,6 +2002,7 @@ export function PrivateLobbyPage({
               ) : null}
               {roundStage === "paused" ? (
                 <Button
+                  data-host-action="resume-round"
                   disabled={hostControlsUnavailable || blockingAbsentPlayer}
                   onClick={() => void runCommand({ type: "resume-round", code })}
                   type="button"
@@ -1539,6 +2012,7 @@ export function PrivateLobbyPage({
               ) : null}
               {canCallNext ? (
                 <Button
+                  data-host-action="call-next"
                   disabled={hostControlsUnavailable || blockingAbsentPlayer}
                   onClick={() => void runCommand({ type: "call-next", code })}
                   ref={callNextButtonRef}
@@ -1551,6 +2025,8 @@ export function PrivateLobbyPage({
               continuationPatternId !== undefined &&
               continuationPatternId !== null ? (
                 <Button
+                  data-host-action="continue-round"
+                  data-pattern-id={continuationPatternId}
                   disabled={hostControlsUnavailable || blockingAbsentPlayer}
                   onClick={() =>
                     void runCommand({
@@ -1566,6 +2042,7 @@ export function PrivateLobbyPage({
               ) : null}
               {roundStage === "active" || roundStage === "paused" || roundStage === "result" ? (
                 <Button
+                  data-host-action="end-round"
                   disabled={hostControlsUnavailable}
                   onClick={() => {
                     endConfirmationRoundIdRef.current = snapshot.round?.id ?? null;
@@ -1582,6 +2059,7 @@ export function PrivateLobbyPage({
             </div>
             {unresolvedCommand !== null ? (
               <Button
+                data-host-action="retry-command"
                 disabled={hostAuthorityUnavailable || commandPending}
                 onClick={() => void runCommand(unresolvedCommand)}
                 type="button"
@@ -1598,6 +2076,9 @@ export function PrivateLobbyPage({
                   if (participant.presence.status !== "absent") return null;
                   return (
                     <Button
+                      data-host-action="override-absence"
+                      data-participant-id={participant.id}
+                      data-presence-generation={participant.presence.generation}
                       disabled={hostControlsUnavailable}
                       key={participant.id}
                       onClick={() =>
@@ -1619,6 +2100,9 @@ export function PrivateLobbyPage({
             ) : null}
           </section>
         ) : null}
+
+        {hasOutcome ? liveGamePanel : null}
+        {hasOutcome && roundStage !== "co-winner-window" ? cardPanel : null}
 
         <section
           aria-labelledby="round-details-heading"
@@ -1741,7 +2225,14 @@ export function PrivateLobbyPage({
 
         <section aria-labelledby="setup-heading" className="lobby-panel setup-panel">
           <p className="eyebrow">Round setup</p>
-          <h2 id="setup-heading">Lobby setup</h2>
+          <h2
+            className="section-focus-target"
+            id="setup-heading"
+            ref={setupHeadingRef}
+            tabIndex={-1}
+          >
+            Lobby setup
+          </h2>
           <dl className="setup-summary">
             <div>
               <dt>Theme</dt>
@@ -1845,6 +2336,7 @@ export function PrivateLobbyPage({
                 </Button>
                 {unresolvedCommand?.type === "start-round" ? (
                   <Button
+                    data-host-action="retry-command"
                     disabled={hostAuthorityUnavailable || commandPending}
                     onClick={() => void runCommand(unresolvedCommand)}
                     type="button"

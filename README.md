@@ -335,9 +335,10 @@ strategy includes unit/property tests, React Testing Library, isolated
 PostgreSQL integration tests, Socket.IO multi-client/restart tests, Playwright
 browser journeys, accessibility checks, and load/security suites. A contributor
 should run the narrow affected suite while developing and all required root
-checks before committing. The initial Playwright smoke test validates the runner
-without an application server or downloaded browser; browser-journey stories
-must install the required Playwright browsers before running their suites.
+checks before committing. Playwright browser checks require a managed Chromium
+installation from `bunx playwright install chromium`. To verify against an
+installed stable Google Chrome instead, run
+`PLAYWRIGHT_BROWSER_CHANNEL=chrome bun run test:e2e`.
 The generic Vitest run skips database integration tests when `TEST_DATABASE_URL`
 is absent; database changes must also run `test:database` against PostgreSQL 16
 after applying the committed migrations. Never run migration or integration-test

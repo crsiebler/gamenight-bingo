@@ -655,6 +655,105 @@ h2 {
   grid-column: 1 / -1;
 }
 
+.outcome-panel {
+  background:
+    linear-gradient(135deg, rgb(255 255 255 / 94%), rgb(255 248 223 / 96%)),
+    repeating-linear-gradient(
+      45deg,
+      var(--bingo-gold) 0,
+      var(--bingo-gold) 0.75rem,
+      var(--bingo-mint) 0.75rem,
+      var(--bingo-mint) 1.5rem
+    );
+  border-color: var(--bingo-coral);
+  grid-column: 1 / -1;
+  overflow: hidden;
+}
+
+.outcome-panel[data-outcome="checking"] {
+  border-style: dashed;
+  padding-block: 0.75rem;
+}
+
+.co-winner-card-panel {
+  padding-top: 1rem;
+}
+
+.outcome-lockup {
+  align-items: start;
+  display: grid;
+  gap: 1.25rem;
+}
+
+.result-mark {
+  color: var(--bingo-coral);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(2.8rem, 8vw, 4.25rem);
+  font-weight: 900;
+  letter-spacing: -0.06em;
+  line-height: 0.85;
+  overflow-wrap: normal;
+  white-space: nowrap;
+}
+
+.outcome-lockup-checking {
+  display: block;
+}
+
+.outcome-panel h2 {
+  max-width: 16ch;
+}
+
+.outcome-panel h3 {
+  margin: 1.5rem 0 0.75rem;
+}
+
+.outcome-lead {
+  font-size: clamp(1.05rem, 3.5vw, 1.3rem);
+  font-weight: 750;
+  line-height: 1.5;
+}
+
+.winner-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.winner-list li {
+  align-items: center;
+  background: var(--bingo-ink);
+  border: 0.125rem solid var(--bingo-ink);
+  border-radius: 999px;
+  color: #ffffff;
+  display: inline-flex;
+  gap: 0.45rem;
+  max-width: 100%;
+  min-height: 2.75rem;
+  overflow-wrap: anywhere;
+  padding: 0.5rem 0.8rem;
+}
+
+.winner-list span {
+  background: var(--bingo-gold);
+  border-radius: 999px;
+  color: var(--bingo-ink);
+  font-size: 0.72rem;
+  font-weight: 900;
+  padding: 0.18rem 0.4rem;
+  text-transform: uppercase;
+}
+
+.outcome-next-step {
+  border-left: 0.3rem solid var(--bingo-coral);
+  line-height: 1.5;
+  margin: 1.5rem 0 0;
+  padding: 0.75rem 0 0.75rem 1rem;
+}
+
 .live-game-detail > div {
   min-width: 0;
 }
@@ -953,6 +1052,14 @@ h2 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .outcome-lockup {
+    grid-template-columns: minmax(17rem, 0.5fr) minmax(0, 1.5fr);
+  }
+
+  .outcome-lockup-checking {
+    display: block;
+  }
+
   .card-panel {
     padding-inline: 2rem;
   }
@@ -994,6 +1101,7 @@ h2 {
 
   .live-game-panel,
   .host-controls-panel,
+  .outcome-panel,
   .end-round-dialog,
   .current-call,
   .call-mode-status,
@@ -1011,5 +1119,10 @@ h2 {
     content: "X";
     font-size: 0.75rem;
     font-weight: 900;
+  }
+
+  .winner-list li,
+  .winner-list span {
+    border-color: CanvasText;
   }
 }
