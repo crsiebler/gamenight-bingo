@@ -3,6 +3,7 @@
 import { useRef, useState, type FormEvent } from "react";
 
 import type { AutomaticCallInterval, CallConfiguration } from "@gamenight-bingo/contracts";
+import { themeCatalog } from "@gamenight-bingo/themes";
 
 import { Button, LinkButton, Option } from "@/atoms";
 import { Input, Select } from "@/molecules";
@@ -13,19 +14,7 @@ import {
   type CreateLobbySelection,
 } from "@/lib/create-lobby-flow";
 
-export const THEME_OPTIONS = [
-  { id: "animals", name: "Animals" },
-  { id: "nature", name: "Nature" },
-  { id: "superheroes", name: "Superheroes" },
-  { id: "pirates", name: "Pirates" },
-  { id: "ghosts", name: "Ghosts" },
-  { id: "sports", name: "Sports" },
-  { id: "christmas", name: "Christmas" },
-  { id: "halloween", name: "Halloween" },
-  { id: "july-4th", name: "July 4th" },
-  { id: "valentines-day", name: "Valentine's Day" },
-  { id: "birthday", name: "Birthday" },
-] as const;
+export const THEME_OPTIONS = themeCatalog;
 
 const AUTOMATIC_INTERVALS = [5, 10, 30, 60, 120] as const;
 

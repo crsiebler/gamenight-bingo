@@ -3,6 +3,8 @@ import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+import { themeCatalog } from "../../../../../packages/themes/src/index.js";
+
 import {
   CreateLobbyForm,
   THEME_OPTIONS,
@@ -18,6 +20,10 @@ const patterns = [
 ] as const;
 
 describe("CreateLobbyForm", () => {
+  it("uses the canonical theme catalog as its complete option source", () => {
+    expect(THEME_OPTIONS).toBe(themeCatalog);
+  });
+
   it("defaults to One Line and manual calling without an interval", () => {
     render(<CreateLobbyForm patterns={patterns} />);
 

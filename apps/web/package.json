@@ -8,6 +8,7 @@
     "@gamenight-bingo/database": "workspace:*",
     "@gamenight-bingo/domain": "workspace:*",
     "@gamenight-bingo/patterns": "workspace:*",
+    "@gamenight-bingo/themes": "workspace:*",
     "@gamenight-bingo/ui": "workspace:*",
     "next": "16.2.9",
     "react": "19.2.7",

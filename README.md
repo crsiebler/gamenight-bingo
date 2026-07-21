@@ -238,10 +238,13 @@ exact entries and generated previews land in later catalog stories. Catalog
 documentation and golden tests must stay synchronized with that package; masks
 are never implicitly rotated, reflected, translated, or deduplicated.
 
-`packages/themes` will hold semantic tokens, original visual/audio assets, and
-asset provenance. Every theme must preserve readable game state, visible focus,
-high contrast, reduced motion, mute controls, and functional fallbacks when a
-decorative asset fails.
+`packages/themes` is the canonical catalog for approved theme IDs, moodboards,
+semantic color roles, focus treatment, and motion policy. Review the generated
+[theme direction](docs/theme-moodboards.md) and [browser specimen
+gallery](docs/theme-moodboards.html). Future visual/audio assets and provenance
+also belong to that package. Every theme must preserve readable game state,
+visible focus, high contrast, reduced motion, mute controls, and functional
+fallbacks when a decorative asset fails.
 
 ## Realtime And Reconnects
 

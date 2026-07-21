@@ -409,6 +409,10 @@ then refactor while green.
   second mask source or transform a source mask implicitly.
 - Themes may change presentation, not game semantics or readability. Lazy-load
   nonselected assets and preserve functional fallbacks when decoration fails.
+- Keep approved theme IDs, moodboards, semantic tokens, and accessibility policy
+  canonical in `packages/themes`; derive selectors and generated review documents
+  from that catalog, and verify every authored text pair at 4.5:1 plus focus,
+  indicators, and component boundaries at 3:1 before adding theme assets.
 
 ## Accessibility
 
