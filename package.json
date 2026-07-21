@@ -25,6 +25,7 @@
     "typecheck": "bun run test:workspace-boundaries && tsc --noEmit --pretty false && bun run --filter '@gamenight-bingo/*' typecheck"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
     "@eslint/js": "10.0.1",
     "@playwright/test": "1.61.1",
     "@testing-library/jest-dom": "6.9.1",

@@ -81,6 +81,7 @@ Next story: US-001
 - Keep the default Playwright project portable and enable the complete desktop/mobile engine set with `PLAYWRIGHT_BROWSER_MATRIX=all`; document native Safari/mobile and retained previous-stable coverage separately because WebKit and device emulation are not native execution.
 - Serialize Node Vitest files that share `TEST_DATABASE_URL`; PostgreSQL repository cleanup and Socket.IO database-backed recovery tests cannot safely run against the same database concurrently.
 - The production-mode Playwright harness serves HTTP, so WebKit cannot carry the required `Secure` participant cookie there; run its noncredential checks locally and assign the authenticated Safari/iOS Safari journey to the release owner over production-like HTTPS rather than weakening cookie security.
+- Accessibility regressions combine state-focused React Testing Library coverage with browser Axe scans; derive the complete cross-theme semantic/visual matrix from canonical generated moodboards, keep Chromium screenshot baselines scoped to stable nontext artwork, and exercise real private-lobby states plus asset failures in every credential-capable browser project.
 
 Append-only iteration log
 -------------------------
@@ -5696,3 +5697,134 @@ Targeted re-review outcome for resumed US-057 at 2026-07-21 06:45:22 MST:
 - The exact matrix selector, explicit nonproduction acknowledgement, read-only existence preflight, restored realtime/host assertions, and one-fresh-database documentation resolve both initial blocking roots and the cheap recovery gap.
 - Residual risk is limited to nonproduction status remaining an explicit operator assertion, freshness remaining point-in-time across independent processes, final post-fix matrix execution using stable Chrome while earlier fresh runs covered managed Chromium/Firefox/Android/WebKit, and external Edge/native/previous-stable coverage assigned to the release owner.
 - No in-scope critical, high, or medium findings remain; US-057 can be marked passing and committed after the required metadata update and final consistency check.
+
+## 2026-07-21 07:17:13 MST - US-058
+- What was implemented
+  - Added browser Axe scans against WCAG A/AA tags for public validation, authenticated gameplay, every canonical theme's complete semantic moodboard, and every theme rendered through a real private lobby.
+  - Added committed Chromium visual baselines plus cross-engine checks for all 11 themes, card/result states, daubers, focus, high contrast, forced colors, reduced motion, mute defaults, and asset failure.
+  - Extended the full-stack host/player journey through keyboard validation, create/join submission, host start, card navigation/marking, authoritative recovery, winning result, reduced motion, dialog cancellation, and keyboard round completion.
+  - Fixed rendered accessibility gaps by restoring high-contrast link underlines, applying canonical portable two-tone focus rings to themed private controls, recovering focus after a committed winning mark settles, and keeping the themed result wordmark on a contrast-tested token.
+- Files changed: `AGENTS.md`, `apps/web/src/app/globals.css`, `apps/web/src/components/templates/private-lobby-page.test.tsx`, `apps/web/src/components/templates/private-lobby-page.tsx`, `bun.lock`, `docs/browser-test-matrix.md`, `docs/theme-assets.html`, `docs/theme-moodboards.html`, `package.json`, `packages/themes/src/preview.ts`, `playwright.config.ts`, `tests/e2e/accessibility-theme.spec.ts`, `tests/e2e/accessibility-theme.spec.ts-snapshots/*.png`, `tests/e2e/gameplay.journey.spec.ts`, `tests/theme-catalog.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-058 - Add accessibility and theme regression tests`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/components/templates/private-lobby-page.test.tsx tests/theme-catalog.test.ts` (pass after review fixes; 139 tests)
+  - `PLAYWRIGHT_BROWSERS_PATH=0 bunx playwright test tests/e2e/accessibility-theme.spec.ts --project=chromium` (expected fail before baseline generation and expected fail before canonical focus/high-contrast fixes; pass after implementation with 3 tests)
+  - Theme-only Playwright projects for stable Chrome, Firefox, WebKit, iPhone WebKit, and Android Chromium (pass; 3 tests each; Firefox/WebKit reran serially after concurrent runs contended for Playwright's shared artifact directory)
+  - Fresh migrated nonproduction database-backed `tests/e2e/gameplay.journey.spec.ts` Chromium run (pass after review fixes; 1 full-stack keyboard/Axe journey through settled result and round completion)
+  - `bun run test` (first run had one nonreproducing existing sequence-resync assertion failure; isolated rerun passed; post-review-fix run passed typecheck, 38 files, 693 tests, and 135 database-backed skips)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun run format:check` (fails only on 57 pre-existing untracked browser/Lighthouse artifacts)
+  - `bun install --frozen-lockfile` (pass; 396 installs checked with no changes)
+  - `DATABASE_URL=<approved local database> bun run --cwd apps/web build` (pass; initial no-environment run correctly failed the runtime configuration guard)
+  - Manual production-browser accessibility-tree, keyboard focus, 320px reflow/touch-target, console, and first-party network review (pass; no horizontal overflow or console warnings/errors)
+  - Mobile Lighthouse snapshot (pass; Accessibility 100, Best Practices 100, SEO 100, Agentic Browsing 100)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `accessibility-tester`, `test-automator`
+  - Used: `accessibility-tester`, `test-automator` for acceptance-gap mapping, deterministic state/theme matrices, browser Axe/visual strategy, keyboard coverage, media-policy checks, and residual native-assistive-technology risks
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and UI-triggered `ui-designer`; skipped a separate security pass because the only dependency is a pinned development-only Axe scanner and standard mode permits one domain specialist
+  - Findings: initial review found that the all-theme browser audit used static moodboards rather than real application pages, media assertions could pass without production media rules, snapshot lookup was Darwin-only, and the keyboard journey stopped before result/end states; all findings were remediated before the one targeted re-review
+- Decisions (why):
+  - Retained the generated moodboard as a fast token/state audit, but added a database-backed every-theme private-lobby matrix so production rendering, media rules, assets, focus, Axe, and screenshots cannot pass through a static surrogate alone.
+  - Kept state transitions, live regions, errors, mute/audio, failure paths, and focus recovery in the established component/full-stack suites while using Axe and screenshots for rendered browser regressions, avoiding a brittle Cartesian product.
+  - Added one derived outer-focus-width variable instead of hard-coding token arithmetic in CSS because WebKit suppresses calculated native-button shadows and future token changes must remain canonical.
+  - Testing decision: this story primarily adds regression coverage, so existing behavior could pass immediately; missing visual baselines provided the intended red. The rendered focus and high-contrast behavior change followed a separate failing browser regression before CSS implementation.
+- **Learnings for future iterations:**
+  - Playwright's `prefers-contrast` emulation affects Chromium-family stylesheet evaluation but is not a portable Firefox/WebKit assertion boundary; retain cross-engine semantic/focus checks and explicit native contrast-mode release coverage.
+  - WebKit suppresses `box-shadow` on native-appearance buttons even when the declaration and custom properties are valid; fully styled themed buttons need `appearance: none` for the canonical two-tone ring.
+  - Concurrent independent Playwright invocations still share the configured artifact directory, so matrix projects must run serially unless each invocation receives isolated output storage.
+- Known issues / follow-ups:
+  - Microsoft Edge is unavailable locally; native screen-reader speech quality, native forced colors, and retained previous-stable/native mobile coverage remain release-owner checks in `docs/browser-test-matrix.md`.
+  - Root formatting remains blocked only by pre-existing untracked browser/Lighthouse artifacts, which remain untouched and unstaged; tracked formatting passes.
+  - Local nonproduction browser databases and ignored Playwright/browser binaries were retained without destructive cleanup.
+- Next iteration start:
+  - If review passes, implement US-059 security and privacy hardening; otherwise resume any recorded blocking finding.
+---
+
+Initial staged review remediation for US-058 at 2026-07-21 07:49:00 MST:
+- Added real private-lobby creation for all 11 canonical themes with distinct trusted requester keys, application Axe scans, canonical focus assertions, dauber/mute checks, production media assertions, and regenerated application screenshots.
+- Made screenshot lookup platform-independent through the configured snapshot template while retaining one canonical Chromium baseline set.
+- Extended the keyboard journey through an authoritative center-row win, winner-focus recovery, result Axe and reduced-motion checks, native dialog Escape restoration, and keyboard round completion.
+- Added a component regression and production focus-recovery logic for the committed winning mark that remains focused while the co-winner window settles.
+- The new result Axe scan exposed a serious Animals-theme wordmark contrast defect; the themed wordmark now inherits the canonical result text token, and the fresh full-stack journey passes.
+- Post-fix checks pass: focused Vitest 139 tests, fresh database-backed real-theme Chromium 3 tests, fresh database-backed gameplay Chromium 1 test, root typecheck, lint, tracked formatting, and the full root suite with 693 passed and 135 database-backed skips.
+- `bun run format:check` remains blocked only by 59 pre-existing untracked browser/Lighthouse artifacts; the complete tracked tree passes Prettier and those artifacts remain untouched and unstaged.
+- Targeted re-review is limited to `code-reviewer`, `qa-expert`, and `ui-designer` for their respective remediated findings against the complete restaged candidate.
+
+Targeted re-review outcome for US-058 at 2026-07-21 07:51:00 MST:
+- `code-reviewer` returned no actionable critical, high, or medium findings and considered the four initial roots substantively resolved.
+- `qa-expert` and `ui-designer` independently found that the real-application every-theme matrix still stops at the waiting state and skips every non-managed-Chromium project, leaving production called/marked/result, media, and asset-failure behavior dependent on component or static-surrogate coverage.
+- The real-app asset assertion checks the sprite reference and a wrapper that also contains fallback content, so it can pass when the sprite request fails; no browser case proves successful load state and then an intercepted failure with gameplay continuity.
+- The full-stack keyboard journey programmatically focuses most controls and uses pointer clicks for navigation/refresh, so it does not prove natural Tab/Shift+Tab reachability across the complete create/join/lobby/card/host/result flow.
+- Random lobby/card content is compared with a 5% screenshot allowance, which can hide localized visual regressions; the hard-coded Darwin snapshot template makes lookup deterministic but still asks other operating systems to compare platform-dependent font rendering against Darwin pixels.
+- These are accepted blocking findings because they directly affect US-058's every-theme production-state, asset-failure, keyboard, and portable visual-regression acceptance. Per the one-targeted-re-review limit, no further implementation changes or commit are permitted in this iteration.
+- `US-058` remains `passes: false`; `prd.json` remains unchanged. Resume by replacing randomized cross-platform full-grid baselines with stable scoped assertions/baselines, exercising real application state/media/asset paths in credential-capable projects, and adding natural keyboard traversal before restarting the staged review loop.
+
+## 2026-07-21 08:27:31 MST - US-058
+- What was implemented
+  - Resumed the blocked accessibility/theme regression story and replaced randomized full-grid screenshots with exact, small, text-free canonical theme-vector baselines that are portable across operating systems.
+  - Advanced every canonical theme through the real private lobby's waiting, called, marked, and settled winner states in each credential-capable browser project, with application Axe scans, audio opt-in, focus-token checks, reduced motion, Chromium contrast modes, and an intercepted sprite failure that preserves semantic gameplay.
+  - Converted the full-stack host/player journey from direct focus and pointer navigation to natural Tab/Shift+Tab traversal, composite-card arrow navigation, Space marking, Enter activation, native dialog focus cycling, and keyboard round completion.
+  - Used committed HTTP fallback calls only for repetitive draw advancement while asserting their realtime UI publication, avoiding test-generated snapshot-rate amplification without bypassing persistence or rendering.
+- Files changed: `AGENTS.md`, `apps/web/src/app/globals.css`, `apps/web/src/components/templates/private-lobby-page.test.tsx`, `apps/web/src/components/templates/private-lobby-page.tsx`, `bun.lock`, `docs/browser-test-matrix.md`, `docs/theme-assets.html`, `docs/theme-moodboards.html`, `package.json`, `packages/themes/src/preview.ts`, `playwright.config.ts`, `tests/e2e/accessibility-theme.spec.ts`, `tests/e2e/accessibility-theme.spec.ts-snapshots/*.png`, `tests/e2e/gameplay.journey.spec.ts`, `tests/theme-catalog.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-058 - Add accessibility and theme regression tests`
+- Auto approval: `enabled`
+- Checks:
+  - Fresh migrated Chromium every-theme application matrix without snapshot updates (pass; 3 tests, including all 11 theme baselines and real states)
+  - Fresh migrated Firefox every-theme application matrix (pass; 3 tests)
+  - Fresh migrated Android Chromium every-theme application matrix (pass; 3 tests)
+  - WebKit noncredential accessibility/theme matrix (pass; 2 tests, authenticated test skipped for the documented HTTP Secure-cookie limitation)
+  - Fresh migrated Chromium natural-keyboard host/player journey (pass; 1 test)
+  - `bun run test` (pass; typecheck, 38 files passed, 1 database file skipped, 693 tests passed, and 135 database-backed tests skipped)
+  - `bun run lint` (pass)
+  - `PLAYWRIGHT_BROWSERS_PATH=0 bun run test:e2e` (pass; 4 nondatabase tests and 5 expected database-dependent skips)
+  - `bun install --frozen-lockfile` (pass; 396 installs checked with no changes)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree after obsolete baseline removal)
+  - `bun run format:check` (fails only on 61 unrelated untracked browser/Lighthouse artifacts, including this iteration's unstaged manual Lighthouse report)
+  - `git diff --check && git diff --cached --check` (pass)
+  - Manual production mobile/private-lobby review (pass; no overflow, loaded selected SVG/WAV only, 75px card targets, explicit audio opt-in, live call announcement, no console warnings/errors, and successful first-party requests)
+  - Mobile Lighthouse snapshot (pass; Accessibility 100, Best Practices 100, SEO 100, Agentic Browsing 100)
+- Implementation agents:
+  - Recommended: `accessibility-tester`, `test-automator`
+  - Used: skipped in this resumed iteration because both recommended agents already advised US-058 and the remaining work followed concrete targeted-review findings
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and UI-triggered `ui-designer` planned for the revised complete staged diff
+  - Findings: fixed the post-failure gameplay-continuity gap, exact-baseline threshold, and browser-audio-failure documentation mismatch; targeted re-review returned no actionable findings
+- Decisions (why):
+  - Scoped screenshots to the external theme icon SVG because random lobby codes/cards and platform fonts made the prior grid baseline both noisy and permissive; semantic/Axe assertions cover the surrounding application state.
+  - Ran real private states in Chromium, Firefox, and Android Chromium while retaining WebKit's authenticated journey as a native HTTPS release check because weakening the Secure cookie for the HTTP harness is prohibited.
+  - Kept contrast and forced-color computed-style assertions on Chromium-family projects because Playwright does not apply `prefers-contrast` emulation to Firefox/WebKit; every engine still receives canonical token, focus, Axe, reduced-motion, audio, and asset-failure checks where credentials work.
+  - Testing decision: this is test-harness remediation with no new production behavior; the first Chromium run failed on the removed baseline and the first keyboard run failed because arbitrary card cells use roving tabindex, then the revised baseline, state, fallback, and composite-keyboard checks passed.
+- **Learnings for future iterations:**
+  - A Bingo card is one composite Tab stop; use arrows inside its roving grid rather than requiring every cell to be independently tabbable.
+  - Repetitive UI commands each request authoritative reconciliation and can legitimately hit snapshot-read limits; acceptance tests may use supported HTTP fallback mutations for repetition when they assert committed realtime publication and retain natural keyboard coverage for each action type.
+  - Asset-failure tests can route a cache-busting preload request to failure and observe the production `onError` transition without reloading and disconnecting an accountless session.
+- Known issues / follow-ups:
+  - Microsoft Edge is unavailable locally; native screen-reader speech quality, native forced colors, and retained previous-stable/native mobile coverage remain release-owner checks in `docs/browser-test-matrix.md`.
+  - Root formatting remains blocked only by unrelated untracked browser/Lighthouse artifacts, which remain untouched and unstaged; the tracked tree will be rechecked after staging removes obsolete baseline paths.
+  - Fresh nonproduction databases created for isolated browser runs were retained; no existing local data was deleted.
+- Next iteration start:
+  - If the fresh staged review passes, mark US-058 passing and implement US-059 security/privacy hardening next; otherwise remediate the merged blocking findings within the one-re-review limit.
+---
+
+Initial review remediation for resumed US-058 at 2026-07-21 08:45:19 MST:
+- `code-reviewer` reported one low documentation mismatch, `qa-expert` reported one medium asset-failure continuity gap plus one low baseline-tolerance issue, and `ui-designer` returned no actionable findings after loading dev-browser and independently reviewing the rendered flow.
+- Moved the intercepted sprite failure before all repetitive calls, keyboard marks, co-winner settlement, result rendering, Axe, reduced-motion, and contrast checks; every theme now proves successful sprite load first, enters fallback, and then completes authoritative gameplay through the settled winner state.
+- Tightened the small text-free SVG baselines from a perceptual 0.2 pixel threshold to zero while retaining `maxDiffPixels: 0`, and corrected browser-matrix documentation to claim successful audio opt-in plus visual-asset failure rather than unimplemented browser audio-failure interception.
+- Testing decision:
+  - Change type: test-harness correctness and documentation fix.
+  - Test-first required: the blocking finding identified an ordering false positive in the existing regression; moving the existing mutation sequence after the failure makes the same test fail if fallback disrupts gameplay, without changing production behavior.
+  - Red: the initial specialist review demonstrated that the prior settled-result-only assertion could pass without any post-failure mutation.
+  - Green: a fresh migrated Chromium every-theme run passed all 3 tests without updating snapshots, including zero-threshold baselines and post-failure calls/marks/results for all 11 themes.
+- Post-fix checks: `bun run test` passes typecheck plus 693 tests/135 skips; lint, focused Prettier, and staged/unstaged diff checks pass.
+- Targeted re-review is limited to `code-reviewer` for the documentation correction and `qa-expert` for fallback ordering plus exact-baseline remediation; UI review produced no finding and no production UI changed.
+
+Targeted re-review outcome for resumed US-058 at 2026-07-21 08:47:15 MST:
+- `code-reviewer` and `qa-expert` reviewed the revised complete staged diff and returned empty actionable finding lists.
+- The corrected browser coverage claim, successful-load-then-failure ordering, post-failure authoritative mutations/realtime result, and zero-threshold nontext baselines resolve every initial finding.
+- Residual risk remains limited to documented native Safari/iOS Safari, Edge, native forced-colors/screen-reader checks, retained previous-stable coverage, and slower-runner timeout risk for the intentionally serial randomized matrix.
+- No in-scope critical, high, or medium findings remain; US-058 can be marked passing and committed after the final consistency check.

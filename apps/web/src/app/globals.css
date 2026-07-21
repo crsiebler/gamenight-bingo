@@ -505,6 +505,17 @@ h2 {
   box-shadow: 0 0 0 0.625rem #7a2e00;
 }
 
+.private-lobby-shell[data-theme-id] :is(button, input, select, a):focus-visible,
+.private-lobby-shell[data-theme-id] .section-focus-target:focus {
+  box-shadow: 0 0 0 var(--bingo-theme-focus-outer-width) var(--bingo-theme-focus-outer);
+  outline: var(--bingo-theme-focus-width) solid var(--bingo-theme-focus-inner);
+  outline-offset: var(--bingo-theme-focus-offset);
+}
+
+.private-lobby-shell[data-theme-id] button {
+  appearance: none;
+}
+
 .share-panel .eyebrow {
   color: var(--bingo-gold);
 }
@@ -830,6 +841,10 @@ h2 {
 }
 
 .private-lobby-shell[data-theme-id] .outcome-panel .eyebrow {
+  color: inherit;
+}
+
+.private-lobby-shell[data-theme-id] .outcome-panel .result-mark {
   color: inherit;
 }
 
@@ -1348,6 +1363,11 @@ h2 {
 }
 
 @media (prefers-contrast: more) {
+  a {
+    text-decoration: underline !important;
+    text-underline-offset: 0.15em;
+  }
+
   .theme-artwork {
     display: none;
   }

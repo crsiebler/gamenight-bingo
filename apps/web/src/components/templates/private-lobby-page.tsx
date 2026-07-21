@@ -838,11 +838,17 @@ export function PrivateLobbyPage({
         (acknowledgedMark !== null &&
           acknowledgedMark.cardId === previous?.ownCard?.id &&
           acknowledgedMark.ball === focusedCardBall));
+    const focusedCardIsCommittedWindowMark =
+      cardHadFocus &&
+      previous?.round?.stage === "co-winner-window" &&
+      typeof focusedCardBall === "number" &&
+      previous.ownMarks.some(({ ball }) => ball === focusedCardBall);
     const focusedCardControlWasAvailable =
       cardHadFocus &&
       activeElement instanceof HTMLButtonElement &&
       ((!activeElement.disabled && activeElement.getAttribute("aria-disabled") !== "true") ||
-        focusedCardHasPendingMark);
+        focusedCardHasPendingMark ||
+        focusedCardIsCommittedWindowMark);
     const cardBecameUnavailable =
       focusedCardControlWasAvailable &&
       previous?.round !== null &&

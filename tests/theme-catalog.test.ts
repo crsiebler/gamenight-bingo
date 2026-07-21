@@ -173,6 +173,9 @@ function expectedCssVariables(theme: ThemeFixture): Readonly<Record<string, stri
     "--bingo-theme-focus-outer": theme.tokens.focus.outer,
     "--bingo-theme-focus-width": `${theme.tokens.focus.widthPx}px`,
     "--bingo-theme-focus-offset": `${theme.tokens.focus.offsetPx}px`,
+    "--bingo-theme-focus-outer-width": `${
+      theme.tokens.focus.widthPx + theme.tokens.focus.offsetPx
+    }px`,
     "--bingo-theme-card-surface": theme.tokens.card.surface,
     "--bingo-theme-card-border": theme.tokens.card.border,
     "--bingo-theme-motion-state": `${theme.tokens.motion.stateTransitionMs}ms`,

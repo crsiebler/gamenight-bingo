@@ -27,6 +27,7 @@ export function themeCssVariables(theme: ThemeDefinition): Readonly<Record<strin
     "--bingo-theme-focus-outer": tokens.focus.outer,
     "--bingo-theme-focus-width": `${tokens.focus.widthPx}px`,
     "--bingo-theme-focus-offset": `${tokens.focus.offsetPx}px`,
+    "--bingo-theme-focus-outer-width": `${tokens.focus.widthPx + tokens.focus.offsetPx}px`,
     "--bingo-theme-card-surface": tokens.card.surface,
     "--bingo-theme-card-border": tokens.card.border,
     ...setVariables("--bingo-theme-card-header", tokens.card.header),

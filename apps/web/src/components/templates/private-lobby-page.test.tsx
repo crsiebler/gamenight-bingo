@@ -15,6 +15,7 @@ import {
   type Snapshot,
 } from "@gamenight-bingo/contracts";
 import { patternCatalog } from "@gamenight-bingo/patterns";
+import { themeCatalog } from "@gamenight-bingo/themes";
 
 import { metadata, revalidate } from "../../app/lobbies/[code]/page.js";
 import { PrivateLobbyFlowError } from "../../lib/private-lobby-flow.js";
@@ -343,6 +344,86 @@ function deferred<T>() {
 }
 
 describe("PrivateLobbyPage", () => {
+  it.each(themeCatalog)(
+    "renders $name card states, dauber, focus tokens, and asset fallback",
+    async (theme) => {
+      const { container } = render(
+        <PrivateLobbyPage
+          code="ABC234"
+          loadSnapshot={async () =>
+            snapshotFor("host", {
+              absentPlayerOverridden: true,
+              calledBalls: [1, 16],
+              markedBalls: [1],
+              round: "active",
+              themeId: theme.id,
+            })
+          }
+          origin="https://play.example"
+          patterns={patterns}
+          shareInvite={null}
+        />,
+      );
+
+      await screen.findByRole("region", { name: "Your card" });
+      const shell = container.querySelector("main.private-lobby-shell");
+      expect(shell).toHaveAttribute("data-theme-id", theme.id);
+      expect(shell).toHaveStyle({
+        "--bingo-theme-focus-inner": theme.tokens.focus.inner,
+        "--bingo-theme-focus-outer": theme.tokens.focus.outer,
+        "--bingo-theme-focus-outer-width": `${
+          theme.tokens.focus.widthPx + theme.tokens.focus.offsetPx
+        }px`,
+      });
+      expect(container.querySelector('.bingo-card-cell[data-state="marked"]')).toBeVisible();
+      expect(container.querySelector('.bingo-card-cell[data-state="called"]')).toBeVisible();
+      expect(container.querySelector('.bingo-card-cell[data-state="uncalled"]')).toBeVisible();
+      expect(container.querySelector('.bingo-card-cell[data-state="free"]')).toBeVisible();
+      const dauber = container.querySelector('[data-theme-asset="dauber"]');
+      const dauberArtwork = dauber?.closest(".theme-artwork");
+      expect(dauber?.querySelector("use")).toHaveAttribute(
+        "href",
+        `${theme.visuals.spriteUrl}#dauber`,
+      );
+
+      const spritePreload = container.querySelector("img[data-theme-sprite-preload]");
+      fireEvent.error(spritePreload as HTMLImageElement);
+      await waitFor(() => expect(dauberArtwork).toHaveAttribute("data-loaded", "false"));
+      expect(dauberArtwork?.querySelector(".theme-art-fallback")).toBeVisible();
+    },
+  );
+
+  it.each(themeCatalog)(
+    "renders $name winner treatment without changing semantics",
+    async (theme) => {
+      const { container } = render(
+        <PrivateLobbyPage
+          code="ABC234"
+          loadSnapshot={async () =>
+            snapshotFor("player", {
+              absentPlayerOverridden: true,
+              calledBalls: [1],
+              continuationPatternId: null,
+              round: "result",
+              themeId: theme.id,
+              winnerParticipantIds: ["participant-grace"],
+            })
+          }
+          origin="https://play.example"
+          patterns={patterns}
+          shareInvite={null}
+        />,
+      );
+
+      expect(await screen.findByRole("heading", { name: /bingo.*you won/i })).toBeVisible();
+      expect(container.querySelector('[data-theme-asset="winner"] use')).toHaveAttribute(
+        "href",
+        `${theme.visuals.spriteUrl}#winner`,
+      );
+      expect(screen.getByText(/one line is complete/i)).toBeVisible();
+    },
+  );
+
   it("loads only the selected theme sprite while preserving semantic game content", async () => {
     const { container } = render(
       <PrivateLobbyPage
@@ -3574,6 +3655,55 @@ describe("PrivateLobbyPage", () => {
 
     expect(screen.getByRole("heading", { name: "One Line result confirmed" })).toHaveFocus();
     expect(calledCell).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("moves focus from the committed winning mark when settlement locks the card", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const baseline = snapshotFor("player", {
+      absentPlayerOverridden: true,
+      calledBalls: [1],
+      eventSequence: 2,
+      markedBalls: [1],
+      round: "co-winner-window",
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+    await screen.findByRole("region", { name: "Checking for co-winners" });
+    act(() => handlers?.onSnapshot(baseline));
+    const markedCell = screen.getByRole("button", { name: /B: 1 Marked/i });
+    markedCell.focus();
+
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "co-winner-result",
+          eventSequence: 3,
+          occurredAt: NOW,
+          result: {
+            triggeringCallId: "call-1",
+            openedAt: "2026-07-18T11:59:58.000Z",
+            closesAt: NOW,
+            settledAt: NOW,
+            winnerParticipantIds: ["participant-grace"],
+          },
+        }),
+      ),
+    );
+
+    expect(screen.getByRole("heading", { name: /bingo.*you won/i })).toHaveFocus();
   });
 
   it("moves focus from a pending mark when settlement locks the card", async () => {

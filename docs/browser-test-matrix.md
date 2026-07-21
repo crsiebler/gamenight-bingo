@@ -51,6 +51,33 @@ E2E_DATABASE_CONFIRMED_NONPRODUCTION=true \
 `PLAYWRIGHT_BROWSER_CHANNEL=chrome bun run test:e2e` remains the short form for
 the stable Chrome project without enabling the full matrix.
 
+## Accessibility And Theme Regressions
+
+The browser suite Axe-scans the public validation state and authenticated
+gameplay states against WCAG A/AA tags. It renders every canonical theme through
+the production private lobby in each credential-capable project, advances each
+one through called, marked, and result states, and verifies focus, audio opt-in,
+visual-asset failure fallback, high contrast, forced colors, reduced motion, and
+continued semantic gameplay. Managed Chromium owns small sprite-only committed
+visual baselines that avoid random card, lobby, text, and platform-font content;
+the remaining available projects run the same production semantic and Axe checks
+without duplicating engine-specific screenshots. WebKit's authenticated matrix
+remains the native HTTPS release check described below.
+
+The theme-only browser checks do not require a database or running application:
+
+```sh
+PLAYWRIGHT_BROWSERS_PATH=0 PLAYWRIGHT_BROWSER_MATRIX=all \
+  bunx playwright test tests/e2e/accessibility-theme.spec.ts --project='<project>'
+```
+
+Run the authenticated keyboard, focus, error, card-marking, live-region, and
+recovery checks through `tests/e2e/gameplay.journey.spec.ts` with the fresh
+database command documented above. Keep screen-reader speech quality and native
+forced-color behavior in the release-owner checklist because browser automation
+can validate semantics and computed presentation but cannot certify assistive
+technology announcements.
+
 ## Native And Version Coverage
 
 Playwright cannot install or execute native Safari/iOS Safari, and its managed

@@ -5,6 +5,7 @@ const e2eDatabaseConfirmed = process.env["E2E_DATABASE_CONFIRMED_NONPRODUCTION"]
 const useStableChrome = process.env["PLAYWRIGHT_BROWSER_CHANNEL"] === "chrome";
 const runBrowserMatrix = process.env["PLAYWRIGHT_BROWSER_MATRIX"] === "all";
 const matrixProjectName = process.env["PLAYWRIGHT_MATRIX_PROJECT"];
+const e2eTrustedProxySecret = "gamenight-bingo-e2e-trusted-proxy-marker";
 
 const browserMatrix = [
   {
@@ -54,6 +55,7 @@ export default defineConfig({
   outputDir: "./test-results/playwright",
   reporter: "list",
   retries: 0,
+  snapshotPathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}-{projectName}{ext}",
   use: {
     baseURL: "http://localhost:3100",
   },
@@ -83,6 +85,7 @@ export default defineConfig({
             env: {
               DATABASE_URL: testDatabaseUrl,
               NEXT_PUBLIC_GAME_SERVER_URL: "http://localhost:4100",
+              TRUSTED_PROXY_SECRET: e2eTrustedProxySecret,
             },
             reuseExistingServer: false,
             timeout: 120_000,

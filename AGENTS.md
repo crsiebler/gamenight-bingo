@@ -349,6 +349,11 @@ then refactor while green.
   and co-winner behavior.
 - Use React Testing Library for component behavior and Playwright for browser
   journeys. Frontend stories also require manual browser verification.
+- Accessibility regressions pair state-focused component tests with browser Axe
+  scans; derive the complete cross-theme semantic/visual matrix from canonical
+  generated moodboards, keep Chromium screenshot baselines scoped to stable
+  nontext artwork, and exercise real private-lobby states plus asset failures in
+  every credential-capable browser project.
 - Enable the complete Playwright project set with
   `PLAYWRIGHT_BROWSER_MATRIX=all`; keep native Safari/mobile and retained
   previous-stable coverage explicit in `docs/browser-test-matrix.md` rather than
