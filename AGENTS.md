@@ -390,6 +390,10 @@ then refactor while green.
 - After an acknowledgement, queue any required authoritative refresh behind an
   in-flight refresh, verify its snapshot sequence and expected state include the
   commit, and keep stale mutation controls latched if reconciliation fails.
+- Treat definitive session or lobby errors as a terminal delivery latch: close
+  realtime delivery, invalidate in-flight snapshots, and recheck the latch before
+  and after waiting on another refresh. Preserve the distinction between an
+  inactive session and an unavailable lobby in the recovery presentation.
 - Retained command sessions must keep any pre-command reconciliation baseline
   captured on the first attempt; an ambiguous replay may run after live state
   already reflects the original commit and must not recapture that newer state.

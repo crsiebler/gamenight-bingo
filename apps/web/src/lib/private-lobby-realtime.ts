@@ -15,8 +15,13 @@ import {
 export type PrivateLobbyConnectionState =
   "connected" | "expired" | "offline" | "reconnecting" | "recovered" | "snapshot-syncing";
 
+export type PrivateLobbyTerminalErrorCode = "LOBBY_EXPIRED" | "NOT_FOUND" | "UNAUTHORIZED";
+
 export type PrivateLobbyRealtimeHandlers = {
-  onConnectionState(state: PrivateLobbyConnectionState): void;
+  onConnectionState(
+    state: PrivateLobbyConnectionState,
+    errorCode?: PrivateLobbyTerminalErrorCode,
+  ): void;
   onLobbyEvent(event: ActiveLobbyEvent): void;
   onPrivateEvent?(event: ParticipantPrivateEvent): void;
   onSnapshot(snapshot: Snapshot): void;
@@ -86,11 +91,15 @@ function parseSocketError(error: unknown) {
   return ErrorSchema.safeParse(candidate);
 }
 
-function isExpiredErrorCode(code: string): boolean {
-  return code === "UNAUTHORIZED" || code === "NOT_FOUND" || code === "LOBBY_EXPIRED";
+function terminalErrorCode(code: string): PrivateLobbyTerminalErrorCode | undefined {
+  return code === "UNAUTHORIZED" || code === "NOT_FOUND" || code === "LOBBY_EXPIRED"
+    ? code
+    : undefined;
 }
 
-function terminalTicketState(error: unknown): "expired" | "offline" | null {
+function terminalTicketState(
+  error: unknown,
+): { errorCode?: PrivateLobbyTerminalErrorCode; state: "expired" | "offline" } | null {
   if (
     typeof error !== "object" ||
     error === null ||
@@ -99,9 +108,9 @@ function terminalTicketState(error: unknown): "expired" | "offline" | null {
   ) {
     return null;
   }
-  return "code" in error && typeof error.code === "string" && isExpiredErrorCode(error.code)
-    ? "expired"
-    : "offline";
+  const errorCode =
+    "code" in error && typeof error.code === "string" ? terminalErrorCode(error.code) : undefined;
+  return errorCode === undefined ? { state: "offline" } : { errorCode, state: "expired" };
 }
 
 const createRealtimeSocket = (serverUrl: string | undefined, options: SocketOptions) =>
@@ -125,12 +134,23 @@ export function connectPrivateLobbyRealtime(
     if (heartbeat !== null) clearInterval(heartbeat);
     heartbeat = null;
   };
-  const failClosed = (socket: RealtimeSocket, state: "expired" | "offline" = "offline") => {
+  const reportConnectionState = (
+    state: PrivateLobbyConnectionState,
+    errorCode?: PrivateLobbyTerminalErrorCode,
+  ) => {
+    if (errorCode === undefined) options.handlers.onConnectionState(state);
+    else options.handlers.onConnectionState(state, errorCode);
+  };
+  const failClosed = (
+    socket: RealtimeSocket,
+    state: "expired" | "offline" = "offline",
+    errorCode?: PrivateLobbyTerminalErrorCode,
+  ) => {
     if (socket !== currentSocket) return;
     terminal = true;
     currentSocket = null;
     clearHeartbeat();
-    options.handlers.onConnectionState(state);
+    reportConnectionState(state, errorCode);
     socket.close();
   };
 
@@ -155,7 +175,7 @@ export function connectPrivateLobbyRealtime(
       const terminalState = terminalTicketState(error);
       if (terminalState !== null) {
         terminal = true;
-        options.handlers.onConnectionState(terminalState);
+        reportConnectionState(terminalState.state, terminalState.errorCode);
         return;
       }
       scheduleReconnect();
@@ -214,10 +234,8 @@ export function connectPrivateLobbyRealtime(
       if (socket !== currentSocket || closed || terminal) return;
       const parsed = ErrorSchema.safeParse(error);
       if (!parsed.success || !parsed.data.retryable) {
-        failClosed(
-          socket,
-          parsed.success && isExpiredErrorCode(parsed.data.code) ? "expired" : "offline",
-        );
+        const errorCode = parsed.success ? terminalErrorCode(parsed.data.code) : undefined;
+        failClosed(socket, errorCode === undefined ? "offline" : "expired", errorCode);
         return;
       }
       currentSocket = null;
@@ -229,7 +247,8 @@ export function connectPrivateLobbyRealtime(
       if (socket !== currentSocket || closed || terminal) return;
       const parsed = parseSocketError(error);
       if (parsed.success && !parsed.data.retryable) {
-        failClosed(socket, isExpiredErrorCode(parsed.data.code) ? "expired" : "offline");
+        const errorCode = terminalErrorCode(parsed.data.code);
+        failClosed(socket, errorCode === undefined ? "offline" : "expired", errorCode);
         return;
       }
       currentSocket = null;

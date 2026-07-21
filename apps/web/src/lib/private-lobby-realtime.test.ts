@@ -254,7 +254,9 @@ describe("connectPrivateLobbyRealtime", () => {
       },
     });
 
-    await vi.waitFor(() => expect(onConnectionState).toHaveBeenLastCalledWith("expired"));
+    await vi.waitFor(() =>
+      expect(onConnectionState).toHaveBeenLastCalledWith("expired", "UNAUTHORIZED"),
+    );
     expect(createSocket).not.toHaveBeenCalled();
     expect(retries).toHaveLength(0);
   });
@@ -312,9 +314,35 @@ describe("connectPrivateLobbyRealtime", () => {
       },
     });
 
-    expect(onConnectionState).toHaveBeenLastCalledWith("expired");
+    expect(onConnectionState).toHaveBeenLastCalledWith("expired", "UNAUTHORIZED");
     expect(socket.close).toHaveBeenCalledOnce();
     expect(retries).toHaveLength(0);
+  });
+
+  it("preserves a definitive lobby-expired cause from the realtime server", async () => {
+    const socket = fakeSocket();
+    const onConnectionState = vi.fn();
+    connectPrivateLobbyRealtime({
+      code: "ABC234",
+      handlers: { onConnectionState, onLobbyEvent: vi.fn(), onSnapshot: vi.fn() },
+      issueTicket: async () => "A".repeat(43),
+      createSocket: () => socket,
+    });
+    await vi.waitFor(() => expect(socket.on).toHaveBeenCalled());
+
+    socket.trigger("v1:error", {
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "error",
+      code: "LOBBY_EXPIRED",
+      message: "The lobby has expired.",
+      commandId: null,
+      occurredAt: NOW,
+      retryable: false,
+      issues: [],
+    });
+
+    expect(onConnectionState).toHaveBeenLastCalledWith("expired", "LOBBY_EXPIRED");
+    expect(socket.close).toHaveBeenCalledOnce();
   });
 
   it("keeps increasing retry delays until a snapshot establishes readiness", async () => {

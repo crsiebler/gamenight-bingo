@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 
-import { LobbyCodeSchema } from "@gamenight-bingo/contracts";
+import { LobbyCodeSchema, parseRuntimeConfig } from "@gamenight-bingo/contracts";
 import { normalizeLobbyCodeEntry } from "@gamenight-bingo/domain";
 import { patternCatalog } from "@gamenight-bingo/patterns";
 
@@ -23,6 +23,14 @@ export default async function HomePage({ searchParams = Promise.resolve({}) }: H
   const normalizedCode =
     typeof codeParameter === "string" ? normalizeLobbyCodeEntry(codeParameter) : "";
   const initialLobbyCode = LobbyCodeSchema.safeParse(normalizedCode).success ? normalizedCode : "";
+  const { lobbyIdleTtlSeconds, playerReconnectWindowSeconds } = parseRuntimeConfig(process.env);
 
-  return <PublicLandingPage initialLobbyCode={initialLobbyCode} patterns={patternOptions} />;
+  return (
+    <PublicLandingPage
+      initialLobbyCode={initialLobbyCode}
+      lobbyIdleTtlSeconds={lobbyIdleTtlSeconds}
+      patterns={patternOptions}
+      playerReconnectWindowSeconds={playerReconnectWindowSeconds}
+    />
+  );
 }

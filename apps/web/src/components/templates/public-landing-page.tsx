@@ -9,8 +9,30 @@ type PatternOption = {
 
 type PublicLandingPageProps = {
   initialLobbyCode?: string;
+  lobbyIdleTtlSeconds?: number;
   patterns: readonly PatternOption[];
+  playerReconnectWindowSeconds?: number;
 };
+
+const SMALL_NUMBER_WORDS = [
+  "zero",
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+  "ten",
+] as const;
+
+function durationLabel(seconds: number): string {
+  const [count, unit] = seconds % 60 === 0 ? [seconds / 60, "minute"] : [seconds, "second"];
+  const countLabel = SMALL_NUMBER_WORDS[count] ?? String(count);
+  return `${countLabel} ${unit}${count === 1 ? "" : "s"}`;
+}
 
 export const HOW_TO_STEPS = [
   {
@@ -46,7 +68,12 @@ const publicSchema = {
   ],
 } as const;
 
-export function PublicLandingPage({ initialLobbyCode, patterns }: PublicLandingPageProps) {
+export function PublicLandingPage({
+  initialLobbyCode,
+  lobbyIdleTtlSeconds = 1_800,
+  patterns,
+  playerReconnectWindowSeconds = 120,
+}: PublicLandingPageProps) {
   return (
     <main>
       <JsonLd schema={publicSchema} />
@@ -99,9 +126,23 @@ export function PublicLandingPage({ initialLobbyCode, patterns }: PublicLandingP
               </li>
             ))}
           </ol>
-          <aside className="privacy-note">
-            <strong>Made for private game nights.</strong>
-            <p>No account, public player directory, chat, or third-party analytics.</p>
+          <aside aria-labelledby="privacy-heading" className="privacy-note">
+            <h3 id="privacy-heading">Privacy and your data</h3>
+            <p>
+              A necessary, lobby-scoped cookie recognizes your participant session on this device.
+              The server stores only its cryptographic hash.
+            </p>
+            <p>
+              After you disconnect, the same device can rejoin your participant slot for{" "}
+              {durationLabel(playerReconnectWindowSeconds)}. We do not fingerprint your device or
+              collect unnecessary device attributes, and no third-party analytics run on private
+              lobby routes.
+            </p>
+            <p>
+              Eligible inactive lobbies are deleted after {durationLabel(lobbyIdleTtlSeconds)},
+              together with their server-side game and participant-session data. Active games with
+              calls or connections are protected from inactivity deletion.
+            </p>
           </aside>
         </div>
         <div id="create-lobby">

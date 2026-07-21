@@ -58,6 +58,51 @@ test.describe("versioned private API routing", () => {
     );
   });
 
+  test("keeps private lobby browser traffic first-party and analytics-free", async ({ page }) => {
+    const requestUrls: string[] = [];
+    page.on("request", (request) => requestUrls.push(request.url()));
+    await page.route("**/api/v1/lobbies/ABC234/snapshot", async (route) => {
+      await route.fulfill({
+        body: JSON.stringify({
+          schemaVersion: 1,
+          type: "error",
+          code: "NOT_FOUND",
+          message: "The requested resource was not found.",
+          commandId: null,
+          occurredAt: "2026-07-21T00:00:00.000Z",
+          retryable: false,
+          issues: [],
+        }),
+        contentType: "application/json",
+        status: 404,
+      });
+    });
+
+    await page.goto("/lobbies/ABC234");
+    await expect(page.getByRole("heading", { name: "This lobby has expired" })).toBeFocused();
+
+    const pageOrigin = new URL(page.url()).origin;
+    expect([...new Set(requestUrls.map((url) => new URL(url).origin))]).toEqual([pageOrigin]);
+    expect(requestUrls).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/analytics|beacon|collect|pixel|telemetry/i)]),
+    );
+    expect(
+      await page
+        .locator("script[src], iframe")
+        .evaluateAll(
+          (elements, origin) =>
+            elements
+              .map((element) =>
+                element instanceof HTMLIFrameElement
+                  ? element.src
+                  : (element as HTMLScriptElement).src,
+              )
+              .filter((url) => url.length > 0 && new URL(url).origin !== origin),
+          pageOrigin,
+        ),
+    ).toEqual([]);
+  });
+
   test("preserves stable no-store errors across the Next routing boundary", async ({ request }) => {
     for (const requestCase of [
       { method: "get", path: "/api/v1/lobbies/ABC234" },

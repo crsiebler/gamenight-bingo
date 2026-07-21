@@ -518,6 +518,7 @@ export function PrivateLobbyPage({
     runner: ReturnType<NonNullable<PrivateLobbyPageProps["createMarkCommandSession"]>>;
   } | null>(null);
   const loadGenerationRef = useRef(0);
+  const terminalDeliveryClosedRef = useRef(false);
   const refreshPendingRef = useRef(false);
   const refreshPromiseRef = useRef<Promise<Snapshot | null> | null>(null);
   const pendingCommandRef = useRef<PendingCommandReconciliation | null>(null);
@@ -537,6 +538,8 @@ export function PrivateLobbyPage({
   const hostControlsRef = useRef<HTMLElement>(null);
   const cardPanelRef = useRef<HTMLElement>(null);
   const hostControlsHeadingRef = useRef<HTMLHeadingElement>(null);
+  const terminalHeadingRef = useRef<HTMLHeadingElement>(null);
+  const terminalFocusedRef = useRef(false);
   const callNextButtonRef = useRef<HTMLButtonElement>(null);
   const endRoundButtonRef = useRef<HTMLButtonElement>(null);
   const endRoundCancelRef = useRef<HTMLButtonElement>(null);
@@ -572,6 +575,10 @@ export function PrivateLobbyPage({
     "host-controls" | "live-game" | "outcome" | "setup" | null
   >(null);
   const [clockNow, setClockNow] = useState(() => Date.now());
+  const terminalUnavailable =
+    snapshot === null &&
+    !snapshotPending &&
+    (snapshotErrorCode === "NOT_FOUND" || snapshotErrorCode === "LOBBY_EXPIRED");
 
   function setSetupDraftDirty(dirty: boolean) {
     setupDirtyRef.current = dirty;
@@ -842,9 +849,11 @@ export function PrivateLobbyPage({
     message = "Loading private lobby...",
     options: { mandatory?: boolean; syncSetup?: boolean } = {},
   ): Promise<Snapshot | null> {
+    if (terminalDeliveryClosedRef.current) return null;
     if (refreshPendingRef.current) {
       if (options.mandatory !== true) return refreshPromiseRef.current;
       await refreshPromiseRef.current;
+      if (terminalDeliveryClosedRef.current) return null;
     }
 
     const refresh = (async () => {
@@ -854,7 +863,9 @@ export function PrivateLobbyPage({
       setSnapshotMessage(message);
       try {
         const received = await loadSnapshot(code);
-        if (loadGenerationRef.current !== generation) return null;
+        if (loadGenerationRef.current !== generation || terminalDeliveryClosedRef.current) {
+          return null;
+        }
         const liveSnapshot = snapshotRef.current;
         const stale =
           liveSnapshot !== null &&
@@ -900,6 +911,9 @@ export function PrivateLobbyPage({
             flowError.code === "NOT_FOUND" ||
             flowError.code === "LOBBY_EXPIRED")
         ) {
+          terminalDeliveryClosedRef.current = true;
+          liveConnectionRef.current?.close();
+          liveConnectionRef.current = null;
           setSnapshot(null);
           snapshotRef.current = null;
         }
@@ -916,6 +930,11 @@ export function PrivateLobbyPage({
     refreshPromiseRef.current = refresh;
     return refresh;
   }
+
+  useEffect(() => {
+    terminalDeliveryClosedRef.current = false;
+    terminalFocusedRef.current = false;
+  }, [code]);
 
   useEffect(() => {
     void refreshSnapshot("Loading private lobby...", { syncSetup: true });
@@ -952,22 +971,34 @@ export function PrivateLobbyPage({
       liveConnectionRef.current?.requestResync(lastEventSequence);
     };
     const handlers: PrivateLobbyRealtimeHandlers = {
-      onConnectionState(state) {
+      onConnectionState(state, errorCode) {
+        if (terminalDeliveryClosedRef.current) return;
         outcomeAnnouncementIdentityRef.current = null;
         setOutcomeAnnouncement("");
         if (state === "offline" || state === "reconnecting") recoveringRef.current = true;
         if (state === "expired") {
+          const unavailable = errorCode === "NOT_FOUND" || errorCode === "LOBBY_EXPIRED";
+          terminalDeliveryClosedRef.current = true;
+          loadGenerationRef.current += 1;
+          refreshPendingRef.current = false;
+          refreshPromiseRef.current = null;
+          liveConnectionRef.current?.close();
+          liveConnectionRef.current = null;
           snapshotRef.current = null;
           setSnapshot(null);
-          setSnapshotErrorCode("UNAUTHORIZED");
+          setSnapshotErrorCode(unavailable ? errorCode : "UNAUTHORIZED");
           setSnapshotErrorRetryable(false);
           setSnapshotMessage(
-            "Your private lobby session is not active on this device. Join or rejoin to continue.",
+            unavailable
+              ? "This lobby is unavailable or has expired."
+              : "Your private lobby session is not active on this device. Join or rejoin to continue.",
           );
+          setSnapshotPending(false);
         }
         transitionConnectionState(state);
       },
       onLobbyEvent(event) {
+        if (terminalDeliveryClosedRef.current) return;
         const current = snapshotRef.current;
         if (current === null) return;
         const baseline = current.lastEventSequence ?? 0;
@@ -1013,6 +1044,7 @@ export function PrivateLobbyPage({
         if (event.type === "co-winner-result") requestResync(event.eventSequence);
       },
       onPrivateEvent(event: ParticipantPrivateEvent) {
+        if (terminalDeliveryClosedRef.current) return;
         const current = snapshotRef.current;
         if (current === null) return;
         if (event.type === "near-win") {
@@ -1042,6 +1074,7 @@ export function PrivateLobbyPage({
         reconcilePendingState(next, current);
       },
       onSnapshot(next) {
+        if (terminalDeliveryClosedRef.current) return;
         const current = snapshotRef.current;
         if (current !== null && (next.lastEventSequence ?? 0) < (current.lastEventSequence ?? 0)) {
           requestResync(current.lastEventSequence);
@@ -1165,6 +1198,19 @@ export function PrivateLobbyPage({
     target?.focus();
     setCommandFocusTarget(null);
   }, [commandFocusTarget, snapshot?.round?.stage]);
+
+  useEffect(() => {
+    if (!terminalUnavailable) {
+      terminalFocusedRef.current = false;
+      return;
+    }
+    liveConnectionRef.current?.close();
+    liveConnectionRef.current = null;
+    if (!terminalFocusedRef.current) {
+      terminalFocusedRef.current = true;
+      terminalHeadingRef.current?.focus();
+    }
+  }, [terminalUnavailable]);
 
   const inviteUrl = resolvedOrigin
     ? (() => {
@@ -1473,6 +1519,26 @@ export function PrivateLobbyPage({
 
   if (snapshot === null) {
     const unavailable = snapshotErrorCode === "NOT_FOUND" || snapshotErrorCode === "LOBBY_EXPIRED";
+    if (terminalUnavailable) {
+      return (
+        <main className="private-lobby-shell">
+          <section aria-labelledby="expired-lobby-heading" className="private-state-card">
+            <p className="eyebrow">Private lobby closed</p>
+            <h1 id="expired-lobby-heading" ref={terminalHeadingRef} tabIndex={-1}>
+              This lobby has expired
+            </h1>
+            <p>
+              This private lobby is no longer available. Expired lobbies and their associated game
+              and session data cannot be restored.
+            </p>
+            <nav aria-label="Next steps" className="private-state-actions">
+              <LinkButton href="/#create-lobby">Create a new lobby</LinkButton>
+              <LinkButton href="/#join-lobby">Join another lobby</LinkButton>
+            </nav>
+          </section>
+        </main>
+      );
+    }
     return (
       <main aria-busy={snapshotPending} className="private-lobby-shell">
         <section className="private-state-card">

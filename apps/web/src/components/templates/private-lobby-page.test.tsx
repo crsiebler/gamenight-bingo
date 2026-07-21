@@ -4684,9 +4684,19 @@ describe("PrivateLobbyPage", () => {
       />,
     );
 
-    expect(await screen.findByText(/unavailable or has expired/i)).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "This lobby has expired" })).toBeVisible();
+    expect(screen.getByText(/game and session data cannot be restored/i)).toBeVisible();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-    expect(screen.getByRole("link", { name: "Return home" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("navigation", { name: "Next steps" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Create a new lobby" })).toHaveAttribute(
+      "href",
+      "/#create-lobby",
+    );
+    expect(screen.getByRole("link", { name: "Join another lobby" })).toHaveAttribute(
+      "href",
+      "/#join-lobby",
+    );
+    expect(unavailable.container).not.toHaveTextContent("ABC234");
     unavailable.unmount();
 
     render(
@@ -4709,6 +4719,150 @@ describe("PrivateLobbyPage", () => {
       "/?code=ABC234#join-lobby",
     );
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("moves focus to the terminal heading when an active lobby expires", async () => {
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(snapshotFor("host", { absentPlayerOverridden: true }))
+      .mockRejectedValueOnce(
+        new PrivateLobbyFlowError("The lobby has expired.", {
+          code: "LOBBY_EXPIRED",
+          retryable: false,
+        }),
+      );
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const refresh = await screen.findByRole("button", { name: "Refresh lobby" });
+    refresh.focus();
+    fireEvent.click(refresh);
+
+    const heading = await screen.findByRole("heading", { name: "This lobby has expired" });
+    await waitFor(() => expect(heading).toHaveFocus());
+    expect(screen.queryByRole("heading", { name: /lobby abc234/i })).toBeNull();
+    expect(screen.queryByRole("list", { name: /participants/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: /restore|rejoin/i })).toBeNull();
+  });
+
+  it("latches a definitive realtime expiry against queued snapshots", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const close = vi.fn();
+    const active = snapshotFor("host", { absentPlayerOverridden: true, round: "active" });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close, requestResync: vi.fn() };
+        }}
+        enableRealtime
+        loadSnapshot={async () => active}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: /lobby abc234/i });
+    act(() => {
+      const setConnectionState = handlers?.onConnectionState as
+        ((state: string, errorCode: string) => void) | undefined;
+      setConnectionState?.("expired", "LOBBY_EXPIRED");
+    });
+
+    const heading = await screen.findByRole("heading", { name: "This lobby has expired" });
+    expect(close).toHaveBeenCalledOnce();
+    act(() => handlers?.onSnapshot(active));
+    expect(heading).toHaveFocus();
+    expect(screen.getByRole("heading", { name: "This lobby has expired" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: /lobby abc234/i })).toBeNull();
+  });
+
+  it("latches realtime session expiry against queued realtime and HTTP snapshots", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const close = vi.fn();
+    const refresh = deferred<Snapshot>();
+    const active = snapshotFor("host", { absentPlayerOverridden: true, round: "active" });
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(active)
+      .mockReturnValueOnce(refresh.promise);
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close, requestResync: vi.fn() };
+        }}
+        enableRealtime
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: /lobby abc234/i });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh lobby" }));
+    await waitFor(() => expect(loadSnapshot).toHaveBeenCalledTimes(2));
+    act(() => handlers?.onConnectionState("expired", "UNAUTHORIZED"));
+
+    expect(await screen.findByText(/session is not active/i)).toBeVisible();
+    expect(close).toHaveBeenCalledOnce();
+    act(() => handlers?.onSnapshot(active));
+    await act(async () => refresh.resolve(active));
+    expect(screen.getByText(/session is not active/i)).toBeVisible();
+    expect(screen.queryByRole("heading", { name: /lobby abc234/i })).toBeNull();
+  });
+
+  it("does not start mandatory reconciliation after a waiting refresh observes expiry", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const close = vi.fn();
+    const manualRefresh = deferred<Snapshot>();
+    const active = snapshotFor("host", { absentPlayerOverridden: true, eventSequence: 1 });
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(active)
+      .mockReturnValueOnce(manualRefresh.promise)
+      .mockRejectedValueOnce(new Error("offline"));
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close, requestResync: vi.fn() };
+        }}
+        createCommandSession={() => ({ run: async () => activeLobbyAck(2) })}
+        enableRealtime
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: /lobby abc234/i });
+    act(() => handlers?.onSnapshot(active));
+    await screen.findByText("Connected", { selector: ".connection-state" });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh lobby" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start round" }));
+    await waitFor(() => expect(loadSnapshot).toHaveBeenCalledTimes(2));
+    await screen.findByText("Command committed. Refreshing the lobby...");
+    act(() => handlers?.onConnectionState("expired", "LOBBY_EXPIRED"));
+    await act(async () => manualRefresh.resolve(active));
+    await act(async () => Promise.resolve());
+
+    expect(await screen.findByRole("heading", { name: "This lobby has expired" })).toBeVisible();
+    expect(loadSnapshot).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it("offers retry when the strict snapshot error is retryable", async () => {

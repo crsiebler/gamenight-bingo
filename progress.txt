@@ -72,6 +72,7 @@ Next story: US-001
 - Outcome views derive complete winner names and window duration only from the authoritative snapshot plus authorized roster, keep the open co-winner window distinct from settled results, and bind transient live announcements to an exact round/pattern/window/result identity across HTTP and realtime snapshot acceptance so unrelated events preserve them, changed outcomes clear them, and reconnect snapshots restore visible results silently.
 - Long-lived browser realtime handlers read current readiness from refs rather than render-time closures; when outcome layout changes reading order, keep announcement nodes mounted and reorder only visible panels.
 - Responsive decorative wordmarks need browser-level bounding checks based on rendered content width, not only the grid item's box; reserve an explicit track plus readable separation at the breakpoint where multi-column layout begins.
+- Public privacy/lifecycle copy receives only allowlisted runtime duration values from the server entry point; definitive session/lobby errors latch all snapshot and realtime delivery closed, while an unavailable-lobby view must discard the old locator/private content, focus its terminal heading once, and link only to fresh create/join flows.
 
 Append-only iteration log
 -------------------------
@@ -5230,3 +5231,105 @@ Targeted re-review outcome for resumed US-051 at 2026-07-21 01:52:00 MST:
 - No in-scope critical, high, or medium findings remain; the review stabilization loop passed.
 - The only residual check gap is that Playwright-managed Chromium is not installed locally: its portable default configuration listed all four tests successfully, while the documented stable-Chrome override executed the browser suite with 2 passes and 2 database-backed skips.
 - US-051 is ready for its required post-review `prd.json` passing update and final consistency check.
+
+## 2026-07-21 02:10:15 MST - US-052
+- What was implemented
+  - Expanded the public privacy notice into a labeled landmark that accurately explains the necessary lobby-scoped same-device cookie, server-side hashing, no fingerprinting or unnecessary device attributes, no third-party analytics on private routes, the rejoin window, and inactive-lobby cascade deletion.
+  - Derived the visible rejoin and deletion durations from two allowlisted runtime values rather than hardcoded copy or the full runtime configuration.
+  - Added a terminal expired-lobby scene that removes all prior private content and the old lobby code, closes realtime delivery, focuses the terminal heading once, explains that game/session data cannot be restored, and offers only fresh create/join navigation.
+- Files changed: `apps/web/src/app/globals.css`, `apps/web/src/app/page.tsx`, `apps/web/src/components/templates/private-lobby-page.tsx`, `apps/web/src/components/templates/private-lobby-page.test.tsx`, `apps/web/src/components/templates/public-landing-page.tsx`, `apps/web/src/components/templates/public-landing-page.test.tsx`, `apps/web/src/lib/private-lobby-realtime.ts`, `apps/web/src/lib/private-lobby-realtime.test.ts`, `tests/e2e/playwright.smoke.spec.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-052 - Add privacy notice and expired state`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/components/templates/public-landing-page.test.tsx apps/web/src/components/templates/private-lobby-page.test.tsx` (expected fail before implementation with 4 missing privacy/terminal-state behaviors; pass after implementation with 105 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `bun run format:check` (fails only on pre-existing and browser-verification untracked report artifacts)
+  - Focused Prettier check for all six intended source/test files (pass)
+  - `bun run test` (pass before review with 627 tests; pass after review remediation with typecheck, 33 files passed, 1 database file skipped, 629 tests passed, and 135 database-backed tests skipped)
+  - `DATABASE_URL=<documented local default> bun run --cwd apps/web build` (pass)
+  - `PLAYWRIGHT_BROWSER_CHANNEL=chrome TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (pass before review with 4 tests; pass after remediation with 5 tests including production private-route analytics/network coverage)
+  - `git diff --check` (pass)
+  - Production dev-browser verification at desktop and 320 CSS pixels (pass; labeled privacy landmark, focused terminal heading, keyboard navigation, no old code, no external scripts/iframes, first-party-only requests, `no-store`, `noindex`, 44px actions, and no horizontal overflow)
+  - Lighthouse mobile snapshot (pass; accessibility, best practices, SEO, and agentic browsing all 100)
+- Implementation agents:
+  - Recommended: `security-engineer`, `accessibility-tester`
+  - Used: `security-engineer`, `accessibility-tester` for accurate lifecycle/cookie copy, terminal-state semantics, focus recovery, privacy pitfalls, and test/browser recommendations
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, `ui-designer`, and `ux-researcher`; targeted re-review planned for `code-reviewer` and `qa-expert`
+  - Findings: fixed exact realtime terminal-cause propagation, fail-closed terminal latching against queued deliveries, and production private-route analytics/network coverage; UI/UX review returned no findings
+- Decisions (why):
+  - Passed only rejoin and inactivity durations into the client template because the full runtime configuration can contain database/proxy secrets and the copy must remain accurate under approved overrides.
+  - Kept `UNAUTHORIZED` on the existing join/rejoin path because an inactive device session does not prove the lobby data was deleted; only definitive `NOT_FOUND`/`LOBBY_EXPIRED` responses show the terminal scene.
+  - Used heading focus instead of an alert for terminal entry because removing active controls otherwise drops focus to the document body, while a new assertive region would duplicate the same state change.
+- **Learnings for future iterations:**
+  - Lifecycle copy must describe the rejoin window as starting after disconnect and inactivity deletion as applying only to eligible inactive lobbies; it must not imply that every lobby or the browser cookie itself expires on those timers.
+  - Terminal private states should not retain locator-prefilled recovery URLs or stale lobby DOM because those affordances imply restoration and preserve unnecessary private context.
+- Known issues / follow-ups:
+  - The portable Playwright-managed Chromium binary is not installed locally; the first default run passed three request-only checks and failed only browser launch, while the documented stable-Chrome override passed all four checks.
+  - Pre-existing untracked browser/Lighthouse artifacts and the new unstaged US-052 verification screenshots/reports remain untouched and will not be staged.
+- Next iteration start:
+  - If review passes, implement US-053 theme moodboards and semantic tokens; otherwise resume any recorded blocking finding.
+---
+
+Initial review remediation for US-052 at 2026-07-21 02:25:41 MST:
+- `code-reviewer` and `qa-expert` produced three medium findings merged into two implementation roots plus one shared analytics-test root; `ui-designer` and `ux-researcher` returned empty finding lists after production browser inspection.
+- Added failing realtime adapter regressions proving terminal ticket/handshake/event errors lost their exact `UNAUTHORIZED`/`NOT_FOUND`/`LOBBY_EXPIRED` causes, then propagated the strict cause through the connection-state boundary.
+- Added a failing component regression proving a queued snapshot could restore active private content after realtime `LOBBY_EXPIRED`; definitive HTTP/realtime terminal outcomes now latch before rendering, close realtime immediately, invalidate in-flight refreshes, and ignore later lobby/private/snapshot callbacks.
+- Replaced the narrow component-subtree analytics assertion with a production Playwright check that records the private route's browser requests, enforces a first-party origin allowlist, rejects analytics/beacon/collection/telemetry endpoints, and rejects external scripts or iframes.
+- Renamed the direct duration-prop test to avoid overstating server-entry override coverage; the review's low request for a dedicated HomePage injection seam was not required because the server entry passes the parsed fields directly and the component behavior is already covered.
+- Post-fix checks: focused realtime/component suites pass 111 tests; the root suite passes typecheck with 629 tests and 135 database skips; typecheck, lint, intended-file formatting, production build, and diff checks pass; stable-Chrome Playwright passes all 5 tests with the approved local database.
+- Targeted re-review is limited to `code-reviewer` and `qa-expert` because only their correctness/test findings required substantive changes; UI/UX areas were unchanged after their empty reviews.
+
+Targeted re-review outcome for US-052 at 2026-07-21 02:29:04 MST:
+- `code-reviewer` returned an empty actionable finding list; `qa-expert` identified two remaining medium terminal-state race conditions.
+- Exact realtime `UNAUTHORIZED` retains the correct join/rejoin presentation but does not latch delivery closed, invalidate an in-flight HTTP refresh, or suppress a queued snapshot, so stale private content can reappear after the session is declared inactive.
+- A mandatory refresh waiting behind an existing refresh does not recheck the terminal latch before issuing another request; its later nonterminal error can overwrite the definitive expired state.
+- Per the one-targeted-re-review limit, no further substantive fixes or specialist review are permitted in this iteration. `US-052` remains `passes: false`, `prd.json` remains unchanged, and no commit was created.
+- Next iteration start: add failing component regressions for queued snapshot/delayed HTTP completion after `UNAUTHORIZED` and a waiting mandatory refresh after definitive expiry; latch all terminal delivery closed while preserving distinct presentation, recheck the terminal latch before/after refresh waits, rerun checks, and restart the complete staged review loop.
+
+## 2026-07-21 02:39:35 MST - US-052
+- What was implemented
+  - Resumed the blocked privacy/expired-state story with regressions for queued realtime and HTTP snapshots after definitive `UNAUTHORIZED`, and for mandatory command reconciliation waiting behind a refresh when the lobby expires.
+  - Unified definitive session and lobby outcomes behind a terminal delivery latch that closes realtime, invalidates in-flight refreshes, suppresses queued deliveries, and prevents a waiting mandatory refresh from issuing another request.
+  - Isolated the production analytics browser test from retained local database fixtures by fulfilling its snapshot request with the strict versioned `NOT_FOUND` contract while retaining separate live database route/header checks.
+- Files changed: `AGENTS.md`, `apps/web/src/app/globals.css`, `apps/web/src/app/page.tsx`, `apps/web/src/components/templates/private-lobby-page.tsx`, `apps/web/src/components/templates/private-lobby-page.test.tsx`, `apps/web/src/components/templates/public-landing-page.tsx`, `apps/web/src/components/templates/public-landing-page.test.tsx`, `apps/web/src/lib/private-lobby-realtime.ts`, `apps/web/src/lib/private-lobby-realtime.test.ts`, `tests/e2e/playwright.smoke.spec.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-052 - Add privacy notice and expired state`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/components/templates/private-lobby-page.test.tsx -t "latches realtime session expiry|does not start mandatory reconciliation"` (expected fail first with both terminal races; pass after implementation with 2 tests)
+  - `bunx vitest run apps/web/src/components/templates/public-landing-page.test.tsx apps/web/src/components/templates/private-lobby-page.test.tsx apps/web/src/lib/private-lobby-realtime.test.ts` (pass; 119 tests)
+  - `bun run test` (pass; typecheck, 33 files passed, 1 database file skipped, 631 tests passed, and 135 database-backed tests skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `bun run format:check` (fails only for pre-existing untracked Lighthouse/Playwright artifacts; no intended story file failed)
+  - Focused Prettier check for all intended source/test files (pass)
+  - `DATABASE_URL=<documented local default> bun run --cwd apps/web build` (pass)
+  - `PLAYWRIGHT_BROWSER_CHANNEL=chrome TEST_DATABASE_URL=<approved local Compose database> DATABASE_URL=<approved local Compose database> bun run test:e2e` (initial analytics test failed because retained database state returned an unrelated generic error; pass after isolating the strict snapshot response with all 5 tests)
+  - `git diff --check && git diff --cached --check` (pass)
+  - Production dev-browser verification at 320 CSS pixels (pass; concise labeled privacy landmark, exact configured durations, focused expired heading, no visible old locator, 44px fresh-navigation actions, no horizontal overflow, no external scripts/iframes, and no console warnings/errors)
+- Implementation agents:
+  - Recommended: `security-engineer`, `accessibility-tester`
+  - Used: skipped in this resumed iteration because both advisers were already used for US-052 and the remaining work was bounded by two concrete prior review findings
+- Specialist review:
+  - Agents used: fresh `code-reviewer`, `qa-expert`, and `security-engineer` review of the complete staged high-risk candidate
+  - Findings: none; all three specialists returned empty actionable finding lists
+- Decisions (why):
+  - Latched `UNAUTHORIZED`, `NOT_FOUND`, and `LOBBY_EXPIRED` equally for delivery safety while preserving distinct recovery scenes because an inactive session does not prove lobby deletion.
+  - Rechecked the latch both before refresh work and after awaiting an existing request because either boundary can observe a definitive terminal transition.
+  - Kept the analytics browser test deterministic at its HTTP dependency seam because live private routing and cache behavior remain covered by adjacent database-backed requests, while retained local lobby data must not choose this test's rendered state.
+- **Learnings for future iterations:**
+  - Terminal delivery safety and terminal presentation are separate concerns: every definitive identity/lobby terminal outcome closes authority input, but only `NOT_FOUND` and `LOBBY_EXPIRED` show irreversible lobby deletion.
+  - A mandatory refresh queued behind another refresh must recheck terminal state after the wait before issuing network work; generation checks after a request are too late to prevent terminal-state overwrite.
+- Known issues / follow-ups:
+  - Database-backed Vitest tests remain skipped by the generic root command without `TEST_DATABASE_URL`; the approved local database-backed Playwright suite passed.
+  - Pre-existing untracked browser/Lighthouse artifacts remain untouched and unstaged.
+- Next iteration start:
+  - Mark US-052 complete, then implement US-053 theme moodboards and semantic tokens.
+---
+
+Fresh review outcome for resumed US-052 at 2026-07-21 02:44:50 MST:
+- `code-reviewer`, `qa-expert`, and `security-engineer` returned empty actionable finding lists against the complete staged candidate.
+- No in-scope critical, high, or medium findings remain; the review stabilization loop passed without remediation or targeted re-review.
+- Residual risk is limited to database-backed Vitest cases skipped by the generic root command and analytics coverage using the deterministic terminal private scene. Database persistence/deletion logic was unchanged, adjacent live database route checks passed, and the approved database-backed Playwright suite passed all 5 tests.
+- US-052 is ready for its required post-review `prd.json` passing update and final consistency check.

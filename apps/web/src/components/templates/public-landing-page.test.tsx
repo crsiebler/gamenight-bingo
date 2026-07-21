@@ -19,6 +19,38 @@ describe("PublicLandingPage", () => {
     expect(metadata.description).toMatch(/private 75-ball bingo/i);
   });
 
+  it("explains the necessary same-device cookie and data lifecycle", () => {
+    render(
+      <PublicLandingPage
+        lobbyIdleTtlSeconds={1_800}
+        patterns={patterns}
+        playerReconnectWindowSeconds={120}
+      />,
+    );
+
+    const notice = screen.getByRole("complementary", { name: "Privacy and your data" });
+    expect(notice).toHaveTextContent(/necessary.*lobby-scoped cookie/i);
+    expect(notice).toHaveTextContent(/same device.*two minutes/i);
+    expect(notice).toHaveTextContent(/do not fingerprint.*unnecessary device attributes/i);
+    expect(notice).toHaveTextContent(/no third-party analytics.*private lobby routes/i);
+    expect(notice).toHaveTextContent(/inactive.*30 minutes/i);
+    expect(notice).toHaveTextContent(/game and participant-session data/i);
+  });
+
+  it("formats configured privacy durations", () => {
+    render(
+      <PublicLandingPage
+        lobbyIdleTtlSeconds={3_600}
+        patterns={patterns}
+        playerReconnectWindowSeconds={180}
+      />,
+    );
+
+    const notice = screen.getByRole("complementary", { name: "Privacy and your data" });
+    expect(notice).toHaveTextContent(/three minutes/i);
+    expect(notice).toHaveTextContent(/60 minutes/i);
+  });
+
   it("prefills an invite code without treating it as participant identity", () => {
     render(<PublicLandingPage initialLobbyCode="abc234" patterns={patterns} />);
 
