@@ -87,6 +87,7 @@ Next story: US-001
 - Single-instance performance evidence uses a fresh empty migrated database, derives the fixed 100-lobby/25-participant profile from runtime defaults, staggers lobby calls at the fastest supported automatic cadence, validates exact per-client events and actor snapshots, and writes ignored percentile evidence under `test-results`; never share that retained database with Vitest or browser suites.
 - Keep `/healthz` independent of PostgreSQL and implement `/readyz` with a bounded, coalesced, briefly cached database probe that retains ownership of timed-out work until it settles; derive database-dependent API handlers lazily so readiness can observe startup rejection without creating an unhandled secondary promise, and cache the operational logger with the global database/readiness state so retry and command contexts remain aligned across module reevaluation. Structured operational diagnostics use typed allowlisted scalar records, hash all client-controlled identifiers plus lobby/participant correlations, propagate hashed command context to command-driven transaction retries, log only fresh sequenced deliveries rather than exact echoes, adapt committed acknowledgements at the wire boundary, record terminal disconnect-pause failures, permanently drop output after an asynchronous stream error, and never serialize requests, commands, events, errors, snapshots, cards, credentials, or future draw data.
 - Full-runtime restart tests spawn the production game-server entry point against a fresh, empty, migrated nonproduction database; sharing the normal serialized `TEST_DATABASE_URL` lets legitimate persisted leases from earlier tests become unrelated process-local startup work.
+- Final manual acceptance starts only after command-level prerequisite rows pass; implementation agents leave every acceptance item and decision unchecked, while the product owner records native browser/device/accessibility/security evidence and the final decision.
 
 Append-only iteration log
 -------------------------
@@ -6301,3 +6302,58 @@ Targeted re-review outcome for resumed US-062 at 2026-07-21 20:25 MST:
 - Reachable paused/result histories, pre-connection fixture validation, complete historical-event suppression, fresh-ticket reconnects, process replacement, snapshot exactness/privacy, and bounded cleanup are covered.
 - Residual risk is limited to browser E2E being unavailable because the configured local Playwright Chromium binary is not installed; no UI files changed in this story.
 - No in-scope critical, high, or medium findings remain. US-062 can be marked passing and committed after the final consistency check.
+
+## 2026-07-21 20:35:27 MST - US-063
+- What was implemented
+  - Added an unchecked, evidence-oriented product-owner manual acceptance checklist covering the complete MVP functional, lifecycle, restart, browser, accessibility, theme, audio, contrast, motion, and asset-failure matrix.
+  - Added a command-level automated prerequisite gate with isolated database requirements, explicit handling for intentional gated test cases, and links to the canonical browser matrix instead of duplicating its platform policy.
+  - Linked the handoff from the README and explicitly reserved every checklist item and the final approval decision for the product owner.
+- Files changed: `docs/manual-acceptance-checklist.md`, `README.md`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-063 - Prepare final manual acceptance handoff`
+- Auto approval: `enabled`
+- Checks:
+  - `ruby -e '<manual acceptance coverage validation>'` (pass; every required scenario, interval, theme, and unchecked owner decision is present)
+  - `ruby -e '<local Markdown link validation>'` (pass)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `bun run test` (pass; 41 files and 736 tests, with 1 file and 138 environment-gated tests skipped as configured)
+  - `bun install --frozen-lockfile` (pass; 397 installs checked with no changes)
+  - `PLAYWRIGHT_BROWSER_CHANNEL=chrome bun run test:e2e` (pass; 4 database-independent stable-Chrome tests and 6 expected database-gated skips)
+  - Dev-browser verification at desktop and 390x844 mobile touch viewports (pass; create/join landmarks, all 11 themes, all five automatic intervals, no console warnings/errors, and document request 200)
+  - `bun run format:check` (fails only on 44 unrelated pre-existing untracked `.playwright-mcp` artifacts)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` plus explicit new-checklist formatting (pass)
+  - `bun audit --production` (non-gating advisory scan; no critical findings, 2 high and 3 moderate transitive advisories recorded for product/security triage)
+- Implementation agents:
+  - Recommended: `test-automator`, `accessibility-tester`
+  - Used: `accessibility-tester` for checklist structure, assistive-technology risks, native-browser boundaries, privacy-safe evidence, and validation guidance; skipped a second implementation agent because the standard-mode budget allowed one useful adviser for this documentation story
+- Specialist review:
+  - Agents used: `code-reviewer` and documentation-relevant `documentation-engineer`; targeted re-review by `documentation-engineer`
+  - Findings: corrected an unobservable private draw-order check, aligned native mobile options with the canonical matrix, and added an auditable severity/disposition record for current dependency advisories; targeted re-review returned no actionable findings
+- Decisions (why):
+  - Kept final acceptance as an unchecked product-owner record because implementation agents can verify the handoff structure and rendered app but cannot self-approve the MVP.
+  - Linked to the canonical browser matrix rather than copying its project/native-device rules because one release target source avoids drift.
+  - Used documentation completeness, link, formatting, browser, and repository checks instead of adding a unit test that would only assert Markdown source text.
+  - Kept the advisory scan outside the command-level pass table because it currently exits nonzero for noncritical transitive findings and is not a repository quality script; the checklist still requires current advisory review and blocks any critical finding.
+- **Learnings for future iterations:**
+  - A passing command can contain intentional environment-gated cases only when a dedicated command or native manual row covers them; an entirely skipped prerequisite row cannot satisfy handoff.
+  - Browser/device evidence must distinguish Playwright emulation from native Safari, iOS Safari, and Android Chrome, and the Secure cookie must remain unchanged for native HTTPS acceptance.
+- Known issues / follow-ups:
+  - The product owner has not performed or approved the manual checklist; every acceptance item and the final decision intentionally remain unchecked.
+  - The current advisory feed reports high transitive findings in `fast-uri` and `sharp` plus moderate findings in `@hono/node-server` and PostCSS; product/security triage is required before final acceptance, with any critical finding blocking release.
+  - Root formatting remains blocked only by unrelated untracked `.playwright-mcp` artifacts; all tracked files and the new checklist pass Prettier.
+  - Database-backed browser, restart, performance, and native-device commands are recorded prerequisites for the product owner/release owner and were not rerun by this documentation-only iteration.
+- Next iteration start:
+  - Product owner runs and records every automated prerequisite and unchecked manual scenario, then records the final acceptance decision; no further Ralph implementation story remains.
+---
+
+Initial review remediation for US-063 at 2026-07-21 20:35 MST:
+- `documentation-engineer` identified three blocking medium handoff issues: a manual check attempted to observe private future draw order, native mobile coverage was narrower than the canonical device-service policy, and advisory review lacked a durable result/disposition record. `code-reviewer` found no blocking issue.
+- Replaced private draw-order observation with visible continuation/no-reset/no-repeat behavior, allowed physical devices or approved native device services, and added a separate product/security advisory record whose disposition semantics do not misrepresent a nonzero audit exit as a failed command gate.
+- Discarded the low staged-file-list finding because Ralph requires `prd.json` to join the final staged candidate only after review passes; the progress entry records the intended final story file set.
+- Post-fix documentation coverage, local-link, focused Prettier, and staged/unstaged diff checks pass; targeted `documentation-engineer` re-review is pending.
+
+Targeted re-review outcome for US-063 at 2026-07-21 20:35 MST:
+- `documentation-engineer` returned an empty actionable finding list against the complete revised staged diff.
+- Observable continuation/no-repeat checks, physical-or-native-device-service coverage, and the separate severity/disposition advisory record resolve all initial blocking findings.
+- Residual work is intentionally product-owner-owned manual/native-device acceptance plus product/security disposition of the current noncritical dependency advisories.
+- No in-scope critical, high, or medium findings remain; US-063 can be marked passing and committed after the final consistency check.

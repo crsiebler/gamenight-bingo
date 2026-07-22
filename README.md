@@ -413,6 +413,11 @@ own fresh, empty, migrated nonproduction database because the game-server entry
 point recovers every persisted process-local lease. Never run migration or
 integration-test commands against production.
 
+After every automated prerequisite passes, give the unchecked
+[manual acceptance checklist](docs/manual-acceptance-checklist.md) to the product
+owner. The product owner records browser/device evidence and the final decision;
+implementation agents do not self-approve the MVP.
+
 ## Contributing
 
 - Read the [product requirements](tasks/prd-private-realtime-bingo.md) and root
