@@ -326,6 +326,27 @@ one command in flight. If a command, heartbeat, resync, or outbound delivery
 finds that the persisted session is no longer active, the authority disconnects
 that socket before it can remain subscribed to private rooms.
 
+### Health And Diagnostics
+
+Both the web process and game server expose `GET`/`HEAD` `/healthz` for process
+liveness and `/readyz` for PostgreSQL readiness. Liveness does not query the
+database. Readiness uses a one-second, coalesced and briefly cached database
+probe; it returns `200` with `postgresql: "up"` or `503` with
+`postgresql: "down"`. Responses are fixed, non-cacheable JSON and never include
+connection strings, hosts, database errors, application counts, or private game
+state. Other methods return `405`, and query-bearing health URLs return `404`.
+Hosted ingress should expose these unauthenticated probe paths only to the load
+balancer or monitoring network.
+
+Application diagnostics are JSON Lines written to standard output. Allowlisted
+records correlate committed/rejected commands, active-lobby event sequences,
+Serializable transaction retries, disconnect-pause generations, and restart
+restoration summaries. Lobby and participant correlations are truncated SHA-256
+digests. Logs never serialize requests, command payloads, errors, snapshots,
+cards, marks, future draw positions, cookies, session credentials, realtime
+tickets, usernames, addresses, or user agents. Logging failures do not change
+authoritative game behavior.
+
 ## Privacy And Security
 
 - Lobby codes locate lobbies but do not authorize identity or host actions.

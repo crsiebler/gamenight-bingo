@@ -1,17 +1,14 @@
 import { randomBytes, randomUUID } from "node:crypto";
 
-import {
-  ActiveLobbyEventSchema,
-  CONTRACT_SCHEMA_VERSION,
-  CommandAckSchema,
-  parseRuntimeConfig,
-} from "@gamenight-bingo/contracts";
+import { ActiveLobbyEventSchema, parseRuntimeConfig } from "@gamenight-bingo/contracts";
 import {
   connectDatabase,
+  createReadinessProbe,
   type ActiveLobbyEventSubscriber,
   type ActiveLobbyEventSubscription,
   type ExpireInactiveLobbiesInput,
   type LobbyStateRepository,
+  type OperationalLogger,
 } from "@gamenight-bingo/database";
 import { patternCatalog } from "@gamenight-bingo/patterns";
 
@@ -269,10 +266,14 @@ const defaultGameServerRuntimeDependencies: GameServerRuntimeDependencies = {
 export async function startGameServerRuntime(
   environment: Readonly<Record<string, string | undefined>>,
   dependencies: GameServerRuntimeDependencies = defaultGameServerRuntimeDependencies,
+  operationalLogger?: OperationalLogger,
 ): Promise<RunningGameServer> {
   const runtimeConfiguration = parseRuntimeConfig(environment);
   const configuration = parseGameServerConfiguration(environment);
   const database = await dependencies.connectDatabase(configuration.databaseUrl, {
+    ...(operationalLogger === undefined
+      ? {}
+      : { transactionRetry: { observer: (event) => operationalLogger.transactionRetry(event) } }),
     roundCommands: {
       patterns: patternCatalog,
       nearWinFeedbackEnabled: true,
@@ -290,6 +291,11 @@ export async function startGameServerRuntime(
     });
     initialPresenceGracePeriods = await database.lobbyStates.findRealtimePresenceGracePeriods();
   } catch (error) {
+    operationalLogger?.restartRestoration({
+      kind: "presence-grace",
+      count: 0,
+      outcome: "failed",
+    });
     await database.disconnect();
     throw error;
   }
@@ -298,25 +304,16 @@ export async function startGameServerRuntime(
     server = dependencies.createGameServer({
       allowedOrigin: configuration.allowedOrigin,
       clock: () => new Date(),
+      readinessCheck: createReadinessProbe(() => database.checkReadiness()),
+      ...(operationalLogger === undefined ? {} : { operationalLogger }),
       initialPresenceGracePeriods,
       ticketConsumer: database.lobbyStates,
       commandExecutor: {
-        execute: async ({ identity, command }) => {
-          const result = await database.roundCommands.executeAuthenticated({
+        execute: ({ identity, command }) =>
+          database.roundCommands.executeAuthenticated({
             ...identity,
             command,
-          });
-          if (!result.ok) return result;
-          return {
-            ...result,
-            acknowledgement: CommandAckSchema.parse({
-              schemaVersion: CONTRACT_SCHEMA_VERSION,
-              type: "ack",
-              ...result.acknowledgement,
-              occurredAt: result.acknowledgement.occurredAt.toISOString(),
-            }),
-          };
-        },
+          }),
       },
       snapshotProvider: {
         findAuthorizedSnapshot: (identity) =>

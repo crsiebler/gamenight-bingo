@@ -139,4 +139,31 @@ test.describe("versioned private API routing", () => {
       });
     }
   });
+
+  test("serves fixed health and PostgreSQL readiness through Next routing", async ({ request }) => {
+    const health = await request.get("/healthz");
+    const readiness = await request.get("/readyz");
+    const head = await request.head("/readyz");
+    const unsupported = await request.post("/healthz");
+    const query = await request.get("/healthz?detail=private");
+
+    expect(health.status()).toBe(200);
+    await expect(health.json()).resolves.toEqual({ status: "ok", service: "web" });
+    expect(readiness.status()).toBe(200);
+    await expect(readiness.json()).resolves.toEqual({
+      status: "ready",
+      service: "web",
+      dependencies: { postgresql: "up" },
+    });
+    expect(head.status()).toBe(200);
+    expect(await head.text()).toBe("");
+    expect(unsupported.status()).toBe(405);
+    expect(unsupported.headers()["allow"]).toBe("GET, HEAD");
+    expect(query.status()).toBe(404);
+    for (const response of [health, readiness, head, unsupported, query]) {
+      expect(response.headers()["cache-control"]).toBe("no-store");
+      expect(response.headers()["referrer-policy"]).toBe("no-referrer");
+      expect(response.headers()["x-content-type-options"]).toBe("nosniff");
+    }
+  });
 });

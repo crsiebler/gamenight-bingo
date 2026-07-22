@@ -16,6 +16,7 @@ import {
   connectDatabase,
   type CoWinnerSettlementLease,
   type NewActiveLobbyState,
+  type OperationalLogger,
 } from "@gamenight-bingo/database";
 import { patternCatalog } from "@gamenight-bingo/patterns";
 import { io as createClient, Manager, type Socket } from "socket.io-client";
@@ -752,6 +753,8 @@ interface HarnessOptions {
     deadline: Date;
   }) => Promise<"settled" | "stale" | "too-early">;
   readonly beforeListen?: (server: GameServer) => Promise<void>;
+  readonly readinessCheck?: () => Promise<boolean>;
+  readonly operationalLogger?: OperationalLogger;
   readonly limits?: {
     readonly connectionsPerMinute?: number;
     readonly commandsPerMinute?: number;
@@ -782,6 +785,10 @@ async function createHarness(options: HarnessOptions = {}) {
   const serverOptions = {
     allowedOrigin: ORIGIN,
     clock: options.clock ?? (() => new Date(NOW)),
+    readinessCheck: options.readinessCheck ?? (async () => true),
+    ...(options.operationalLogger === undefined
+      ? {}
+      : { operationalLogger: options.operationalLogger }),
     ...(options.initialPresenceGracePeriods === undefined
       ? {}
       : { initialPresenceGracePeriods: options.initialPresenceGracePeriods }),
@@ -2289,6 +2296,15 @@ describe("authenticated Socket.IO authority", () => {
   });
 
   test("does not start queued grace expiry after persistence fails", async () => {
+    const disconnectRecords: Parameters<OperationalLogger["disconnectPause"]>[0][] = [];
+    const logger: OperationalLogger = {
+      withCommandCorrelation: (_commandId, operation) => operation(),
+      command: () => {},
+      lobbyEvent: () => {},
+      transactionRetry: () => {},
+      disconnectPause: (record) => disconnectRecords.push(record),
+      restartRestoration: () => {},
+    };
     const releaseOthers = deferred();
     let rejectFirst!: (error: Error) => void;
     const firstAttempt = new Promise<"expired" | "stale" | "too-early">((_resolve, reject) => {
@@ -2306,6 +2322,7 @@ describe("authenticated Socket.IO authority", () => {
     try {
       const harness = await createHarness({
         initialPresenceGracePeriods: gracePeriods,
+        operationalLogger: logger,
         expirePresenceGrace: async () => {
           attempts += 1;
           if (attempts === 1) return firstAttempt;
@@ -2321,7 +2338,14 @@ describe("authenticated Socket.IO authority", () => {
       await expect(authorityFailure).resolves.toMatchObject({
         message: "Game server authority failed.",
       });
+      await vi.advanceTimersByTimeAsync(0);
       expect(attempts).toBe(8);
+      expect(disconnectRecords).toContainEqual({
+        lobbyId: gracePeriods[0]!.lobbyId,
+        participantId: gracePeriods[0]!.participantId,
+        presenceGeneration: gracePeriods[0]!.presenceGeneration,
+        outcome: "failed",
+      });
     } finally {
       releaseOthers.resolve();
       vi.useRealTimers();
@@ -2399,11 +2423,21 @@ describe("authenticated Socket.IO authority", () => {
     const disconnectStarted = deferred();
     const automaticStarted = deferred();
     const leaseReads: string[] = [];
+    const disconnectRecords: Parameters<OperationalLogger["disconnectPause"]>[0][] = [];
+    const logger: OperationalLogger = {
+      withCommandCorrelation: (_commandId, operation) => operation(),
+      command: () => {},
+      lobbyEvent: () => {},
+      transactionRetry: () => {},
+      disconnectPause: (record) => disconnectRecords.push(record),
+      restartRestoration: () => {},
+    };
 
     try {
       const harness = await createHarness({
         clock: () => new Date(NOW),
         tickets: new Map([[ticketHash(credential), identities.host]]),
+        operationalLogger: logger,
         findAutomaticCallLeases: async () => [lease],
         findAutomaticCallLease: async (lobbyId) => {
           leaseReads.push(lobbyId);
@@ -2435,6 +2469,14 @@ describe("authenticated Socket.IO authority", () => {
         "disconnect failure promise reactions",
       );
       expect(leaseReads).toEqual([]);
+      expect(disconnectRecords).toEqual([
+        {
+          lobbyId: identities.host.lobbyId,
+          participantId: identities.host.participantId,
+          presenceGeneration: 1,
+          outcome: "failed",
+        },
+      ]);
     } finally {
       disconnectResult.resolve(null);
       automaticResult.resolve("called");
@@ -3510,6 +3552,342 @@ describe("authenticated Socket.IO authority", () => {
     expect(await response.text()).not.toContain(privateMarker);
   });
 
+  test("serves liveness and bounded PostgreSQL readiness with fixed safe responses", async () => {
+    let ready = true;
+    let readinessChecks = 0;
+    let readinessFailure: Error | null = null;
+    const harness = await createHarness({
+      readinessCheck: async () => {
+        readinessChecks += 1;
+        if (readinessFailure !== null) throw readinessFailure;
+        return ready;
+      },
+    });
+
+    const health = await fetch(`${harness.url}/healthz`);
+    expect(health.status).toBe(200);
+    await expect(health.json()).resolves.toEqual({ status: "ok", service: "game-server" });
+    expect(readinessChecks).toBe(0);
+
+    const available = await fetch(`${harness.url}/readyz`);
+    expect(available.status).toBe(200);
+    await expect(available.json()).resolves.toEqual({
+      status: "ready",
+      service: "game-server",
+      dependencies: { postgresql: "up" },
+    });
+
+    ready = false;
+    const unavailable = await fetch(`${harness.url}/readyz`);
+    expect(unavailable.status).toBe(503);
+    await expect(unavailable.json()).resolves.toEqual({
+      status: "not_ready",
+      service: "game-server",
+      dependencies: { postgresql: "down" },
+    });
+    const privateMarker = "postgresql://user:password@private.example/bingo";
+    readinessFailure = new Error(privateMarker);
+    const rejected = await fetch(`${harness.url}/readyz`);
+    const rejectedBody = await rejected.text();
+    expect(rejected.status).toBe(503);
+    expect(JSON.parse(rejectedBody)).toEqual({
+      status: "not_ready",
+      service: "game-server",
+      dependencies: { postgresql: "down" },
+    });
+    expect(rejectedBody).not.toContain(privateMarker);
+    expect(readinessChecks).toBe(3);
+    expect(unavailable.headers.get("cache-control")).toBe("no-store");
+    expect(unavailable.headers.get("x-content-type-options")).toBe("nosniff");
+
+    const head = await fetch(`${harness.url}/readyz`, { method: "HEAD" });
+    const method = await fetch(`${harness.url}/healthz`, { method: "POST" });
+    const query = await fetch(`${harness.url}/healthz?detail=private`);
+    expect(head.status).toBe(503);
+    await expect(head.text()).resolves.toBe("");
+    expect(method.status).toBe(405);
+    expect(method.headers.get("allow")).toBe("GET, HEAD");
+    expect(query.status).toBe(404);
+  });
+
+  test("records allowlisted command, event, disconnect, and restoration correlations", async () => {
+    const commandRecords: Parameters<OperationalLogger["command"]>[0][] = [];
+    const eventRecords: Parameters<OperationalLogger["lobbyEvent"]>[0][] = [];
+    const disconnectRecords: Parameters<OperationalLogger["disconnectPause"]>[0][] = [];
+    const restorationRecords: Parameters<OperationalLogger["restartRestoration"]>[0][] = [];
+    const scheduled = deferred();
+    const logger: OperationalLogger = {
+      withCommandCorrelation: (_commandId, operation) => operation(),
+      command: (record) => commandRecords.push(record),
+      lobbyEvent: (record) => eventRecords.push(record),
+      transactionRetry: () => {},
+      disconnectPause: (record) => {
+        disconnectRecords.push(record);
+        if (record.outcome === "scheduled") scheduled.resolve();
+      },
+      restartRestoration: (record) => restorationRecords.push(record),
+    };
+    const credential = ticket(79);
+    const harness = await createHarness({
+      tickets: new Map([[ticketHash(credential), identities.host]]),
+      operationalLogger: logger,
+      initialPresenceGracePeriods: [
+        {
+          lobbyId: "lobby-restored",
+          participantId: "participant-restored",
+          presenceGeneration: 2,
+          graceEndsAt: new Date("2026-07-17T20:01:00.000Z"),
+        },
+      ],
+      findAutomaticCallLeases: async () => [
+        { lobbyId: "lobby-auto", roundId: "round-auto", deadline: new Date(LATER) },
+      ],
+      findCoWinnerSettlementLeases: async () => [],
+      execute: async (_identity, command) => ({
+        ok: true,
+        acknowledgement: CommandAckSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "ack",
+          commandId: command.commandId,
+          occurredAt: NOW,
+          idempotentReplay: false,
+          scope: "active-lobby",
+          eventSequence: stageEvent.eventSequence,
+        }),
+        activeLobbyEvent: stageEvent,
+        participantPrivateEvents: [],
+      }),
+      unregisterPresence: async (identity, presenceGeneration) => ({
+        lobbyId: identity.lobbyId,
+        participantId: identity.participantId,
+        presenceGeneration,
+        graceEndsAt: new Date("2026-07-17T20:01:00.000Z"),
+      }),
+    });
+    const client = await harness.connect(credential);
+    const acknowledgement = once<unknown>(client, "v1:ack");
+    client.emit("v1:command", {
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "start-round",
+      commandId: "command_observed",
+    });
+    await acknowledgement;
+    client.disconnect();
+    await waitForSignal(scheduled.promise, "disconnect pause diagnostic");
+
+    expect(commandRecords).toEqual([
+      {
+        commandId: "command_observed",
+        commandType: "start-round",
+        outcome: "committed",
+        idempotentReplay: false,
+        eventSequence: stageEvent.eventSequence,
+      },
+    ]);
+    expect(eventRecords).toEqual([
+      {
+        lobbyId: identities.host.lobbyId,
+        eventType: stageEvent.type,
+        eventSequence: stageEvent.eventSequence,
+        source: "command",
+      },
+    ]);
+    expect(disconnectRecords).toContainEqual({
+      lobbyId: identities.host.lobbyId,
+      participantId: identities.host.participantId,
+      presenceGeneration: 1,
+      outcome: "scheduled",
+    });
+    expect(restorationRecords).toEqual([
+      { kind: "presence-grace", count: 1, outcome: "completed" },
+      { kind: "automatic-call", count: 1, outcome: "completed" },
+      { kind: "co-winner-settlement", count: 0, outcome: "completed" },
+    ]);
+  });
+
+  test("keeps a committed command outcome when post-commit delivery fails", async () => {
+    const commandRecords: Parameters<OperationalLogger["command"]>[0][] = [];
+    const logger: OperationalLogger = {
+      withCommandCorrelation: (_commandId, operation) => operation(),
+      command: (record) => commandRecords.push(record),
+      lobbyEvent: () => {},
+      transactionRetry: () => {},
+      disconnectPause: () => {},
+      restartRestoration: () => {},
+    };
+    const credential = ticket(80);
+    const harness = await createHarness({
+      tickets: new Map([[ticketHash(credential), identities.host]]),
+      operationalLogger: logger,
+      execute: async (_identity, command) => ({
+        ok: true,
+        acknowledgement: CommandAckSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "ack",
+          commandId: command.commandId,
+          occurredAt: NOW,
+          idempotentReplay: false,
+          scope: "active-lobby",
+          eventSequence: stageEvent.eventSequence,
+        }),
+        activeLobbyEvent: ActiveLobbyEventSchema.parse({ ...stageEvent, occurredAt: LATER }),
+        participantPrivateEvents: [],
+      }),
+    });
+    await harness.server.publishLobbyEvent(identities.host.lobbyId, stageEvent);
+    const client = await harness.connect(credential);
+    const error = once<unknown>(client, "v1:error");
+
+    client.emit("v1:command", {
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "start-round",
+      commandId: "command_committed_delivery_failure",
+    });
+
+    await expect(error).resolves.toMatchObject({ code: "INTERNAL_ERROR" });
+    expect(commandRecords).toEqual([
+      {
+        commandId: "command_committed_delivery_failure",
+        commandType: "start-round",
+        outcome: "committed",
+        idempotentReplay: false,
+        eventSequence: stageEvent.eventSequence,
+      },
+    ]);
+  });
+
+  test("keeps a committed command outcome when committed result validation fails", async () => {
+    const commandRecords: Parameters<OperationalLogger["command"]>[0][] = [];
+    const logger: OperationalLogger = {
+      withCommandCorrelation: (_commandId, operation) => operation(),
+      command: (record) => commandRecords.push(record),
+      lobbyEvent: () => {},
+      transactionRetry: () => {},
+      disconnectPause: () => {},
+      restartRestoration: () => {},
+    };
+    const credential = ticket(81);
+    const harness = await createHarness({
+      tickets: new Map([[ticketHash(credential), identities.host]]),
+      operationalLogger: logger,
+      execute: async (_identity, command) => ({
+        ok: true,
+        acknowledgement: {
+          commandId: command.commandId,
+          occurredAt: new Date(Number.NaN),
+          idempotentReplay: false,
+          scope: "active-lobby",
+          eventSequence: stageEvent.eventSequence,
+        },
+        activeLobbyEvent: stageEvent,
+        participantPrivateEvents: [],
+      }),
+    });
+    const client = await harness.connect(credential);
+    const error = once<unknown>(client, "v1:error");
+
+    client.emit("v1:command", {
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "start-round",
+      commandId: "command_committed_invalid_result",
+    });
+
+    await expect(error).resolves.toMatchObject({ code: "INTERNAL_ERROR" });
+    expect(commandRecords).toEqual([
+      {
+        commandId: "command_committed_invalid_result",
+        commandType: "start-round",
+        outcome: "committed",
+      },
+    ]);
+  });
+
+  test("records a delivered lobby event before scheduler reconciliation fails", async () => {
+    const eventRecords: Parameters<OperationalLogger["lobbyEvent"]>[0][] = [];
+    const logger: OperationalLogger = {
+      withCommandCorrelation: (_commandId, operation) => operation(),
+      command: () => {},
+      lobbyEvent: (record) => eventRecords.push(record),
+      transactionRetry: () => {},
+      disconnectPause: () => {},
+      restartRestoration: () => {},
+    };
+    const credential = ticket(82);
+    const harness = await createHarness({
+      tickets: new Map([[ticketHash(credential), identities.host]]),
+      operationalLogger: logger,
+      findAutomaticCallLease: async () => Promise.reject(new Error("scheduler failed")),
+      execute: async (_identity, command) => ({
+        ok: true,
+        acknowledgement: CommandAckSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "ack",
+          commandId: command.commandId,
+          occurredAt: NOW,
+          idempotentReplay: false,
+          scope: "active-lobby",
+          eventSequence: stageEvent.eventSequence,
+        }),
+        activeLobbyEvent: stageEvent,
+        participantPrivateEvents: [],
+      }),
+    });
+    const client = await harness.connect(credential);
+    const event = once<unknown>(client, "v1:lobby-event");
+
+    client.emit("v1:command", {
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "start-round",
+      commandId: "command_event_before_reconciliation_failure",
+    });
+
+    await expect(event).resolves.toMatchObject({ eventSequence: stageEvent.eventSequence });
+    await expect(harness.server.failure).rejects.toThrow("Game server authority failed.");
+    expect(eventRecords).toEqual([
+      {
+        lobbyId: identities.host.lobbyId,
+        eventType: stageEvent.type,
+        eventSequence: stageEvent.eventSequence,
+        source: "command",
+      },
+    ]);
+  });
+
+  test.each([
+    ["automatic-call", "automatic"],
+    ["co-winner-settlement", "co-winner"],
+  ] as const)(
+    "records a failed %s restart restoration without error details",
+    async (kind, source) => {
+      const restorationRecords: Parameters<OperationalLogger["restartRestoration"]>[0][] = [];
+      const logger: OperationalLogger = {
+        withCommandCorrelation: (_commandId, operation) => operation(),
+        command: () => {},
+        lobbyEvent: () => {},
+        transactionRetry: () => {},
+        disconnectPause: () => {},
+        restartRestoration: (record) => restorationRecords.push(record),
+      };
+      const privateMarker = `private-${source}-restoration-detail`;
+
+      await expect(
+        createHarness({
+          operationalLogger: logger,
+          findAutomaticCallLeases: async () => {
+            if (source === "automatic") throw new Error(privateMarker);
+            return [];
+          },
+          findCoWinnerSettlementLeases: async () => {
+            if (source === "co-winner") throw new Error(privateMarker);
+            return [];
+          },
+        }),
+      ).rejects.toThrow(privateMarker);
+      expect(restorationRecords).toContainEqual({ kind, count: 0, outcome: "failed" });
+      expect(JSON.stringify(restorationRecords)).not.toContain(privateMarker);
+    },
+  );
+
   test("consumes a strict handshake ticket and stores only persisted identity", async () => {
     const credential = ticket(1);
     const harness = await createHarness({
@@ -4154,8 +4532,18 @@ describe("authenticated Socket.IO authority", () => {
   test("acknowledges a fresh command when its notification echo publishes first", async () => {
     const credential = ticket(43);
     const notificationPublisher = deferred<() => Promise<void>>();
+    const eventRecords: Parameters<OperationalLogger["lobbyEvent"]>[0][] = [];
+    const logger: OperationalLogger = {
+      withCommandCorrelation: (_commandId, operation) => operation(),
+      command: () => {},
+      lobbyEvent: (record) => eventRecords.push(record),
+      transactionRetry: () => {},
+      disconnectPause: () => {},
+      restartRestoration: () => {},
+    };
     const harness = await createHarness({
       tickets: new Map([[ticketHash(credential), identities.host]]),
+      operationalLogger: logger,
       execute: async (_identity, command) => {
         const publishNotificationEcho = await notificationPublisher.promise;
         await publishNotificationEcho();
@@ -4200,6 +4588,14 @@ describe("authenticated Socket.IO authority", () => {
     });
     expect(eventCount).toBe(1);
     expect(errors).toEqual([]);
+    expect(eventRecords).toEqual([
+      {
+        lobbyId: identities.host.lobbyId,
+        eventType: stageEvent.type,
+        eventSequence: stageEvent.eventSequence,
+        source: "authority",
+      },
+    ]);
   });
 
   test("rejects a fresh acknowledgement that has no committed event", async () => {
@@ -4620,8 +5016,18 @@ describe("authenticated Socket.IO authority", () => {
 
   test("accepts an exact delayed echo after a newer lobby sequence", async () => {
     const credential = ticket(45);
+    const eventRecords: Parameters<OperationalLogger["lobbyEvent"]>[0][] = [];
+    const logger: OperationalLogger = {
+      withCommandCorrelation: (_commandId, operation) => operation(),
+      command: () => {},
+      lobbyEvent: (record) => eventRecords.push(record),
+      transactionRetry: () => {},
+      disconnectPause: () => {},
+      restartRestoration: () => {},
+    };
     const harness = await createHarness({
       tickets: new Map([[ticketHash(credential), identities.host]]),
+      operationalLogger: logger,
     });
     const client = await harness.connect(credential);
     const receivedSequences = collectLobbySequences(client, 2);
@@ -4635,9 +5041,27 @@ describe("authenticated Socket.IO authority", () => {
     await harness.server.publishLobbyEvent(identities.host.lobbyId, secondEvent);
 
     await expect(
-      harness.server.publishLobbyEvent(identities.host.lobbyId, stageEvent),
+      harness.server.publishLobbyEventFromSource(
+        identities.host.lobbyId,
+        stageEvent.eventSequence,
+        async () => stageEvent,
+      ),
     ).resolves.toBeUndefined();
     await expect(receivedSequences).resolves.toEqual([1, 2]);
+    expect(eventRecords).toEqual([
+      {
+        lobbyId: identities.host.lobbyId,
+        eventType: stageEvent.type,
+        eventSequence: stageEvent.eventSequence,
+        source: "authority",
+      },
+      {
+        lobbyId: identities.host.lobbyId,
+        eventType: secondEvent.type,
+        eventSequence: secondEvent.eventSequence,
+        source: "authority",
+      },
+    ]);
   });
 
   test("keeps participant-private results out of lobby and other participant streams", async () => {

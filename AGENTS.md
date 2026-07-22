@@ -268,14 +268,19 @@ invalid counts, timestamps, or durations.
   database drain. Serialize asynchronous room authorization and delivery per
   lobby so committed sequences cannot arrive out of order; accept only bounded,
   canonical exact-sequence echoes as idempotent and reject same-sequence conflicts
-  or unknown stale deliveries.
+  or unknown stale deliveries. Record event delivery diagnostics only when the
+  queue publishes a fresh sequence, not when an exact direct or subscription echo
+  resolves idempotently.
 - Realtime command adapters revalidate the consumed-ticket identity inside the
   lobby-fenced transaction. Fresh lobby commits broadcast their validated event
   before the caller acknowledgement, replays acknowledge without rebroadcasting,
   and participant-private results use participant rooms without lobby sequences.
   Validate every successful acknowledgement's command ID against the incoming
-  mutation before emitting any result. Eventless idempotent replay tombstones may
-  return their original acknowledgement for either delivery scope.
+  mutation before emitting any result. Return durable command results to the
+  Socket.IO boundary before adapting acknowledgements to wire contracts so a
+  post-commit adaptation failure remains classified as committed. Eventless
+  idempotent replay tombstones may return their original acknowledgement for
+  either delivery scope.
 - Persist bounded participant-private event batches in delivery order before
   returning them to realtime adapters. Validate a complete batch before emitting
   it; fresh commits may reach the participant room, while replays return only to
@@ -501,6 +506,19 @@ then refactor while green.
   cards, or full private snapshots.
 - Keep errors, metrics, health output, and structured logs secret-free and
   privacy-safe.
+- Keep `/healthz` dependency-free and use bounded, coalesced PostgreSQL probes
+  for `/readyz`. Derive database-dependent request handlers lazily so readiness
+  can observe an initial connection rejection without creating a second
+  unobserved rejected promise. Cache the web operational logger with the global
+  database/readiness state so transaction retry observers and request command
+  contexts cannot diverge across module reevaluation. Operational logs use typed
+  allowlisted scalar records only, hash all client-controlled identifiers plus
+  lobby/participant correlations, propagate hashed command context to
+  command-driven transaction retries, and emit after authoritative outcomes;
+  record terminal disconnect-pause persistence failures, and permanently drop
+  diagnostics after an output-stream error so logging cannot terminate the
+  authority. Never serialize requests, commands, events, errors, snapshots, or
+  repository objects.
 - Mark private pages `noindex`, `nofollow`, and `noarchive`; keep third-party
   analytics and public structured data off private routes.
 - Generate a per-request CSP nonce in the Next proxy and pass the nonce-bearing

@@ -29,6 +29,7 @@ import type {
   AutomaticCallLease,
   CoWinnerSettlementExecutionResult,
   CoWinnerSettlementLease,
+  OperationalLogger,
 } from "@gamenight-bingo/database";
 
 import { consumeRealtimeTicketCredential, type RealtimeTicketConsumer } from "./realtime-ticket.js";
@@ -51,7 +52,15 @@ export type RealtimePresenceGraceExpiryResult = "expired" | "stale" | "too-early
 export type RealtimeCommandExecutionResult =
   | {
       readonly ok: true;
-      readonly acknowledgement: CommandAck;
+      readonly acknowledgement:
+        | CommandAck
+        | {
+            readonly commandId: string;
+            readonly scope: "active-lobby" | "participant-private";
+            readonly eventSequence: number | null;
+            readonly occurredAt: Date;
+            readonly idempotentReplay: boolean;
+          };
       readonly activeLobbyEvent: ActiveLobbyEvent | null;
       readonly participantPrivateEvents: readonly ParticipantPrivateEvent[];
     }
@@ -63,6 +72,8 @@ export type RealtimeCommandExecutionResult =
 export interface GameServerOptions {
   readonly allowedOrigin: string;
   readonly clock: () => Date;
+  readonly readinessCheck: () => Promise<boolean>;
+  readonly operationalLogger?: OperationalLogger;
   readonly ticketConsumer: RealtimeTicketConsumer;
   readonly commandExecutor: {
     execute(input: {
@@ -343,7 +354,36 @@ export function createGameServer(options: GameServerOptions): GameServer {
     maximumConnections,
     connectionsPerSession,
   );
-  const httpServer = createServer((_request, response) => {
+  const healthHeaders = {
+    "cache-control": "no-store",
+    "content-type": "application/json; charset=utf-8",
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+  };
+  const httpServer = createServer(async (request, response) => {
+    if (request.url === "/healthz" || request.url === "/readyz") {
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        response.writeHead(405, { ...healthHeaders, allow: "GET, HEAD" });
+        response.end(JSON.stringify({ status: "method_not_allowed" }));
+        return;
+      }
+      const ready =
+        request.url === "/healthz"
+          ? true
+          : !closed && !authorityFailed && (await options.readinessCheck().catch(() => false));
+      const body =
+        request.url === "/healthz"
+          ? { status: "ok", service: "game-server" }
+          : {
+              status: ready ? "ready" : "not_ready",
+              service: "game-server",
+              dependencies: { postgresql: ready ? "up" : "down" },
+            };
+      response.writeHead(ready ? 200 : 503, healthHeaders);
+      response.end(request.method === "HEAD" ? undefined : JSON.stringify(body));
+      return;
+    }
     response.writeHead(404, {
       "cache-control": "no-store",
       "content-type": "text/plain; charset=utf-8",
@@ -466,10 +506,22 @@ export function createGameServer(options: GameServerOptions): GameServer {
           .expireGracePeriod(grace)
           .catch((error: unknown) => {
             presenceGraceExpiryFailed = true;
+            options.operationalLogger?.disconnectPause({
+              lobbyId: grace.lobbyId,
+              participantId: grace.participantId,
+              presenceGeneration: grace.presenceGeneration,
+              outcome: "failed",
+            });
             reportAuthorityFailure();
             throw error;
           })
           .then((result) => {
+            options.operationalLogger?.disconnectPause({
+              lobbyId: grace.lobbyId,
+              participantId: grace.participantId,
+              presenceGeneration: grace.presenceGeneration,
+              outcome: result,
+            });
             if (result === "too-early" && !closed) schedulePresenceGrace(grace);
           })
           .catch((error: unknown) => {
@@ -631,10 +683,12 @@ export function createGameServer(options: GameServerOptions): GameServer {
       }
     }
   };
-  const recoverAutomaticCalls = async (): Promise<void> => {
+  const recoverAutomaticCalls = async (): Promise<number> => {
     automaticCallRecoveryInProgress = true;
+    let recoveredCount: number;
     try {
       const leases = await options.automaticCallLifecycle.findAutomaticCallLeases();
+      recoveredCount = leases.length;
       for (const lease of leases) {
         if (!automaticCallRecoveryDirtyLobbies.has(lease.lobbyId)) scheduleAutomaticCall(lease);
       }
@@ -644,6 +698,7 @@ export function createGameServer(options: GameServerOptions): GameServer {
     const dirtyLobbies = [...automaticCallRecoveryDirtyLobbies];
     automaticCallRecoveryDirtyLobbies.clear();
     await Promise.all(dirtyLobbies.map(reconcileAutomaticCall));
+    return recoveredCount;
   };
 
   const coWinnerSettlementKey = (lease: CoWinnerSettlementLease) =>
@@ -772,10 +827,12 @@ export function createGameServer(options: GameServerOptions): GameServer {
       }
     }
   };
-  const recoverCoWinnerSettlements = async (): Promise<void> => {
+  const recoverCoWinnerSettlements = async (): Promise<number> => {
     coWinnerSettlementRecoveryInProgress = true;
+    let recoveredCount: number;
     try {
       const leases = await options.coWinnerSettlementLifecycle.findCoWinnerSettlementLeases();
+      recoveredCount = leases.length;
       for (const lease of leases) {
         if (!coWinnerSettlementRecoveryDirtyLobbies.has(lease.lobbyId)) {
           scheduleCoWinnerSettlement(lease);
@@ -787,6 +844,7 @@ export function createGameServer(options: GameServerOptions): GameServer {
     const dirtyLobbies = [...coWinnerSettlementRecoveryDirtyLobbies];
     coWinnerSettlementRecoveryDirtyLobbies.clear();
     await Promise.all(dirtyLobbies.map(reconcileCoWinnerSettlement));
+    return recoveredCount;
   };
 
   io.use(async (socket, next) => {
@@ -900,7 +958,7 @@ export function createGameServer(options: GameServerOptions): GameServer {
   interface PendingLobbyDelivery {
     readonly sequence: number;
     readonly loadEvent: () => Promise<ActiveLobbyEvent>;
-    readonly resolve: () => void;
+    readonly resolve: (delivered: boolean) => void;
     readonly reject: (reason: unknown) => void;
   }
   interface LobbyDeliveryQueue {
@@ -963,7 +1021,7 @@ export function createGameServer(options: GameServerOptions): GameServer {
             );
             if (deliveredFingerprint === fingerprint) {
               rememberDeliveredLobbyEventFingerprint(lobbyId, delivery.sequence, fingerprint);
-              delivery.resolve();
+              delivery.resolve(false);
             } else if (deliveredFingerprint !== undefined) {
               delivery.reject(new RangeError("Lobby event sequence conflicts."));
             } else {
@@ -1017,7 +1075,7 @@ export function createGameServer(options: GameServerOptions): GameServer {
           };
           rememberDeliveredLobbyEvent(lobbyId, queue.lastDelivered);
           rememberDeliveredLobbyEventFingerprint(lobbyId, delivery.sequence, fingerprint);
-          delivery.resolve();
+          delivery.resolve(true);
         } catch (error) {
           delivery.reject(error);
         }
@@ -1036,7 +1094,7 @@ export function createGameServer(options: GameServerOptions): GameServer {
     lobbyId: string,
     sequence: number,
     loadEvent: () => Promise<ActiveLobbyEvent>,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     let queue = lobbyDeliveryQueues.get(lobbyId);
     if (queue === undefined) {
       queue = {
@@ -1047,7 +1105,7 @@ export function createGameServer(options: GameServerOptions): GameServer {
       };
       lobbyDeliveryQueues.set(lobbyId, queue);
     }
-    const delivery = new Promise<void>((resolve, reject) => {
+    const delivery = new Promise<boolean>((resolve, reject) => {
       queue.pending.push({ sequence, loadEvent, resolve, reject });
     });
     if (!queue.draining && !queue.scheduled) {
@@ -1057,9 +1115,21 @@ export function createGameServer(options: GameServerOptions): GameServer {
     return delivery;
   };
 
-  const emitLobbyEvent = async (lobbyId: string, event: ActiveLobbyEvent): Promise<void> => {
+  const emitLobbyEvent = async (
+    lobbyId: string,
+    event: ActiveLobbyEvent,
+    source?: "command" | "authority",
+  ): Promise<void> => {
     const parsed = ActiveLobbyEventSchema.parse(event);
-    await enqueueLobbyDelivery(lobbyId, parsed.eventSequence, async () => parsed);
+    const delivered = await enqueueLobbyDelivery(lobbyId, parsed.eventSequence, async () => parsed);
+    if (delivered && source !== undefined) {
+      options.operationalLogger?.lobbyEvent({
+        lobbyId,
+        eventType: parsed.type,
+        eventSequence: parsed.eventSequence,
+        source,
+      });
+    }
     await Promise.all([reconcileAutomaticCall(lobbyId), reconcileCoWinnerSettlement(lobbyId)]);
   };
 
@@ -1188,14 +1258,34 @@ export function createGameServer(options: GameServerOptions): GameServer {
           presenceGeneration,
         );
       } catch (error) {
+        options.operationalLogger?.disconnectPause({
+          lobbyId: identity.lobbyId,
+          participantId: identity.participantId,
+          presenceGeneration,
+          outcome: "failed",
+        });
         reportAuthorityFailure();
         throw error;
       }
       const grace = await unregisterConnection.catch((error: unknown) => {
+        options.operationalLogger?.disconnectPause({
+          lobbyId: identity.lobbyId,
+          participantId: identity.participantId,
+          presenceGeneration,
+          outcome: "failed",
+        });
         reportAuthorityFailure();
         throw error;
       });
-      if (grace !== null) schedulePresenceGrace(grace);
+      if (grace !== null) {
+        options.operationalLogger?.disconnectPause({
+          lobbyId: grace.lobbyId,
+          participantId: grace.participantId,
+          presenceGeneration: grace.presenceGeneration,
+          outcome: "scheduled",
+        });
+        schedulePresenceGrace(grace);
+      }
     };
     socket.once("disconnect", () => trackAuthorityTask(releasePresence()));
     const initialization = (async () => {
@@ -1261,12 +1351,25 @@ export function createGameServer(options: GameServerOptions): GameServer {
           return;
         }
 
+        const command = parsed.data;
+        let commandPersisted = false;
+        let commandOutcomeRecorded = false;
         try {
-          const result = await options.commandExecutor.execute({
-            identity,
-            command: parsed.data,
-          });
+          const execute = () =>
+            options.commandExecutor.execute({
+              identity,
+              command,
+            });
+          const result = await (options.operationalLogger === undefined
+            ? execute()
+            : options.operationalLogger.withCommandCorrelation(command.commandId, execute));
           if (!result.ok) {
+            options.operationalLogger?.command({
+              commandId: parsed.data.commandId,
+              commandType: parsed.data.type,
+              outcome: "rejected",
+              errorCode: result.error.code,
+            });
             socket.emit(
               "v1:error",
               createContractError(result.error.code, options.clock, parsed.data.commandId),
@@ -1280,8 +1383,17 @@ export function createGameServer(options: GameServerOptions): GameServer {
             }
             return;
           }
+          commandPersisted = true;
 
-          const acknowledgement = CommandAckSchema.parse(result.acknowledgement);
+          const acknowledgement = CommandAckSchema.parse({
+            schemaVersion: CONTRACT_SCHEMA_VERSION,
+            type: "ack",
+            ...result.acknowledgement,
+            occurredAt:
+              result.acknowledgement.occurredAt instanceof Date
+                ? result.acknowledgement.occurredAt.toISOString()
+                : result.acknowledgement.occurredAt,
+          });
           if (acknowledgement.commandId !== parsed.data.commandId) {
             throw new Error("Committed acknowledgement does not match the incoming command.");
           }
@@ -1292,18 +1404,17 @@ export function createGameServer(options: GameServerOptions): GameServer {
                   result.participantPrivateEvents,
                   acknowledgement.commandId,
                 );
-          if (result.activeLobbyEvent !== null) {
-            const event = ActiveLobbyEventSchema.parse(result.activeLobbyEvent);
+          const activeLobbyEvent =
+            result.activeLobbyEvent === null
+              ? null
+              : ActiveLobbyEventSchema.parse(result.activeLobbyEvent);
+          if (activeLobbyEvent !== null) {
             if (
               acknowledgement.scope !== "active-lobby" ||
-              acknowledgement.eventSequence !== event.eventSequence ||
+              acknowledgement.eventSequence !== activeLobbyEvent.eventSequence ||
               acknowledgement.idempotentReplay
             ) {
               throw new Error("Committed lobby event delivery metadata is inconsistent.");
-            }
-            await emitLobbyEvent(identity.lobbyId, event);
-            if (committedPrivateEvents.length > 0) {
-              await emitParticipantEvents(identity.participantId, committedPrivateEvents);
             }
           } else if (committedPrivateEvents.length > 0) {
             if (
@@ -1312,16 +1423,40 @@ export function createGameServer(options: GameServerOptions): GameServer {
             ) {
               throw new Error("Committed private event delivery metadata is inconsistent.");
             }
+          } else if (!acknowledgement.idempotentReplay) {
+            throw new Error("Committed replay delivery metadata is inconsistent.");
+          }
+          options.operationalLogger?.command({
+            commandId: acknowledgement.commandId,
+            commandType: parsed.data.type,
+            outcome: "committed",
+            idempotentReplay: acknowledgement.idempotentReplay,
+            eventSequence: acknowledgement.eventSequence,
+          });
+          commandOutcomeRecorded = true;
+
+          if (activeLobbyEvent !== null) {
+            await emitLobbyEvent(identity.lobbyId, activeLobbyEvent, "command");
+            if (committedPrivateEvents.length > 0) {
+              await emitParticipantEvents(identity.participantId, committedPrivateEvents);
+            }
+          } else if (committedPrivateEvents.length > 0) {
             if (acknowledgement.idempotentReplay) {
               committedPrivateEvents.forEach((event) => socket.emit("v1:private-event", event));
             } else {
               await emitParticipantEvents(identity.participantId, committedPrivateEvents);
             }
-          } else if (!acknowledgement.idempotentReplay) {
-            throw new Error("Committed replay delivery metadata is inconsistent.");
           }
           socket.emit("v1:ack", acknowledgement);
         } catch {
+          if (!commandOutcomeRecorded) {
+            options.operationalLogger?.command({
+              commandId: parsed.data.commandId,
+              commandType: parsed.data.type,
+              outcome: commandPersisted ? "committed" : "failed",
+              ...(commandPersisted ? {} : { errorCode: "INTERNAL_ERROR" }),
+            });
+          }
           socket.emit(
             "v1:error",
             createContractError("INTERNAL_ERROR", options.clock, parsed.data.commandId),
@@ -1336,7 +1471,27 @@ export function createGameServer(options: GameServerOptions): GameServer {
   return {
     failure,
     async listen({ host, port }) {
-      await Promise.all([recoverAutomaticCalls(), recoverCoWinnerSettlements()]);
+      options.operationalLogger?.restartRestoration({
+        kind: "presence-grace",
+        count: options.initialPresenceGracePeriods?.length ?? 0,
+        outcome: "completed",
+      });
+      const restore = async (
+        kind: "automatic-call" | "co-winner-settlement",
+        recovery: () => Promise<number>,
+      ) => {
+        try {
+          const count = await recovery();
+          options.operationalLogger?.restartRestoration({ kind, count, outcome: "completed" });
+        } catch (error) {
+          options.operationalLogger?.restartRestoration({ kind, count: 0, outcome: "failed" });
+          throw error;
+        }
+      };
+      await Promise.all([
+        restore("automatic-call", recoverAutomaticCalls),
+        restore("co-winner-settlement", recoverCoWinnerSettlements),
+      ]);
       if (closed || authorityFailed) throw new Error("Game server authority is closed.");
       const address = await listen(httpServer, host, port);
       return { host: address.address, port: address.port };
@@ -1350,11 +1505,24 @@ export function createGameServer(options: GameServerOptions): GameServer {
       })();
       return closePromise;
     },
-    publishLobbyEvent(lobbyId, event) {
-      return emitLobbyEvent(lobbyId, event);
+    async publishLobbyEvent(lobbyId, event) {
+      await emitLobbyEvent(lobbyId, event, "authority");
     },
     async publishLobbyEventFromSource(lobbyId, sequence, loadEvent) {
-      await enqueueLobbyDelivery(lobbyId, sequence, loadEvent);
+      const delivery: { event?: ActiveLobbyEvent } = {};
+      const delivered = await enqueueLobbyDelivery(lobbyId, sequence, async () => {
+        const event = await loadEvent();
+        delivery.event = event;
+        return event;
+      });
+      if (delivered && delivery.event !== undefined) {
+        options.operationalLogger?.lobbyEvent({
+          lobbyId,
+          eventType: delivery.event.type,
+          eventSequence: delivery.event.eventSequence,
+          source: "subscription",
+        });
+      }
       await Promise.all([reconcileAutomaticCall(lobbyId), reconcileCoWinnerSettlement(lobbyId)]);
     },
     publishParticipantEvent(participantId, event) {

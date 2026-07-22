@@ -64,6 +64,11 @@ export {
   type TransactionalLobbyRepository,
 } from "./lobby-state-repository.js";
 export {
+  createOperationalLogger,
+  createReadinessProbe,
+  type OperationalLogger,
+} from "./operational-observability.js";
+export {
   isRoundCommandAuthorized,
   resolveRoundPatternMode,
   type AutomaticCallExecutionResult,

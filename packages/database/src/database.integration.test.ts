@@ -440,6 +440,12 @@ describeDatabase("PostgreSQL durable game state", () => {
     return connection;
   }
 
+  test("reports PostgreSQL readiness through the shared connection", async () => {
+    const connection = await connect();
+
+    await expect(connection.checkReadiness()).resolves.toBe(true);
+  });
+
   async function createPersistedLobby(
     connection: Awaited<ReturnType<typeof connectDatabase>>,
     state: DurableLobbyState,

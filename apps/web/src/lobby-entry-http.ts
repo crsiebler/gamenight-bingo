@@ -32,6 +32,7 @@ import {
   type Snapshot,
 } from "@gamenight-bingo/contracts";
 import { normalizeLobbyCodeEntry } from "@gamenight-bingo/domain";
+import type { OperationalLogger } from "@gamenight-bingo/database";
 
 import { MUTATION_REQUEST_HEADERS, PRIVATE_RESPONSE_HEADERS } from "./http-security.js";
 import {
@@ -177,6 +178,7 @@ export interface LobbyEntryHttpDependencies {
   readonly realtimeTicketTtlSeconds: number;
   readonly allowedOrigin: string;
   readonly allowedThemeIds: ReadonlySet<string>;
+  readonly operationalLogger?: OperationalLogger;
 }
 
 interface Credential {
@@ -494,6 +496,26 @@ export function requesterKeyFromTrustedProxy(
 }
 
 export function createLobbyEntryHttpHandler(dependencies: LobbyEntryHttpDependencies) {
+  const executeObservedCommand = async <Result>(
+    commandId: string,
+    commandType: string,
+    operation: () => Promise<Result>,
+  ): Promise<Result> => {
+    try {
+      return await (dependencies.operationalLogger === undefined
+        ? operation()
+        : dependencies.operationalLogger.withCommandCorrelation(commandId, operation));
+    } catch (error) {
+      dependencies.operationalLogger?.command({
+        commandId,
+        commandType,
+        outcome: "failed",
+        errorCode: "INTERNAL_ERROR",
+      });
+      throw error;
+    }
+  };
+
   return async function handle(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const { pathname } = url;
@@ -533,19 +555,30 @@ export function createLobbyEntryHttpHandler(dependencies: LobbyEntryHttpDependen
       }
       for (let attempt = 0; attempt < MAX_CREDENTIAL_ATTEMPTS; attempt += 1) {
         const credential = createCredential(dependencies.randomBytes);
-        const result = await dependencies.store.createLobbyWithHost({
-          lobbyId: dependencies.nextId("lobby"),
-          participantId: dependencies.nextId("participant"),
-          sessionId: dependencies.nextId("session"),
-          commandId: parsed.data.commandId,
-          username: parsed.data.username,
-          themeId: parsed.data.themeId,
-          tokenHash: credential.tokenHash,
-          issuedAt: now,
-          maxActiveLobbies: dependencies.maxActiveLobbies,
-          nextCode: dependencies.nextLobbyCode,
-        });
+        const result = await executeObservedCommand(
+          parsed.data.commandId,
+          "create-lobby",
+          async () =>
+            dependencies.store.createLobbyWithHost({
+              lobbyId: dependencies.nextId("lobby"),
+              participantId: dependencies.nextId("participant"),
+              sessionId: dependencies.nextId("session"),
+              commandId: parsed.data.commandId,
+              username: parsed.data.username,
+              themeId: parsed.data.themeId,
+              tokenHash: credential.tokenHash,
+              issuedAt: now,
+              maxActiveLobbies: dependencies.maxActiveLobbies,
+              nextCode: dependencies.nextLobbyCode,
+            }),
+        );
         if (result.ok) {
+          dependencies.operationalLogger?.command({
+            commandId: result.entry.commandId,
+            commandType: "create-lobby",
+            outcome: "committed",
+            idempotentReplay: result.entry.idempotentReplay,
+          });
           const cookie = result.entry.idempotentReplay
             ? undefined
             : serializeCookie(credential.token, result.entry.lobbyCode);
@@ -556,8 +589,22 @@ export function createLobbyEntryHttpHandler(dependencies: LobbyEntryHttpDependen
           );
         }
         const error = mapStoreError(result, now, parsed.data.commandId);
-        if (error !== null) return error;
+        if (error !== null) {
+          dependencies.operationalLogger?.command({
+            commandId: parsed.data.commandId,
+            commandType: "create-lobby",
+            outcome: "rejected",
+            errorCode: result.error.code,
+          });
+          return error;
+        }
       }
+      dependencies.operationalLogger?.command({
+        commandId: parsed.data.commandId,
+        commandType: "create-lobby",
+        outcome: "failed",
+        errorCode: "INTERNAL_ERROR",
+      });
       return errorResponse("INTERNAL_ERROR", 500, now, parsed.data.commandId);
     }
 
@@ -585,14 +632,31 @@ export function createLobbyEntryHttpHandler(dependencies: LobbyEntryHttpDependen
       if (sessionTokenHash === null) {
         return errorResponse("UNAUTHORIZED", 401, now, command.commandId);
       }
-      const lobbyId = await dependencies.store.findActiveLobbyIdByCode(code);
-      if (lobbyId === null) return errorResponse("NOT_FOUND", 404, now, command.commandId);
-      const result = await dependencies.roundCommandExecutor.execute({
-        lobbyId,
-        sessionTokenHash,
-        command,
+      const result = await executeObservedCommand(command.commandId, command.type, async () => {
+        const lobbyId = await dependencies.store.findActiveLobbyIdByCode(code);
+        if (lobbyId === null) return null;
+        return dependencies.roundCommandExecutor.execute({
+          lobbyId,
+          sessionTokenHash,
+          command,
+        });
       });
+      if (result === null) {
+        dependencies.operationalLogger?.command({
+          commandId: command.commandId,
+          commandType: command.type,
+          outcome: "rejected",
+          errorCode: "NOT_FOUND",
+        });
+        return errorResponse("NOT_FOUND", 404, now, command.commandId);
+      }
       if (!result.ok) {
+        dependencies.operationalLogger?.command({
+          commandId: command.commandId,
+          commandType: command.type,
+          outcome: "rejected",
+          errorCode: result.error.code,
+        });
         const statusByCode = {
           UNAUTHORIZED: 401,
           FORBIDDEN: 403,
@@ -606,6 +670,13 @@ export function createLobbyEntryHttpHandler(dependencies: LobbyEntryHttpDependen
           command.commandId,
         );
       }
+      dependencies.operationalLogger?.command({
+        commandId: result.acknowledgement.commandId,
+        commandType: command.type,
+        outcome: "committed",
+        idempotentReplay: result.acknowledgement.idempotentReplay,
+        eventSequence: result.acknowledgement.eventSequence,
+      });
       return privateJson(
         CommandAckSchema.parse({
           schemaVersion: CONTRACT_SCHEMA_VERSION,
@@ -679,18 +750,26 @@ export function createLobbyEntryHttpHandler(dependencies: LobbyEntryHttpDependen
       if (!parsed.success) return errorResponse("INVALID_PAYLOAD", 400, now);
       for (let attempt = 0; attempt < MAX_CREDENTIAL_ATTEMPTS; attempt += 1) {
         const credential = createCredential(dependencies.randomBytes);
-        const result = await dependencies.store.joinLobbyWithSession({
-          lobbyId,
-          lobbyCode: code,
-          participantId: dependencies.nextId("participant"),
-          sessionId: dependencies.nextId("session"),
-          commandId: parsed.data.commandId,
-          username: parsed.data.username,
-          tokenHash: credential.tokenHash,
-          issuedAt: now,
-          maxPlayersPerLobby: dependencies.maxPlayersPerLobby,
-        });
+        const result = await executeObservedCommand(parsed.data.commandId, "join-lobby", async () =>
+          dependencies.store.joinLobbyWithSession({
+            lobbyId,
+            lobbyCode: code,
+            participantId: dependencies.nextId("participant"),
+            sessionId: dependencies.nextId("session"),
+            commandId: parsed.data.commandId,
+            username: parsed.data.username,
+            tokenHash: credential.tokenHash,
+            issuedAt: now,
+            maxPlayersPerLobby: dependencies.maxPlayersPerLobby,
+          }),
+        );
         if (result.ok) {
+          dependencies.operationalLogger?.command({
+            commandId: result.entry.commandId,
+            commandType: "join-lobby",
+            outcome: "committed",
+            idempotentReplay: result.entry.idempotentReplay,
+          });
           const cookie = result.entry.idempotentReplay
             ? undefined
             : serializeCookie(credential.token, code);
@@ -701,8 +780,22 @@ export function createLobbyEntryHttpHandler(dependencies: LobbyEntryHttpDependen
           );
         }
         const error = mapStoreError(result, now, parsed.data.commandId);
-        if (error !== null) return error;
+        if (error !== null) {
+          dependencies.operationalLogger?.command({
+            commandId: parsed.data.commandId,
+            commandType: "join-lobby",
+            outcome: "rejected",
+            errorCode: result.error.code,
+          });
+          return error;
+        }
       }
+      dependencies.operationalLogger?.command({
+        commandId: parsed.data.commandId,
+        commandType: "join-lobby",
+        outcome: "failed",
+        errorCode: "INTERNAL_ERROR",
+      });
       return errorResponse("INTERNAL_ERROR", 500, now, parsed.data.commandId);
     }
 
@@ -787,20 +880,40 @@ export function createLobbyEntryHttpHandler(dependencies: LobbyEntryHttpDependen
         await dependencies.store.expireParticipantRejoinWindows(lobbyId);
         return errorResponse("UNAUTHORIZED", 401, now, parsed.data.commandId);
       }
-      const result = await dependencies.store.rejoinLobbyWithSession({
-        lobbyId,
-        tokenHash,
-        commandId: parsed.data.commandId,
-      });
+      const result = await executeObservedCommand(parsed.data.commandId, "rejoin-lobby", async () =>
+        dependencies.store.rejoinLobbyWithSession({
+          lobbyId,
+          tokenHash,
+          commandId: parsed.data.commandId,
+        }),
+      );
       if (result === null) {
+        dependencies.operationalLogger?.command({
+          commandId: parsed.data.commandId,
+          commandType: "rejoin-lobby",
+          outcome: "rejected",
+          errorCode: "UNAUTHORIZED",
+        });
         return errorResponse("UNAUTHORIZED", 401, now, parsed.data.commandId);
       }
       if (!result.ok) {
+        dependencies.operationalLogger?.command({
+          commandId: parsed.data.commandId,
+          commandType: "rejoin-lobby",
+          outcome: "rejected",
+          errorCode: result.error.code,
+        });
         return (
           mapStoreError(result, now, parsed.data.commandId) ??
           errorResponse("INTERNAL_ERROR", 500, now, parsed.data.commandId)
         );
       }
+      dependencies.operationalLogger?.command({
+        commandId: result.entry.commandId,
+        commandType: "rejoin-lobby",
+        outcome: "committed",
+        idempotentReplay: result.entry.idempotentReplay,
+      });
       return privateJson(entryResponse(result.entry));
     }
 

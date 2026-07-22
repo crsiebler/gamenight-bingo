@@ -542,6 +542,7 @@ export interface DatabaseConnection {
   readonly commandTransactions: CommandTransactionRepository;
   readonly roundCommands: RoundCommandExecutor;
   readonly activeLobbyEvents: ActiveLobbyEventSubscriber;
+  checkReadiness(): Promise<boolean>;
   disconnect(): Promise<void>;
 }
 
@@ -4012,6 +4013,14 @@ export async function connectDatabase(
       options.roundCommands,
     ),
     activeLobbyEvents,
+    async checkReadiness() {
+      try {
+        await prisma.$queryRaw`SELECT 1`;
+        return true;
+      } catch {
+        return false;
+      }
+    },
     async disconnect() {
       await activeLobbyEvents.close();
       await prisma.$disconnect();

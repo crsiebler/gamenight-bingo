@@ -405,6 +405,7 @@ async function startAuthority(database: Database, endpoints: LoadEndpoints) {
   const server: GameServer = createGameServer({
     allowedOrigin: endpoints.realtimeOrigin,
     clock: () => new Date(),
+    readinessCheck: () => database.checkReadiness(),
     ticketConsumer: database.lobbyStates,
     commandExecutor: {
       execute: async ({ identity, command }) => {

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import type {
   ActiveLobbyEventNotification,
   ActiveLobbyEventSubscriber,
+  OperationalLogger,
 } from "@gamenight-bingo/database";
 
 import {
@@ -59,7 +60,20 @@ describe("game-server runtime configuration", () => {
         },
         unregisterRealtimeConnection: () => disconnectPersistence,
       },
-      roundCommands: {},
+      roundCommands: {
+        executeAuthenticated: async () => ({
+          ok: true as const,
+          acknowledgement: {
+            commandId: "command_committed",
+            scope: "active-lobby" as const,
+            eventSequence: 1,
+            occurredAt: new Date(Number.NaN),
+            idempotentReplay: false,
+          },
+          activeLobbyEvent: null,
+          participantPrivateEvents: [],
+        }),
+      },
       activeLobbyEvents: {
         subscribe: async () => {
           startupOrder.push("subscribe");
@@ -115,6 +129,19 @@ describe("game-server runtime configuration", () => {
       ),
     ).toBe(disconnectPersistence);
     expect(startupOrder).toEqual(["cleanup", "cleanup", "grace", "subscribe", "listen"]);
+    await expect(
+      serverOptions?.commandExecutor.execute({
+        identity: {
+          lobbyId: "lobby_alpha",
+          participantId: "participant_alpha",
+          participantSessionId: "session_alpha",
+        },
+        command: {} as never,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      acknowledgement: { occurredAt: expect.any(Date) },
+    });
     await running.close();
     expect(databaseDisconnected).toBe(true);
   });
@@ -144,7 +171,17 @@ describe("game-server runtime configuration", () => {
         connectDatabase: () => Promise<typeof database>;
         createGameServer: (options: GameServerOptions) => GameServer;
       },
+      operationalLogger: OperationalLogger,
     ) => ReturnType<typeof startGameServerRuntime>;
+    const restorationRecords: Parameters<OperationalLogger["restartRestoration"]>[0][] = [];
+    const operationalLogger: OperationalLogger = {
+      withCommandCorrelation: (_commandId, operation) => operation(),
+      command: () => {},
+      lobbyEvent: () => {},
+      transactionRetry: () => {},
+      disconnectPause: () => {},
+      restartRestoration: (record) => restorationRecords.push(record),
+    };
 
     await expect(
       startWithDependencies(
@@ -158,9 +195,11 @@ describe("game-server runtime configuration", () => {
             throw new Error("authority must not be created");
           },
         },
+        operationalLogger,
       ),
     ).rejects.toThrow();
     expect(databaseDisconnected).toBe(true);
+    expect(restorationRecords).toEqual([{ kind: "presence-grace", count: 0, outcome: "failed" }]);
   });
 
   test("drains cleanup and database resources when authority construction fails", async () => {

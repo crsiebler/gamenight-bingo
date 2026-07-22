@@ -6,7 +6,13 @@ import {
   ErrorSchema,
   parseRuntimeConfig,
 } from "@gamenight-bingo/contracts";
-import { connectDatabase } from "@gamenight-bingo/database";
+import {
+  connectDatabase,
+  createOperationalLogger,
+  createReadinessProbe,
+  type DatabaseConnection,
+  type OperationalLogger,
+} from "@gamenight-bingo/database";
 import { generateLobbyCode } from "@gamenight-bingo/domain";
 import { patternCatalog } from "@gamenight-bingo/patterns";
 import { themeCatalog } from "@gamenight-bingo/themes";
@@ -16,6 +22,7 @@ import {
   createLobbyEntryHttpHandler,
   requesterKeyFromTrustedProxy,
 } from "./lobby-entry-http.js";
+import { createWebHealthHandler } from "./health.js";
 
 const runtimeConfig = parseRuntimeConfig(env);
 const databaseUrl = runtimeConfig.databaseUrl;
@@ -32,11 +39,18 @@ const allowedOrigin = runtimeConfig.webOrigin ?? "http://localhost:3000";
 
 type LobbyEntryHandler = ReturnType<typeof createLobbyEntryHttpHandler>;
 const runtimeGlobal = globalThis as typeof globalThis & {
+  webDatabase?: Promise<DatabaseConnection>;
   lobbyEntryHandler?: Promise<LobbyEntryHandler>;
+  webOperationalLogger?: OperationalLogger;
+  webReadinessCheck?: () => Promise<boolean>;
 };
-const handler =
-  runtimeGlobal.lobbyEntryHandler ??
+const operationalLogger =
+  runtimeGlobal.webOperationalLogger ?? createOperationalLogger({ service: "web" });
+runtimeGlobal.webOperationalLogger = operationalLogger;
+const database =
+  runtimeGlobal.webDatabase ??
   connectDatabase(databaseUrl, {
+    transactionRetry: { observer: (event) => operationalLogger.transactionRetry(event) },
     roundCommands: {
       patterns: patternCatalog,
       nearWinFeedbackEnabled: true,
@@ -45,10 +59,18 @@ const handler =
       randomBytes: (length) => new Uint8Array(randomBytes(length)),
       nextId: (prefix) => `${prefix}-${randomUUID()}`,
     },
-  }).then((database) =>
+  });
+runtimeGlobal.webDatabase = database;
+// Readiness and API requests still observe the rejection; this prevents an idle startup rejection.
+void database.catch(() => undefined);
+function getLobbyEntryHandler(): Promise<LobbyEntryHandler> {
+  const existing = runtimeGlobal.lobbyEntryHandler;
+  if (existing !== undefined) return existing;
+
+  const created = database.then((databaseConnection) =>
     createLobbyEntryHttpHandler({
-      store: database.lobbyStates,
-      roundCommandExecutor: database.roundCommands,
+      store: databaseConnection.lobbyStates,
+      roundCommandExecutor: databaseConnection.roundCommands,
       patterns: patternCatalog,
       rateLimiter,
       requesterKey: (request) => requesterKeyFromTrustedProxy(request, trustedProxySecret),
@@ -61,14 +83,22 @@ const handler =
       realtimeTicketTtlSeconds: runtimeConfig.realtimeTicketTtlSeconds,
       allowedOrigin,
       allowedThemeIds: new Set(themeCatalog.map(({ id }) => id)),
+      operationalLogger,
     }),
   );
-runtimeGlobal.lobbyEntryHandler = handler;
+  runtimeGlobal.lobbyEntryHandler = created;
+  return created;
+}
+const readinessCheck =
+  runtimeGlobal.webReadinessCheck ??
+  createReadinessProbe(async () => (await database).checkReadiness());
+runtimeGlobal.webReadinessCheck = readinessCheck;
+export const handleWebHealthRequest = createWebHealthHandler(readinessCheck);
 
 export async function handleLobbyEntryRequest(request: Request): Promise<Response> {
   try {
     return await (
-      await handler
+      await getLobbyEntryHandler()
     )(request);
   } catch {
     const occurredAt = new Date().toISOString();

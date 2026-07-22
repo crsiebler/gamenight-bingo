@@ -85,6 +85,7 @@ Next story: US-001
 - HTTP mutations compare `Origin` with canonical `WEB_ORIGIN`, require the shared `x-gamenight-request: mutation` JSON header, reject query parameters and malformed UTF-8 before persistence, and validate catalog-backed selections before creating durable state; private responses share no-store, noindex, framing, MIME, permissions, referrer, and per-request nonce CSP protections without `unsafe-inline` scripts.
 - Socket.IO payload-cap regressions should verify all three transport boundaries: a valid below-cap packet reaches its handler, a near-cap packet reaches application validation, and an oversized packet disconnects before command execution; assert serialized packet sizes so fixture drift cannot invalidate the boundary evidence.
 - Single-instance performance evidence uses a fresh empty migrated database, derives the fixed 100-lobby/25-participant profile from runtime defaults, staggers lobby calls at the fastest supported automatic cadence, validates exact per-client events and actor snapshots, and writes ignored percentile evidence under `test-results`; never share that retained database with Vitest or browser suites.
+- Keep `/healthz` independent of PostgreSQL and implement `/readyz` with a bounded, coalesced, briefly cached database probe that retains ownership of timed-out work until it settles; derive database-dependent API handlers lazily so readiness can observe startup rejection without creating an unhandled secondary promise, and cache the operational logger with the global database/readiness state so retry and command contexts remain aligned across module reevaluation. Structured operational diagnostics use typed allowlisted scalar records, hash all client-controlled identifiers plus lobby/participant correlations, propagate hashed command context to command-driven transaction retries, log only fresh sequenced deliveries rather than exact echoes, adapt committed acknowledgements at the wire boundary, record terminal disconnect-pause failures, permanently drop output after an asynchronous stream error, and never serialize requests, commands, events, errors, snapshots, cards, credentials, or future draw data.
 
 Append-only iteration log
 -------------------------
@@ -6013,3 +6014,175 @@ Targeted re-review outcome for US-060 at 2026-07-21 18:00 MST:
 - `code-reviewer` returned an empty actionable finding list against the complete revised staged diff.
 - Managed Chromium is now the portable default, the stable-Chrome fallback is explicit and documented, and focused regression coverage proves both launch-option paths.
 - QA and security had already returned empty finding lists. No in-scope critical, high, or medium findings remain; US-060 can be marked passing and committed after the final consistency check.
+
+## 2026-07-21 18:22:43 MST - US-061
+- What was implemented
+  - Added fixed, no-store `GET`/`HEAD` `/healthz` and `/readyz` endpoints to both the Next.js web process and raw game-server HTTP listener; liveness performs no database work, while readiness uses a one-second coalesced/cached PostgreSQL probe and returns only stable up/down state.
+  - Added a shared typed operational logger that writes allowlisted JSON Lines, hashes client-controlled command IDs plus lobby/participant correlations, drops records while stdout is backpressured, ignores unknown metadata, and cannot change authoritative behavior when diagnostics fail.
+  - Wired committed/rejected command outcomes, active-lobby event sequences, Serializable retry observations, disconnect-pause generations, and restart restoration counts without serializing requests, payloads, errors, credentials, cards, snapshots, or future draw data.
+  - Added database readiness, redaction, timeout/coalescing, web/game-server health, HTTP/realtime correlation, and startup-race regression coverage; documented the operational contract and kept the performance harness on the production constructor shape.
+- Files changed: `AGENTS.md`, `README.md`, `apps/game-server/src/index.ts`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/runtime.test.ts`, `apps/game-server/src/socket-server.ts`, `apps/game-server/src/socket-server.test.ts`, `apps/web/src/app/healthz/route.ts`, `apps/web/src/app/readyz/route.ts`, `apps/web/src/health.ts`, `apps/web/src/health.test.ts`, `apps/web/src/lobby-entry-http.ts`, `apps/web/src/lobby-entry-http.test.ts`, `apps/web/src/lobby-entry-runtime.ts`, `packages/database/src/operational-observability.ts`, `packages/database/src/operational-observability.test.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/database.integration.test.ts`, `packages/database/src/index.ts`, `scripts/run-single-instance-load.ts`, `tests/e2e/playwright.smoke.spec.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-061 - Add basic health and privacy-safe logging`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run packages/database/src/operational-observability.test.ts apps/web/src/health.test.ts` (expected red: six not-implemented behavior failures; pass after implementation)
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts -t "serves liveness|records allowlisted"` (expected red: health returned 404 and diagnostics were absent; pass after implementation)
+  - `bunx vitest run apps/web/src/lobby-entry-http.test.ts -t "records only committed"` (expected red: no HTTP command diagnostic; pass after implementation)
+  - Dedicated local PostgreSQL database creation and `DATABASE_URL=<approved local database> bun run db:migrate:deploy` (pass; seven migrations)
+  - `TEST_DATABASE_URL=<approved local database> bunx vitest run packages/database/src/database.integration.test.ts -t "reports PostgreSQL readiness"` (pass)
+  - `DATABASE_URL=<approved local database> bun run --cwd apps/web build` (pass; `/healthz` and `/readyz` present in production route table)
+  - Review-remediation red tests (expected fail: raw command ID, overlapping hung readiness work, mislabeled post-commit failure, and missing restoration failure records; pass after fixes)
+  - `TEST_DATABASE_URL=<approved local database> bun run test` (pass after review fixes; typecheck, 42 files, 865 tests)
+  - Fresh migrated database `E2E_DATABASE_CONFIRMED_NONPRODUCTION=true PLAYWRIGHT_BROWSER_CHANNEL=chrome TEST_DATABASE_URL=<approved local database> bunx playwright test tests/e2e/playwright.smoke.spec.ts` (pass; 6 live production Next tests including health/readiness routing)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `sre-engineer`, `security-engineer`
+  - Used: `sre-engineer`, `security-engineer` for endpoint semantics, readiness failure behavior, allowlist/redaction boundaries, correlation design, operational risks, and focused test guidance
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and `security-engineer`; targeted re-review by all three
+  - Findings: initial findings were fixed, but targeted re-review found two remaining medium blockers; no commit created
+- Decisions (why):
+  - Used separate liveness and readiness semantics because coupling liveness to PostgreSQL would create restart storms, while readiness must stop routing work when the shared dependency is unavailable.
+  - Added one typed operational logger instead of a generic metadata logger because an allowlist makes private payload/error serialization structurally unavailable and keeps output stable for operators.
+  - Hashed client-controlled command IDs and lobby/participant IDs while retaining event sequences because credentials can satisfy command-ID syntax and no opaque actor identifier needs raw diagnostic representation.
+  - Kept retry logging on the existing observer and command/event logging after persistence results because Serializable callbacks may rerun and must never perform external effects.
+- **Learnings for future iterations:**
+  - Returning a restoration count from inside the scheduler recovery `try` bypasses dirty-lobby reconciliation after `finally`; collect counts and return only after overlap reconciliation completes.
+  - Next production builds initialize runtime route modules during page-data collection and therefore require an approved `DATABASE_URL` even when validating only operational routes.
+  - Direct game-server constructors, including performance harnesses, must provide the database readiness seam even when they do not call the health endpoint.
+- Known issues / follow-ups:
+  - Root `bun run format:check` remains blocked by unrelated untracked `.playwright-mcp` artifacts; every tracked file passes Prettier.
+  - The dedicated nonproduction US-061 unit/integration and live-route databases were retained because destructive cleanup was not required.
+  - The web readiness module must observe the eagerly derived lobby handler's initial database rejection so `/readyz` can return `503` without leaving an unhandled rejected promise.
+  - The readiness timeout regression must advance past the late-completion failure cache and prove a third probe can start and recover to `true`.
+- Next iteration start:
+  - Resume US-061 by fixing the two targeted re-review blockers, rerunning focused/full/live-route checks, and restarting the staged review loop; keep `passes: false` until that review passes.
+---
+
+Initial review remediation for US-061 at 2026-07-21 18:35 MST:
+- `code-reviewer`, `qa-expert`, and `security-engineer` identified one deduplicated high finding and four medium findings: credential-shaped raw command IDs could enter logs, timed-out readiness checks could overlap indefinitely, post-commit delivery failures could be mislabeled as uncommitted, restart restoration failures emitted no summary, and App Router behavior lacked a live Next test.
+- Added failing focused regressions before hashing command correlations, retaining timed-out work ownership, separating committed state from later delivery, emitting safe failure summaries for presence/automatic/co-winner restoration, and adding a live production Next health/readiness route test.
+- Also fixed the cheap low findings by releasing every deferred readiness check in test cleanup and dropping default stdout records while backpressured.
+- Re-ran the root suite (865 tests), typecheck, lint, tracked formatting, and six-test live stable-Chrome production route suite successfully.
+- Targeted re-review includes `code-reviewer`, `qa-expert`, and `security-engineer` because all three original domains received substantive code/test changes.
+
+Targeted re-review outcome for US-061 at 2026-07-21 18:40 MST:
+- `security-engineer` returned an empty actionable finding list and confirmed the credential-hashing, no-overlap readiness, and stdout-backpressure remediations.
+- `code-reviewer` found one remaining medium issue: `/readyz` imports a module that eagerly creates a separate `handler = database.then(...)` promise, so an initial connection rejection can be unobserved even while readiness safely returns `503`.
+- `qa-expert` found one remaining medium test gap: the timeout test proves no overlap and late settlement, but not that the probe clears ownership and starts a successful third check after the false cache expires.
+- Per the one-targeted-re-review limit, US-061 remains `passes: false`; no further implementation changes or commit were made in this iteration.
+
+## 2026-07-21 18:46:24 MST - US-061
+- What was implemented
+  - Resumed the blocked observability story by deferring lobby API handler creation until an API request actually needs it, so readiness can safely observe an initial database rejection without leaving a separate rejected handler promise.
+  - Added an isolated runtime regression proving unavailable PostgreSQL returns `503` from `/readyz` without initializing the lobby handler.
+  - Extended the timed-out readiness regression past late completion and failure-cache expiry to prove a fresh third database check can recover to ready.
+- Files changed: `AGENTS.md`, `README.md`, `apps/game-server/src/index.ts`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/runtime.test.ts`, `apps/game-server/src/socket-server.ts`, `apps/game-server/src/socket-server.test.ts`, `apps/web/src/app/healthz/route.ts`, `apps/web/src/app/readyz/route.ts`, `apps/web/src/health.ts`, `apps/web/src/health.test.ts`, `apps/web/src/lobby-entry-http.ts`, `apps/web/src/lobby-entry-http.test.ts`, `apps/web/src/lobby-entry-runtime.ts`, `packages/database/src/operational-observability.ts`, `packages/database/src/operational-observability.test.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/database.integration.test.ts`, `packages/database/src/index.ts`, `scripts/run-single-instance-load.ts`, `tests/e2e/playwright.smoke.spec.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-061 - Add basic health and privacy-safe logging`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/health.test.ts packages/database/src/operational-observability.test.ts` (expected red: readiness initialized the lobby handler; pass after implementation with 7 tests)
+  - `bun run test` (initial concurrent check run had two unrelated timing-sensitive failures; both passed individually, then the serial full rerun passed with 42 files and 866 tests)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `git diff --check && git diff --cached --check` (pass)
+  - PostgreSQL integration and live production Next route checks (not rerun because `TEST_DATABASE_URL` is unset; both passed for the same candidate before the two isolated remediations)
+- Implementation agents:
+  - Recommended: `sre-engineer`, `security-engineer`
+  - Used: skipped in this resumed iteration because both agents already advised US-061 and the remaining work directly addressed two concrete targeted-review findings
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and `security-engineer` planned for the complete revised staged diff
+  - Findings: fixed command/retry correlation, thrown HTTP command omissions, realtime post-commit classification, delivered-event ordering, startup rejection coverage, and rejected-readiness redaction coverage; targeted re-review pending
+- Decisions (why):
+  - Kept the shared database connection eager for process readiness but made only the dependent lobby handler lazy, because liveness/readiness still need one coalesced connection while unrelated API initialization must not create an unobserved rejected promise.
+  - Tested the actual runtime module in an isolated Bun subprocess instead of adding a test-only production seam or asserting source text.
+  - Preserved the readiness failure cache after late completion and advanced beyond it in the test because recovery should begin only after the existing bounded cache contract expires.
+- **Learnings for future iterations:**
+  - A shared startup promise may be safely observed by readiness while separately derived promises can still reject unobserved; initialize dependent request handlers only when their request path is invoked.
+  - Readiness timeout tests should prove the complete lifecycle: coalescing, timeout, no overlap during late work, late settlement, failure-cache expiry, and successful fresh recovery.
+- Known issues / follow-ups:
+  - Root `bun run format:check` remains blocked by unrelated untracked `.playwright-mcp` artifacts; every tracked file passes Prettier.
+  - The approved database-backed integration and live Next checks from the prior US-061 candidate remain the latest database evidence because this shell has no `TEST_DATABASE_URL`.
+- Next iteration start:
+  - If review passes, complete US-061 metadata and commit; otherwise remediate any merged blocking finding within the one-targeted-re-review limit.
+---
+
+Initial review remediation for US-061 at 2026-07-21 19:03:26 MST:
+- `code-reviewer` found three medium issues: command-driven transaction retries lacked a shared command correlation, thrown HTTP persistence paths emitted no failed command record, and realtime success/event records could be misclassified or omitted after persistence/delivery but before later validation or scheduler reconciliation.
+- `qa-expert` found two medium test gaps: startup rejection coverage did not wait before the first readiness request or observe unhandled rejections, and rejected web/game-server readiness errors were not explicitly checked for fixed secret-free responses. `security-engineer` returned no actionable findings.
+- Added failing regressions before implementing thrown HTTP command logging, committed-result classification, delivered-event logging order, and shared hashed command/retry context. Strengthened startup and rejected-readiness redaction coverage without exposing error details.
+- Added `AsyncLocalStorage` only inside the operational logger so command-driven retry observers inherit the already hashed command correlation without adding client identifiers to transaction callbacks or performing diagnostics inside retryable transaction bodies.
+- Moved realtime command persistence classification immediately after the executor result and lobby-event records immediately after ordered delivery, before adapter validation or scheduler reconciliation can fail.
+- Testing decision:
+  - Change type: bug fixes and test-gap remediation.
+  - Test-first required: yes for behavior fixes.
+  - Red: focused HTTP and realtime tests failed with no failed HTTP records, a misclassified committed result, and a missing delivered-event record; the operational test failed because command context propagation was absent.
+  - Green: focused observability, HTTP, realtime, and health suites passed; serial `bun run test` passed 42 files and 871 tests; lint, tracked formatting, and diff checks passed.
+- Targeted re-review is limited to `code-reviewer` and `qa-expert` because their substantive findings were remediated; `security-engineer` returned an empty initial finding list.
+
+Targeted re-review outcome for US-061 at 2026-07-21 19:09:08 MST:
+- `qa-expert` found only one low non-blocking hardening opportunity: the startup rejection subprocess uses a fixed delay rather than deterministic rejection synchronization. The existing regression still verifies fixed `503`, no eager handler, and no observed unhandled rejection.
+- `code-reviewer` confirmed the initial remediations but found three remaining medium blockers: the production game-server runtime can throw while adapting an already committed acknowledgement before the socket layer marks it committed; a globally reused web database can retain a retry observer from a different logger/async context after module reevaluation; and exact direct/subscription event echoes can resolve without delivery while still emitting duplicate delivery records.
+- These findings are in scope because they can misclassify committed outcomes, lose required command/retry correlation, or produce misleading event-sequence diagnostics.
+- Per the one-targeted-re-review limit, US-061 remains `passes: false`; no additional implementation changes, PRD update, or commit were made in this iteration.
+- Next iteration start: add failing regressions for production acknowledgement adaptation after commit, global web logger/database reuse, and exact event-echo logging; preserve actual delivery outcomes through the queue, fix the three blockers, rerun all checks, and restart the staged review loop.
+
+## 2026-07-21 19:16:12 MST - US-061
+- What was implemented
+  - Resumed the blocked observability story by returning durable command results from the game-server runtime before acknowledgement wire adaptation, preserving committed classification when adaptation fails.
+  - Cached the web operational logger with the globally reused database and readiness state so command contexts and the database retry observer cannot diverge after module reevaluation.
+  - Propagated fresh-versus-exact-echo outcomes through the sequenced delivery queue and emitted lobby-event diagnostics only for fresh publications.
+  - Added regressions for production command adaptation, global logger reuse, command/authority echo races, and delayed subscription echoes; updated repository guidance with the reusable boundaries.
+- Files changed: `AGENTS.md`, `README.md`, `apps/game-server/src/index.ts`, `apps/game-server/src/runtime.ts`, `apps/game-server/src/runtime.test.ts`, `apps/game-server/src/socket-server.ts`, `apps/game-server/src/socket-server.test.ts`, `apps/web/src/app/healthz/route.ts`, `apps/web/src/app/readyz/route.ts`, `apps/web/src/health.ts`, `apps/web/src/health.test.ts`, `apps/web/src/lobby-entry-http.ts`, `apps/web/src/lobby-entry-http.test.ts`, `apps/web/src/lobby-entry-runtime.ts`, `packages/database/src/operational-observability.ts`, `packages/database/src/operational-observability.test.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/database.integration.test.ts`, `packages/database/src/index.ts`, `scripts/run-single-instance-load.ts`, `tests/e2e/playwright.smoke.spec.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-061 - Add basic health and privacy-safe logging`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/game-server/src/runtime.test.ts apps/web/src/health.test.ts apps/game-server/src/socket-server.test.ts -t "loads grace leases|does not initialize the lobby handler|notification echo publishes first|exact delayed echo"` (expected red: four regressions failed for premature adaptation, missing global logger reuse, and duplicate command/subscription delivery records)
+  - `bunx vitest run apps/game-server/src/runtime.test.ts apps/web/src/health.test.ts apps/game-server/src/socket-server.test.ts -t "loads grace leases|does not initialize the lobby handler|committed result validation fails|notification echo publishes first|exact delayed echo"` (pass; 5 focused regressions)
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts -t "does not reserve capacity after a transport closes during ticket consumption"` (pass; reran one unrelated timing-sensitive failure from the broader focused file run)
+  - `bun run test` (pass; typecheck, 42 files, 871 tests)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `git diff --check && git diff --cached --check` (pass)
+  - PostgreSQL integration and live production Next route checks (not rerun because `TEST_DATABASE_URL` is unset; both passed for the same US-061 candidate before these isolated remediations)
+- Implementation agents:
+  - Recommended: `sre-engineer`, `security-engineer`
+  - Used: skipped in this resumed iteration because both agents already advised US-061 and the remaining work directly addressed three concrete targeted-review findings
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and `security-engineer`; targeted re-review by `code-reviewer` and `security-engineer`
+  - Findings: fixed round-command lookup observability, terminal disconnect-pause failure records, and asynchronous stdout failure handling; targeted re-review returned no actionable findings
+- Decisions (why):
+  - Moved acknowledgement adaptation to the Socket.IO boundary instead of introducing a committed-error wrapper because the durable repository result can cross the existing executor seam unchanged and the boundary already owns wire validation.
+  - Returned a delivery boolean from the queue rather than inferring freshness from source or sequence afterward because the queue alone owns exact-echo acceptance and conflict decisions.
+  - Reused the logger globally with the database rather than retargeting a live database observer because one logger preserves both retry observation and `AsyncLocalStorage` command context without mutable observer wiring.
+- **Learnings for future iterations:**
+  - Persistence adapters should return committed durable results before any wire-schema conversion that can throw; transport boundaries can then classify post-commit adaptation failures accurately.
+  - An idempotently accepted event echo is not a fresh publication and must not increment delivery diagnostics even though its publisher promise resolves successfully.
+  - Globally cached resources that capture diagnostics callbacks must cache the associated logger/context owner for the same lifetime.
+- Known issues / follow-ups:
+  - Root `bun run format:check` remains blocked by unrelated untracked `.playwright-mcp` artifacts; every tracked file passes Prettier.
+  - The approved database-backed integration and live Next checks from the earlier US-061 candidate remain the latest database evidence because this shell has no `TEST_DATABASE_URL`.
+- Next iteration start:
+  - Implement US-062 automated single-instance restart restoration after this story is committed.
+---
+
+Initial review remediation for US-061 at 2026-07-21 19:28:24 MST:
+- `code-reviewer` found two medium issues: round-command lobby lookup could bypass command correlation/outcome logging, and fatal disconnect-pause persistence failures left no terminal diagnostic. `security-engineer` found one medium issue: asynchronous stdout `EPIPE` could terminate an authoritative process. `qa-expert` found only the existing low fixed-delay hardening opportunity in the startup-rejection subprocess.
+- Added failing regressions before moving round-command lookup under the existing command context, recording safe `failed` disconnect-pause outcomes for unregister/expiry persistence failures, and installing a fail-safe output error listener that permanently drops later diagnostics.
+- Testing decision:
+  - Change type: bug fixes and security/operational hardening.
+  - Test-first required: yes.
+  - Red: the focused suite failed with no lookup correlation/outcomes, no failed disconnect-pause records, and an unhandled fake stdout `EPIPE`.
+  - Green: 4 focused regressions passed; serial `bun run test` passed 42 files and 873 tests; lint, tracked formatting, and diff checks passed.
+- The QA low finding is not blocking and was not changed because deterministic connection rejection would require a new runtime test seam; the existing subprocess still verifies delayed startup rejection, fixed `503`, lazy handler initialization, and no observed unhandled rejection.
+- Targeted re-review is limited to `code-reviewer` and `security-engineer` because only their blocking findings received substantive production/test changes.
+
+Targeted re-review outcome for US-061 at 2026-07-21 19:29 MST:
+- `code-reviewer` and `security-engineer` returned empty actionable finding lists against the complete revised staged diff.
+- Command lookup correlation/outcomes, fatal disconnect-pause diagnostics, and asynchronous output failure containment are covered by focused regressions and the complete serial suite.
+- The QA fixed-delay note remains a documented low residual risk; external process/log-pipeline monitoring must detect the intentional permanent diagnostic drop after output failure.
+- No in-scope critical, high, or medium findings remain; US-061 can be marked passing and committed after the final consistency check.

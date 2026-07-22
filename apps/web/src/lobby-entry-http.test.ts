@@ -4,6 +4,7 @@ import { NextRequest } from "next/server";
 import { describe, expect, test } from "vitest";
 
 import { CONTRACT_SCHEMA_VERSION, SnapshotSchema } from "@gamenight-bingo/contracts";
+import type { OperationalLogger } from "@gamenight-bingo/database";
 
 import { PARTICIPANT_SESSION_COOKIE_NAME } from "./participant-session.js";
 import nextConfig from "../next.config.js";
@@ -1426,6 +1427,200 @@ describe("round-control HTTP API", () => {
     expect(executions[0]).toMatchObject({ lobbyId: "lobby-1", command });
     expect((executions[0] as { sessionTokenHash: Uint8Array }).sessionTokenHash).toHaveLength(32);
     expect(JSON.stringify(executions[0])).not.toContain(SESSION_TOKEN);
+  });
+
+  test("records only committed HTTP command correlation fields", async () => {
+    const records: Parameters<OperationalLogger["command"]>[0][] = [];
+    const operationalLogger: OperationalLogger = {
+      withCommandCorrelation: (_commandId, operation) => operation(),
+      command: (record) => records.push(record),
+      lobbyEvent: () => {},
+      transactionRetry: () => {},
+      disconnectPause: () => {},
+      restartRestoration: () => {},
+    };
+    const command = {
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "start-round",
+      commandId: "command-http-observed",
+    } as const;
+    const handle = createLobbyEntryHttpHandler(
+      createDependencies(createStore(), { operationalLogger }),
+    );
+
+    const response = await handle(
+      request("/api/v1/lobbies/ABC234/rounds/current/start", {
+        method: "POST",
+        body: JSON.stringify(command),
+        headers: { cookie: `${PARTICIPANT_SESSION_COOKIE_NAME}=${SESSION_TOKEN}` },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(records).toEqual([
+      {
+        commandId: command.commandId,
+        commandType: command.type,
+        outcome: "committed",
+        idempotentReplay: false,
+        eventSequence: 1,
+      },
+    ]);
+    expect(JSON.stringify(records)).not.toContain(SESSION_TOKEN);
+  });
+
+  test("records failed HTTP command correlations when persistence throws", async () => {
+    const records: Parameters<OperationalLogger["command"]>[0][] = [];
+    const operationalLogger: OperationalLogger = {
+      withCommandCorrelation: (_commandId, operation) => operation(),
+      command: (record) => records.push(record),
+      lobbyEvent: () => {},
+      transactionRetry: () => {},
+      disconnectPause: () => {},
+      restartRestoration: () => {},
+    };
+    const failure = new Error("private persistence detail");
+    const cases = [
+      {
+        commandId: "command-create-failure",
+        commandType: "create-lobby",
+        dependencies: createDependencies(
+          createStore({ createLobbyWithHost: async () => Promise.reject(failure) }),
+          { operationalLogger },
+        ),
+        request: request("/api/v1/lobbies", {
+          method: "POST",
+          body: JSON.stringify({
+            schemaVersion: CONTRACT_SCHEMA_VERSION,
+            commandId: "command-create-failure",
+            username: "Host Player",
+            themeId: "classic",
+          }),
+        }),
+      },
+      {
+        commandId: "command-join-failure",
+        commandType: "join-lobby",
+        dependencies: createDependencies(
+          createStore({ joinLobbyWithSession: async () => Promise.reject(failure) }),
+          { operationalLogger },
+        ),
+        request: request("/api/v1/lobbies/ABC234/participants", {
+          method: "POST",
+          body: JSON.stringify({
+            schemaVersion: CONTRACT_SCHEMA_VERSION,
+            commandId: "command-join-failure",
+            username: "Guest",
+          }),
+        }),
+      },
+      {
+        commandId: "command-rejoin-failure",
+        commandType: "rejoin-lobby",
+        dependencies: createDependencies(
+          createStore({ rejoinLobbyWithSession: async () => Promise.reject(failure) }),
+          { operationalLogger },
+        ),
+        request: request("/api/v1/lobbies/ABC234/session/rejoin", {
+          method: "POST",
+          body: JSON.stringify({
+            schemaVersion: CONTRACT_SCHEMA_VERSION,
+            commandId: "command-rejoin-failure",
+          }),
+          headers: { cookie: `${PARTICIPANT_SESSION_COOKIE_NAME}=${SESSION_TOKEN}` },
+        }),
+      },
+      {
+        commandId: "command-round-failure",
+        commandType: "start-round",
+        dependencies: createDependencies(createStore(), {
+          operationalLogger,
+          roundCommandExecutor: { execute: async () => Promise.reject(failure) },
+        }),
+        request: request("/api/v1/lobbies/ABC234/rounds/current/start", {
+          method: "POST",
+          body: JSON.stringify({
+            schemaVersion: CONTRACT_SCHEMA_VERSION,
+            type: "start-round",
+            commandId: "command-round-failure",
+          }),
+          headers: { cookie: `${PARTICIPANT_SESSION_COOKIE_NAME}=${SESSION_TOKEN}` },
+        }),
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const handle = createLobbyEntryHttpHandler(testCase.dependencies);
+      await expect(handle(testCase.request)).rejects.toBe(failure);
+    }
+
+    expect(records).toEqual(
+      cases.map(({ commandId, commandType }) => ({
+        commandId,
+        commandType,
+        outcome: "failed",
+        errorCode: "INTERNAL_ERROR",
+      })),
+    );
+    expect(JSON.stringify(records)).not.toContain(failure.message);
+  });
+
+  test("records terminal round-command lookup outcomes", async () => {
+    const records: Parameters<OperationalLogger["command"]>[0][] = [];
+    const correlated: string[] = [];
+    const operationalLogger: OperationalLogger = {
+      withCommandCorrelation: (commandId, operation) => {
+        correlated.push(commandId);
+        return operation();
+      },
+      command: (record) => records.push(record),
+      lobbyEvent: () => {},
+      transactionRetry: () => {},
+      disconnectPause: () => {},
+      restartRestoration: () => {},
+    };
+    const command = {
+      schemaVersion: CONTRACT_SCHEMA_VERSION,
+      type: "start-round",
+      commandId: "command-round-lookup",
+    } as const;
+    const createRequest = () =>
+      request("/api/v1/lobbies/ABC234/rounds/current/start", {
+        method: "POST",
+        body: JSON.stringify(command),
+        headers: { cookie: `${PARTICIPANT_SESSION_COOKIE_NAME}=${SESSION_TOKEN}` },
+      });
+    const failure = new Error("private lookup detail");
+    const failing = createLobbyEntryHttpHandler(
+      createDependencies(
+        createStore({ findActiveLobbyIdByCode: async () => Promise.reject(failure) }),
+        { operationalLogger },
+      ),
+    );
+    const missing = createLobbyEntryHttpHandler(
+      createDependencies(createStore({ findActiveLobbyIdByCode: async () => null }), {
+        operationalLogger,
+      }),
+    );
+
+    await expect(failing(createRequest())).rejects.toBe(failure);
+    await expect(missing(createRequest())).resolves.toMatchObject({ status: 404 });
+    expect(correlated).toEqual([command.commandId, command.commandId]);
+    expect(records).toEqual([
+      {
+        commandId: command.commandId,
+        commandType: command.type,
+        outcome: "failed",
+        errorCode: "INTERNAL_ERROR",
+      },
+      {
+        commandId: command.commandId,
+        commandType: command.type,
+        outcome: "rejected",
+        errorCode: "NOT_FOUND",
+      },
+    ]);
+    expect(JSON.stringify(records)).not.toContain(failure.message);
   });
 
   test("returns a participant-private acknowledgement for an own-card mark", async () => {
