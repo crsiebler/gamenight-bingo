@@ -2,7 +2,10 @@ import type { NextConfig } from "next";
 
 import { COMMON_SECURITY_RESPONSE_HEADERS } from "./src/http-security";
 
+const webOrigin = process.env["WEB_ORIGIN"];
+
 const nextConfig: NextConfig = {
+  allowedDevOrigins: webOrigin === undefined ? [] : [new URL(webOrigin).hostname],
   async headers() {
     return [
       {

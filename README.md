@@ -62,6 +62,8 @@ Install and verify:
   ecosystem tooling
 - [Docker Desktop](https://docs.docker.com/desktop/) or Docker Engine with the
   [Compose plugin](https://docs.docker.com/compose/install/)
+- [Caddy](https://caddyserver.com/docs/install) for local HTTPS and same-origin
+  web/realtime proxying
 - [GitHub CLI](https://cli.github.com/) authenticated with access to required
   private reference repositories
 
@@ -70,24 +72,57 @@ bun --version
 node --version
 docker --version
 docker compose version
+caddy version
 gh auth status
 ```
 
 ## Setup
 
-Configuration and dependency changes require maintainer confirmation. Local
-infrastructure, workspace checks, the web API, and the authenticated Socket.IO
-authority are available now; browser UI stories land later:
+Configuration and dependency changes require maintainer confirmation. The local
+browser flow uses Caddy for HTTPS because participant credentials are Secure
+cookies. Caddy also presents the web and Socket.IO processes on one origin.
 
 1. Clone the repository and enter its root directory.
 2. Confirm the prerequisites above, including `gh auth status`.
 3. Obtain approval before installing or changing dependencies, then run
-   `bun install`.
-4. Copy the provided environment example to the documented local environment
-   file when that template is introduced. Never commit local secrets.
-5. Start PostgreSQL with `docker compose up -d` and wait for it to become
+   `bun install --frozen-lockfile`.
+4. Choose a LAN IP that the testing devices can reach. The examples below use
+   `192.168.1.10`; replace it consistently with the current development host IP.
+5. Create the ignored app-specific environment files described below. Never
+   commit local secrets.
+6. Start PostgreSQL with `docker compose up -d` and wait for it to become
    healthy in `docker compose ps`.
-6. Run the web and game-server development commands in separate terminals.
+7. Obtain approval to apply committed migrations to the local database, then
+   run the migration command below.
+8. Start Caddy, the web process, and the game-server process in separate
+   terminals.
+
+The root scripts use `--cwd`, so a repository-root `.env.local` is not loaded by
+the two application processes. Configure each workspace directly. Do not leave
+known variables present with empty values; an empty value is configured and
+fails validation.
+
+Create `apps/web/.env.local`:
+
+```dotenv
+DATABASE_URL=postgresql://gamenight_bingo:gamenight_bingo@127.0.0.1:5432/gamenight_bingo
+WEB_ORIGIN=https://192.168.1.10:8443
+```
+
+Create `apps/game-server/.env.local`:
+
+```dotenv
+DATABASE_URL=postgresql://gamenight_bingo:gamenight_bingo@127.0.0.1:5432/gamenight_bingo
+WEB_ORIGIN=https://192.168.1.10:8443
+GAME_SERVER_HOST=127.0.0.1
+GAME_SERVER_PORT=3001
+```
+
+Do not set `NEXT_PUBLIC_GAME_SERVER_URL` for this Caddy setup. The browser's
+Socket.IO client uses the Caddy origin, and Caddy forwards `/socket.io/*` to the
+game server. `next.config.ts` derives Next's development-origin allowlist from
+the hostname in `WEB_ORIGIN`, so restart the web process whenever that value
+changes.
 
 Docker lifecycle commands:
 
@@ -109,6 +144,40 @@ docker compose --profile redis up -d
 volume. Do not add a volume-removal flag unless local data loss is intentional
 and explicitly approved.
 
+Apply the committed migrations only to the approved local database:
+
+```sh
+DATABASE_URL='postgresql://gamenight_bingo:gamenight_bingo@127.0.0.1:5432/gamenight_bingo' \
+  bun run db:migrate:deploy
+```
+
+Create a local `Caddyfile`, replacing the example IP with the same value used by
+`WEB_ORIGIN`:
+
+```caddyfile
+https://192.168.1.10:8443 {
+	tls internal
+
+	handle /socket.io/* {
+		reverse_proxy 127.0.0.1:3001
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:3000
+	}
+}
+```
+
+Start Caddy from the repository root:
+
+```sh
+caddy run --config Caddyfile
+```
+
+Caddy normally installs or reuses its local development CA. If the host does
+not trust it, run `sudo caddy trust`. Each separate testing device must also
+trust that local CA before its browser can use the HTTPS application normally.
+
 Development commands from the repository root:
 
 ```sh
@@ -119,7 +188,18 @@ bun run dev:game-server
 `bun run dev:web` starts the Next.js HTTP API. `bun run dev:game-server` starts
 the separate long-lived Socket.IO authority on `127.0.0.1:3001` by default.
 Both validate runtime configuration and connect through `DATABASE_URL` before
-serving. They run locally through Bun, not in the default Compose stack.
+serving. They run locally through Bun, not in the default Compose stack. Confirm
+that Next reports `http://localhost:3000`; if it selects another port, stop the
+other process already using port 3000 before continuing. Open the HTTPS
+`WEB_ORIGIN` in the browser, not either process's direct HTTP listener.
+
+The following checks should report PostgreSQL as `up` after all three processes
+are running (replace the example IP as above):
+
+```sh
+curl -k https://192.168.1.10:8443/readyz
+curl http://127.0.0.1:3001/readyz
+```
 
 The explicit single-instance capacity check uses a fresh, empty, migrated
 nonproduction database and writes percentile evidence to

@@ -5,3 +5,7 @@
 **/test-results/
 /tests/fixtures/quality/typescript/*.js
 /packages/database/generated/
+
+# Environment files
+.env
+.env.local
