@@ -1,5 +1,5 @@
 import { createServer, type Server as HttpServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, Socket as NetSocket } from "node:net";
 
 import type {
   ActiveLobbyEvent,
@@ -353,6 +353,11 @@ export function createGameServer(options: GameServerOptions): GameServer {
     });
     response.end("Not found.");
   });
+  const transportSockets = new Set<NetSocket>();
+  httpServer.on("connection", (socket) => {
+    transportSockets.add(socket);
+    socket.once("close", () => transportSockets.delete(socket));
+  });
   const io = new Server<
     ClientToServerEvents,
     ServerToClientEvents,
@@ -402,6 +407,7 @@ export function createGameServer(options: GameServerOptions): GameServer {
   let coWinnerSettlementRecoveryInProgress = false;
   const coWinnerSettlementRecoveryDirtyLobbies = new Set<string>();
   let fatalPresenceClose: Promise<void> | null = null;
+  let closePromise: Promise<void> | null = null;
   let closed = false;
   let failureReported = false;
   let rejectFailure!: (reason: unknown) => void;
@@ -422,6 +428,13 @@ export function createGameServer(options: GameServerOptions): GameServer {
     queuedCoWinnerSettlements.clear();
     coWinnerSettlementReconciliations.clear();
   };
+  const closeSocketServer = () => {
+    if (fatalPresenceClose === null) {
+      fatalPresenceClose = io.close();
+      for (const socket of transportSockets) socket.destroy();
+    }
+    return fatalPresenceClose;
+  };
   const reportAuthorityFailure = () => {
     authorityFailed = true;
     stopAuthorityWork();
@@ -429,7 +442,7 @@ export function createGameServer(options: GameServerOptions): GameServer {
       failureReported = true;
       rejectFailure(new Error("Game server authority failed."));
     }
-    fatalPresenceClose ??= new Promise<void>((resolve) => io.close(() => resolve()));
+    void closeSocketServer();
   };
   const trackAuthorityTask = (task: Promise<void>) => {
     const observed = task.catch(() => {
@@ -1328,13 +1341,14 @@ export function createGameServer(options: GameServerOptions): GameServer {
       const address = await listen(httpServer, host, port);
       return { host: address.address, port: address.port };
     },
-    async close() {
-      if (closed) return Promise.resolve();
-      closed = true;
-      stopAuthorityWork();
-      fatalPresenceClose ??= new Promise<void>((resolve) => io.close(() => resolve()));
-      await fatalPresenceClose;
-      await Promise.all([...pendingAuthorityTasks]);
+    close() {
+      closePromise ??= (async () => {
+        closed = true;
+        stopAuthorityWork();
+        await closeSocketServer();
+        await Promise.all([...pendingAuthorityTasks]);
+      })();
+      return closePromise;
     },
     publishLobbyEvent(lobbyId, event) {
       return emitLobbyEvent(lobbyId, event);

@@ -23,6 +23,7 @@
   "include": [
     "apps/*/src/**/*",
     "packages/*/src/**/*",
+    "scripts/run-single-instance-load.ts",
     "tests/**/*.ts",
     "tests/**/*.tsx",
     "*.config.ts"

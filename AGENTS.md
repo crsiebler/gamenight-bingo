@@ -367,6 +367,11 @@ then refactor while green.
   that is not shared with Vitest or another browser run; the browser preflight
   requires `E2E_DATABASE_CONFIRMED_NONPRODUCTION=true` and rejects retained
   lobby state rather than deleting it. Run one matrix project per invocation.
+- Run `bun run test:performance` separately against its own fresh, empty,
+  migrated nonproduction database. The fixed default-capacity profile derives
+  100 lobbies and 25 participants from runtime defaults, staggers calls at the
+  fastest supported automatic cadence, writes ignored percentile evidence under
+  `test-results`, and must not share its retained database with other suites.
 - Use fake timers for reconnect, pause grace, automatic calling, co-winner, and
   inactivity behavior; avoid wall-clock-dependent tests. Bound deferred
   coordination with timer functions captured before fake timers are installed,

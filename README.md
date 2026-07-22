@@ -121,6 +121,28 @@ the separate long-lived Socket.IO authority on `127.0.0.1:3001` by default.
 Both validate runtime configuration and connect through `DATABASE_URL` before
 serving. They run locally through Bun, not in the default Compose stack.
 
+The explicit single-instance capacity check uses a fresh, empty, migrated
+nonproduction database and writes percentile evidence to
+`test-results/single-instance-performance.json`:
+
+```sh
+E2E_DATABASE_CONFIRMED_NONPRODUCTION=true \
+TEST_DATABASE_URL=postgresql://... \
+bun run test:performance
+```
+
+The harness uses Playwright's managed Chromium by default. Set
+`PLAYWRIGHT_BROWSER_CHANNEL=chrome` to use an installed stable Chrome binary,
+including on workstations where the managed browser has not been installed.
+
+The harness fixes the profile at the application defaults of 100 active lobbies
+and 25 connected participants per lobby. It builds and starts one web process,
+runs one realtime authority, measures 3,000 command-to-commit samples, 30
+commit-to-browser-render samples, and 100 full snapshot reconnects, and fails on
+repeated balls, dropped or divergent call events, divergent snapshots, or a
+commit-to-render p95 at or above 250 ms. Run it separately from other database
+or browser suites so its dedicated database and local resources are not shared.
+
 ## Environment
 
 Runtime configuration is validated before either process serves traffic.

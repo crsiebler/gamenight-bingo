@@ -84,6 +84,7 @@ Next story: US-001
 - Accessibility regressions combine state-focused React Testing Library coverage with browser Axe scans; derive the complete cross-theme semantic/visual matrix from canonical generated moodboards, keep Chromium screenshot baselines scoped to stable nontext artwork, and exercise real private-lobby states plus asset failures in every credential-capable browser project.
 - HTTP mutations compare `Origin` with canonical `WEB_ORIGIN`, require the shared `x-gamenight-request: mutation` JSON header, reject query parameters and malformed UTF-8 before persistence, and validate catalog-backed selections before creating durable state; private responses share no-store, noindex, framing, MIME, permissions, referrer, and per-request nonce CSP protections without `unsafe-inline` scripts.
 - Socket.IO payload-cap regressions should verify all three transport boundaries: a valid below-cap packet reaches its handler, a near-cap packet reaches application validation, and an oversized packet disconnects before command execution; assert serialized packet sizes so fixture drift cannot invalidate the boundary evidence.
+- Single-instance performance evidence uses a fresh empty migrated database, derives the fixed 100-lobby/25-participant profile from runtime defaults, staggers lobby calls at the fastest supported automatic cadence, validates exact per-client events and actor snapshots, and writes ignored percentile evidence under `test-results`; never share that retained database with Vitest or browser suites.
 
 Append-only iteration log
 -------------------------
@@ -5950,3 +5951,65 @@ Targeted re-review outcome for resumed US-059 at 2026-07-21 09:53:22 MST:
 - Explicit same-origin WebSocket CSP sources, shared strict origin parsing, exact one-byte payload-boundary fixtures, and the cross-dispatcher Origin/CSRF matrix resolve all three initial review findings.
 - No in-scope critical, high, or medium findings remain; the review stabilization loop passed.
 - Residual risk is limited to browser-level CSP enforcement being exercised in Chromium rather than native Safari/WebKit or Firefox, plus the final Chromium evidence being one eight-of-nine full run followed by a passing fresh focused header rerun after a test-only dynamic-port correction.
+
+## 2026-07-21 17:52:27 MST - US-060
+- What was implemented
+  - Added an explicit, gated single-instance load harness for the fixed defaults of 100 active lobbies and 25 connected participants per lobby against one realtime authority and one PostgreSQL database.
+  - Measured and reported nearest-rank command-to-commit, commit-to-browser-render, and full snapshot reconnect p50/p95/p99/max values while driving 3,000 measured commands at the fastest supported automatic cadence.
+  - Verified every lobby delivered the exact ordered call IDs, sequences, positions, and balls to every connected Node client; verified browser call labels, durable calls, complete actor cards/marks, privacy exclusions, and common snapshot convergence.
+  - Added reusable percentile, loopback-port, and bounded-cleanup support with focused tests; made repeated game-server shutdown callers join one in-flight close so performance cleanup cannot return before presence cleanup settles.
+  - Documented the isolated performance command and included the harness in root typecheck coverage.
+- Files changed: `AGENTS.md`, `README.md`, `apps/game-server/src/socket-server.ts`, `apps/game-server/src/socket-server.test.ts`, `bun.lock`, `package.json`, `packages/test-support/src/index.ts`, `packages/test-support/src/performance.ts`, `packages/test-support/tsconfig.json`, `scripts/run-single-instance-load.ts`, `tests/performance-metrics.test.ts`, `tsconfig.json`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-060 - Verify single-instance load and latency`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run tests/performance-metrics.test.ts apps/game-server/src/socket-server.test.ts -t "single-instance performance metrics|keeps repeated close calls"` (pass; 6 focused tests)
+  - Fresh migrated database `E2E_DATABASE_CONFIRMED_NONPRODUCTION=true PLAYWRIGHT_BROWSER_CHANNEL=chrome TEST_DATABASE_URL=<approved local database> bun run test:performance` (pass; 100 lobbies, 2,500 participants, 3,000 command samples, 30 render samples, 100 reconnect samples, 20.10 calls/s, 502.59 deliveries/s)
+  - Performance percentiles: command-to-commit p50 13.07 ms / p95 16.97 ms / p99 19.40 ms / max 35.29 ms; commit-to-render p50 17.76 ms / p95 20.39 ms / p99 20.48 ms / max 20.48 ms; reconnect snapshot p50 24.00 ms / p95 30.24 ms / p99 36.21 ms / max 36.92 ms
+  - `TEST_DATABASE_URL=<separate approved local database> bun run test` (pass; typecheck, 40 files, 851 tests)
+  - `bun run typecheck` (pass; harness, workspace boundaries, and all nine workspaces)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun install --frozen-lockfile` (pass; 396 installs checked with no changes)
+  - Fresh migrated database `PLAYWRIGHT_BROWSER_CHANNEL=chrome ... bun run test:e2e` (pass; 9 tests)
+  - Default Chromium E2E project (not run; local pinned Playwright Chromium binary is unavailable, while the installed stable-Chrome project passed)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `performance-engineer`, `test-automator`
+  - Used: `performance-engineer`, `test-automator` for workload shape, timing boundaries, integrity assertions, typecheck scope, cleanup risks, and deterministic coverage guidance
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, `security-engineer`; targeted re-review by `code-reviewer`
+  - Findings: fixed the hardcoded stable-Chrome portability blocker; QA and security returned no actionable findings, and targeted code re-review passed
+- Decisions (why):
+  - Staggered the 100 lobby commands by 50 ms with a rotating phase because this models the maximum normal automatic cadence of one call per lobby every five seconds; an initial synchronized 100-command spike exceeded the bounded transaction retry envelope and is not the PRD's normal latency profile.
+  - Kept fixture joins and connection establishment serial because they are outside the measured workload and parallel setup manufactured unrelated Serializable conflicts before load measurement.
+  - Recorded browser render completion in the harness process after two animation frames so commit-to-render uses one monotonic clock and conservatively includes the Playwright callback hop.
+  - Derived capacity from `RUNTIME_CONFIG_DEFAULTS` and included the executable script in root TypeScript coverage so configuration drift or harness type errors fail normal checks.
+  - Retained failed and successful local test databases without destructive cleanup; every acceptance attempt used an empty migrated database and never reused partial load state.
+  - Testing decision: this story primarily adds test infrastructure and acceptance evidence; the pre-existing candidate shutdown regression covered its production close-idempotency fix, and all harness behavior is directly exercised by focused tests plus the full gated run.
+- **Learnings for future iterations:**
+  - Capacity setup and capacity workload are separate concerns: serial fixture setup avoids measuring retry noise that normal gameplay does not create, while rotating phased commands exercise the intended steady-state arrival rate without best-case browser ordering.
+  - Browser timestamps should cross into the load-generator clock at observation time rather than subtracting independent process clocks; two animation frames provide a conservative rendered-state boundary.
+  - Heavy harnesses must fail on integrity and cleanup as well as latency, typecheck with the repository, and keep generated reports ignored rather than committing machine-specific benchmark artifacts.
+- Known issues / follow-ups:
+  - The harness measures one realtime authority in the same Bun process as its Node load clients; process isolation and CPU/RSS/event-loop telemetry are useful future capacity refinements but are not required for the measured MVP acceptance threshold.
+  - Four retained local nonproduction performance databases and separate check/E2E databases were not deleted because destructive local data cleanup was not required.
+  - Root `bun run format:check` remains blocked by unrelated pre-existing `.playwright-mcp` artifacts; every tracked file passes Prettier.
+- Next iteration start:
+  - If review passes, implement US-061 health/readiness and privacy-safe logging; otherwise remediate merged blocking performance or test findings within the one-re-review limit.
+---
+
+Initial review remediation for US-060 at 2026-07-21 17:58 MST:
+- `code-reviewer` identified one medium portability blocker: the harness hardcoded stable Chrome even though the repository defaults to Playwright-managed Chromium. `qa-expert` and `security-engineer` returned empty actionable finding lists.
+- Added a failing focused launch-option test, then made managed Chromium the default and honored optional `PLAYWRIGHT_BROWSER_CHANNEL=chrome`; documented the fallback and corrected the recorded acceptance command to match the stable-Chrome run.
+- Testing decision:
+  - Change type: test-harness portability bug fix.
+  - Test-first required: yes.
+  - Red: `bunx vitest run tests/performance-metrics.test.ts -t "uses managed Chromium"` failed because the launch-option helper did not exist.
+  - Green: the focused performance/shutdown suite passed 7 tests; root typecheck, lint, and focused formatting also passed.
+- Targeted re-review is limited to `code-reviewer` because only its portability finding received substantive test, harness, and documentation changes; QA and security returned empty findings.
+
+Targeted re-review outcome for US-060 at 2026-07-21 18:00 MST:
+- `code-reviewer` returned an empty actionable finding list against the complete revised staged diff.
+- Managed Chromium is now the portable default, the stable-Chrome fallback is explicit and documented, and focused regression coverage proves both launch-option paths.
+- QA and security had already returned empty finding lists. No in-scope critical, high, or medium findings remain; US-060 can be marked passing and committed after the final consistency check.

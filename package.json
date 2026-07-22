@@ -20,6 +20,7 @@
     "test": "bun run typecheck && vitest run",
     "test:database": "vitest run packages/database/src/database.integration.test.ts",
     "test:e2e": "playwright test",
+    "test:performance": "RUN_SINGLE_INSTANCE_LOAD=true bun scripts/run-single-instance-load.ts",
     "test:quality-tooling": "vitest run tests/quality/tooling.test.ts",
     "test:workspace-boundaries": "bun scripts/check-workspace-boundaries.test.mjs && bun run check:workspace-boundaries",
     "typecheck": "bun run test:workspace-boundaries && tsc --noEmit --pretty false && bun run --filter '@gamenight-bingo/*' typecheck"
@@ -44,6 +45,7 @@
     "prettier-plugin-tailwindcss": "0.8.1",
     "react": "19.2.7",
     "react-dom": "19.2.7",
+    "socket.io-client": "4.8.3",
     "typescript": "5.9.3",
     "typescript-eslint": "8.64.0",
     "vitest": "4.1.10"

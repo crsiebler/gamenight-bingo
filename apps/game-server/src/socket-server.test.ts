@@ -913,6 +913,32 @@ async function createHarness(options: HarnessOptions = {}) {
 }
 
 describe("authenticated Socket.IO authority", () => {
+  test("keeps repeated close calls joined to in-flight presence cleanup", async () => {
+    const credential = ticket(99);
+    const unregisterStarted = deferred();
+    const releaseUnregister = deferred<null>();
+    const harness = await createHarness({
+      tickets: new Map([[ticketHash(credential), identities.host]]),
+      unregisterPresence: async () => {
+        unregisterStarted.resolve();
+        return releaseUnregister.promise;
+      },
+    });
+    await harness.connect(credential);
+
+    const firstClose = harness.server.close();
+    await waitForSignal(unregisterStarted.promise, "presence cleanup during shutdown");
+    const secondClose = harness.server.close();
+
+    expect(secondClose).toBe(firstClose);
+    releaseUnregister.resolve(null);
+
+    await waitForSignal(
+      Promise.all([firstClose, secondClose]),
+      "all callers to observe completed authority shutdown",
+    );
+  });
+
   test("recovers and settles an exact co-winner deadline after two seconds", async () => {
     const lease = {
       lobbyId: identities.host.lobbyId,
