@@ -1,3 +1,4 @@
+import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 import {
@@ -19,6 +20,7 @@ import {
   type OperationalLogger,
 } from "@gamenight-bingo/database";
 import { patternCatalog } from "@gamenight-bingo/patterns";
+import { findAvailableLoopbackPorts, runWithBoundedCleanup } from "@gamenight-bingo/test-support";
 import { io as createClient, Manager, type Socket } from "socket.io-client";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
@@ -38,6 +40,12 @@ const NOW = "2026-07-17T20:00:00.000Z";
 const LATER = "2026-07-17T20:00:02.000Z";
 const testDatabaseUrl = process.env["TEST_DATABASE_URL"];
 const testDatabase = testDatabaseUrl === undefined ? test.skip : test;
+const testProcessRestart =
+  testDatabaseUrl !== undefined &&
+  process.env["RUN_GAME_SERVER_RESTART_TEST"] === "true" &&
+  process.env["E2E_DATABASE_CONFIRMED_NONPRODUCTION"] === "true"
+    ? test
+    : test.skip;
 const realSetTimeout = globalThis.setTimeout.bind(globalThis);
 const realClearTimeout = globalThis.clearTimeout.bind(globalThis);
 
@@ -686,6 +694,59 @@ function waitForSignal<T>(promise: Promise<T>, label: string): Promise<T> {
       },
     );
   });
+}
+
+function waitForChildExit(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise((resolve) => child.once("exit", () => resolve()));
+}
+
+async function stopChild(child: ChildProcess | null): Promise<void> {
+  if (child === null || child.exitCode !== null || child.signalCode !== null) return;
+  child.kill("SIGTERM");
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      waitForChildExit(child),
+      new Promise<never>((_resolve, reject) => {
+        timeout = realSetTimeout(
+          () => reject(new Error("Timed out stopping the game-server process.")),
+          5_000,
+        );
+      }),
+    ]);
+  } catch {
+    child.kill("SIGKILL");
+    await waitForChildExit(child);
+  } finally {
+    if (timeout !== undefined) realClearTimeout(timeout);
+  }
+}
+
+async function startGameServerProcess(
+  environment: NodeJS.ProcessEnv,
+  healthUrl: string,
+): Promise<ChildProcess> {
+  const child = spawn("bun", ["apps/game-server/src/index.ts"], {
+    cwd: process.cwd(),
+    env: environment,
+    stdio: "ignore",
+  });
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error("The game-server process exited before becoming healthy.");
+    }
+    try {
+      const response = await fetch(healthUrl);
+      if (response.ok) return child;
+    } catch {
+      // Connection failures are expected until the child binds its listener.
+    }
+    await new Promise((resolve) => realSetTimeout(resolve, 25));
+  }
+  await stopChild(child);
+  throw new Error("Timed out waiting for the game-server process to become healthy.");
 }
 
 interface HarnessOptions {
@@ -3049,6 +3110,408 @@ describe("authenticated Socket.IO authority", () => {
         await restartedDatabase?.disconnect();
       }
     },
+  );
+
+  testProcessRestart(
+    "restores paused and co-winner lobbies after the game-server process restarts",
+    async () => {
+      const pausedFixture = createRestartLobbyState();
+      const resultFixture = createRestartLobbyState();
+      const latestActivityAt = new Date();
+      const pausedAt = new Date(latestActivityAt.getTime() - 1_000);
+      const pausedRound = pausedFixture.state.round!;
+      const pausedCall = pausedRound.calls[0]!;
+      const pausedEvents = [
+        {
+          sequence: 1n,
+          roundId: pausedRound.id,
+          eventType: "call",
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          payload: {
+            call: {
+              ...pausedCall,
+              roundId: pausedRound.id,
+              calledAt: pausedCall.calledAt.toISOString(),
+            },
+          },
+          createdAt: pausedCall.calledAt,
+        },
+        {
+          sequence: 2n,
+          roundId: pausedRound.id,
+          eventType: "stage",
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          payload: {
+            round: {
+              id: pausedRound.id,
+              lobbyId: pausedFixture.identity.lobbyId,
+              patternId: pausedRound.currentPatternId,
+              callConfiguration: { mode: "automatic" as const, intervalSeconds: 30 as const },
+              stage: "paused" as const,
+              pauseReason: "host-command" as const,
+              pausedAt: pausedAt.toISOString(),
+              startedAt: pausedRound.startedAt!.toISOString(),
+            },
+          },
+          createdAt: pausedAt,
+        },
+      ];
+      const winningBalls = [1, 16, 31, 46, 61] as const;
+      const resultRound = resultFixture.state.round!;
+      const resultCalls = winningBalls.map((ball, index) => ({
+        id: `${resultRound.id}-call-${String(index + 1)}`,
+        position: index + 1,
+        ball,
+        calledAt: new Date(new Date(NOW).getTime() + index * 100),
+      }));
+      const triggeringCallId = resultCalls.at(-1)!.id;
+      const coWinnerOpenedAt = new Date(resultCalls.at(-1)!.calledAt.getTime() + 1);
+      const coWinnerClosesAt = new Date(coWinnerOpenedAt.getTime() + 2_000);
+      const resultEvents = [
+        ...resultCalls.map((call, index) => ({
+          sequence: BigInt(index + 1),
+          roundId: resultRound.id,
+          eventType: "call",
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          payload: {
+            call: {
+              ...call,
+              roundId: resultRound.id,
+              calledAt: call.calledAt.toISOString(),
+            },
+          },
+          createdAt: call.calledAt,
+        })),
+        {
+          sequence: 6n,
+          roundId: resultRound.id,
+          eventType: "co-winner-window",
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          payload: {
+            window: {
+              triggeringCallId,
+              openedAt: coWinnerOpenedAt.toISOString(),
+              closesAt: coWinnerClosesAt.toISOString(),
+            },
+          },
+          createdAt: coWinnerOpenedAt,
+        },
+        {
+          sequence: 7n,
+          roundId: resultRound.id,
+          eventType: "co-winner-result",
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          payload: {
+            result: {
+              triggeringCallId,
+              openedAt: coWinnerOpenedAt.toISOString(),
+              closesAt: coWinnerClosesAt.toISOString(),
+              settledAt: coWinnerClosesAt.toISOString(),
+              winnerParticipantIds: [resultFixture.identity.participantId],
+            },
+          },
+          createdAt: coWinnerClosesAt,
+        },
+      ];
+      const fixtures = [
+        {
+          kind: "paused" as const,
+          fixture: pausedFixture,
+          state: {
+            ...pausedFixture.state,
+            lobby: {
+              ...pausedFixture.state.lobby,
+              lastActivityAt: latestActivityAt,
+              lastEventSequence: 2n,
+            },
+            presenceGenerations: pausedFixture.state.presenceGenerations.map((presence) => ({
+              ...presence,
+              status: "absent" as const,
+              connectionCount: 0,
+              changedAt: latestActivityAt,
+              graceEndsAt: null,
+              absentSince: latestActivityAt,
+            })),
+            round: {
+              ...pausedFixture.state.round!,
+              stage: "paused" as const,
+              pausedAt,
+              pauseReason: "host-command" as const,
+              nextCallAt: null,
+              coWinnerTriggeringCallId: null,
+              coWinnerOpenedAt: null,
+              coWinnerClosesAt: null,
+              resultSettledAt: null,
+              coWinners: [],
+            },
+            events: pausedEvents,
+          },
+        },
+        {
+          kind: "result" as const,
+          fixture: resultFixture,
+          state: {
+            ...resultFixture.state,
+            lobby: {
+              ...resultFixture.state.lobby,
+              lastActivityAt: latestActivityAt,
+              lastEventSequence: 7n,
+            },
+            presenceGenerations: resultFixture.state.presenceGenerations.map((presence) => ({
+              ...presence,
+              status: "absent" as const,
+              connectionCount: 0,
+              changedAt: latestActivityAt,
+              graceEndsAt: null,
+              absentSince: latestActivityAt,
+            })),
+            round: {
+              ...resultRound,
+              drawOrder: [
+                ...winningBalls.map((ball, index) => ({ position: index + 1, ball })),
+                ...Array.from({ length: 75 }, (_, index) => index + 1)
+                  .filter((ball) => !winningBalls.includes(ball as (typeof winningBalls)[number]))
+                  .map((ball, index) => ({ position: index + winningBalls.length + 1, ball })),
+              ],
+              calls: resultCalls,
+              cards: resultRound.cards.map((card) =>
+                card.participantId === resultFixture.identity.participantId
+                  ? {
+                      ...card,
+                      marks: winningBalls.map((ball, index) => ({
+                        id: `${card.id}-mark-${String(index + 1)}`,
+                        ball,
+                        markedAt:
+                          index === winningBalls.length - 1
+                            ? coWinnerOpenedAt
+                            : resultCalls[index]!.calledAt,
+                      })),
+                    }
+                  : card,
+              ),
+              coWinnerTriggeringCallId: triggeringCallId,
+              coWinnerOpenedAt,
+              coWinnerClosesAt,
+              resultSettledAt: coWinnerClosesAt,
+              coWinners: resultRound.coWinners.map((winner) => ({
+                ...winner,
+                triggeringCallId,
+                confirmedAt: coWinnerOpenedAt,
+              })),
+            },
+            events: resultEvents,
+          },
+        },
+      ];
+      expect(fixtures[0]!.state.events.map(({ eventType }) => eventType)).toEqual([
+        "call",
+        "stage",
+      ]);
+      const settledResult = fixtures[1]!.state.round!;
+      expect(settledResult.cards[0]!.marks.at(-1)!.markedAt).toEqual(
+        settledResult.coWinnerOpenedAt,
+      );
+      expect(settledResult.coWinners[0]!.confirmedAt.getTime()).toBeLessThan(
+        settledResult.coWinnerClosesAt!.getTime(),
+      );
+      expect(fixtures[1]!.state.events.map(({ eventType }) => eventType)).toEqual([
+        ...winningBalls.map(() => "call"),
+        "co-winner-window",
+        "co-winner-result",
+      ]);
+      for (const { state } of fixtures) {
+        for (const event of state.events) {
+          expect(() =>
+            ActiveLobbyEventSchema.parse({
+              schemaVersion: event.schemaVersion,
+              type: event.eventType,
+              eventSequence: Number(event.sequence),
+              occurredAt: event.createdAt.toISOString(),
+              ...event.payload,
+            }),
+          ).not.toThrow();
+        }
+      }
+      const [port] = await findAvailableLoopbackPorts(1);
+      const url = `http://127.0.0.1:${String(port)}`;
+      const environment = {
+        ...process.env,
+        DATABASE_URL: testDatabaseUrl!,
+        GAME_SERVER_HOST: "127.0.0.1",
+        GAME_SERVER_PORT: String(port),
+        WEB_ORIGIN: ORIGIN,
+      };
+      const database = await connectDatabase(testDatabaseUrl!);
+      let firstProcess: ChildProcess | null = null;
+      let restartedProcess: ChildProcess | null = null;
+
+      const issueTicket = async (
+        fixture: ReturnType<typeof createRestartLobbyState>,
+        credential: string,
+      ) => {
+        const issued = await database.lobbyStates.issueRealtimeTicket({
+          lobbyId: fixture.identity.lobbyId,
+          sessionTokenHash: fixture.sessionTokenHash,
+          ticketHash: Buffer.from(ticketHash(credential), "hex"),
+          ttlSeconds: 60,
+        });
+        if (!issued.ok) throw new Error(issued.error.code);
+      };
+      const openRuntimeClient = (
+        credential: string,
+        lobbyEvents: unknown[],
+      ): { readonly client: Socket; readonly snapshot: Promise<Snapshot> } => {
+        const client = createClient(url, {
+          autoConnect: false,
+          transports: ["websocket"],
+          extraHeaders: { Origin: ORIGIN },
+          auth: { schemaVersion: CONTRACT_SCHEMA_VERSION, ticket: credential },
+          reconnection: false,
+        });
+        clients.push(client);
+        client.on("v1:lobby-event", (event: unknown) => lobbyEvents.push(event));
+        const snapshot = once<{ snapshot: unknown }>(client, "v1:snapshot").then((message) =>
+          SnapshotSchema.parse(message.snapshot),
+        );
+        client.connect();
+        return { client, snapshot };
+      };
+      const stableGameState = (snapshot: Snapshot) => ({
+        round: snapshot.round,
+        ownCard: snapshot.ownCard,
+        ownMarks: snapshot.ownMarks,
+        calls: snapshot.calls,
+        timer: snapshot.timer,
+      });
+
+      await runWithBoundedCleanup(
+        async () => {
+          for (const entry of fixtures) {
+            const created = await database.lobbyStates.createActive(entry.state, {
+              maxActiveLobbies: 100_000,
+              nextCode: randomLobbyCode,
+            });
+            if (!created.ok) throw new Error(created.error.message);
+          }
+
+          const firstCredentials = fixtures.map(() =>
+            Buffer.from(randomBytes(32)).toString("base64url"),
+          );
+          for (const [index, entry] of fixtures.entries()) {
+            await issueTicket(entry.fixture, firstCredentials[index]!);
+          }
+
+          firstProcess = await startGameServerProcess(environment, `${url}/healthz`);
+          const firstProcessId = firstProcess.pid;
+          const firstConnections = firstCredentials.map((credential) =>
+            openRuntimeClient(credential, []),
+          );
+          const firstSnapshots = await Promise.all(
+            firstConnections.map(({ snapshot }) => snapshot),
+          );
+
+          const firstDisconnects = firstConnections.map(({ client }) =>
+            once<void>(client, "disconnect"),
+          );
+          await stopChild(firstProcess);
+          firstProcess = null;
+          await Promise.all(firstDisconnects);
+          await expect(database.checkReadiness()).resolves.toBe(true);
+
+          const restartCredentials = fixtures.map(() =>
+            Buffer.from(randomBytes(32)).toString("base64url"),
+          );
+          for (const [index, entry] of fixtures.entries()) {
+            expect(restartCredentials[index]).not.toBe(firstCredentials[index]);
+            await expect(
+              database.lobbyStates.rejoinParticipantSessionByTokenHash({
+                lobbyId: entry.fixture.identity.lobbyId,
+                tokenHash: entry.fixture.sessionTokenHash,
+              }),
+            ).resolves.toMatchObject({ status: "active" });
+            await issueTicket(entry.fixture, restartCredentials[index]!);
+          }
+
+          restartedProcess = await startGameServerProcess(environment, `${url}/healthz`);
+          expect(restartedProcess.pid).toBeDefined();
+          expect(restartedProcess.pid).not.toBe(firstProcessId);
+          for (const credential of firstCredentials) {
+            const rejectedClient = createClient(url, {
+              autoConnect: false,
+              transports: ["websocket"],
+              extraHeaders: { Origin: ORIGIN },
+              auth: { schemaVersion: CONTRACT_SCHEMA_VERSION, ticket: credential },
+              reconnection: false,
+            });
+            clients.push(rejectedClient);
+            const rejected = once<Error & { data?: unknown }>(rejectedClient, "connect_error");
+            rejectedClient.connect();
+            await expect(rejected).resolves.toMatchObject({ data: { code: "UNAUTHORIZED" } });
+          }
+          const restartedEvents = fixtures.map(() => [] as unknown[]);
+          const restartedConnections = restartCredentials.map((credential, index) =>
+            openRuntimeClient(credential, restartedEvents[index]!),
+          );
+          const restartedSnapshots = await Promise.all(
+            restartedConnections.map(({ snapshot }) => snapshot),
+          );
+          await new Promise((resolve) => realSetTimeout(resolve, 75));
+
+          for (const [index, entry] of fixtures.entries()) {
+            const firstSnapshot = firstSnapshots[index]!;
+            const restartedSnapshot = restartedSnapshots[index]!;
+            expect(stableGameState(restartedSnapshot)).toEqual(stableGameState(firstSnapshot));
+            expect(restartedSnapshot.round?.callConfiguration).toEqual({
+              mode: "automatic",
+              intervalSeconds: 30,
+            });
+            expect(restartedSnapshot.ownCard).toMatchObject({
+              participantId: entry.fixture.identity.participantId,
+              cells: activeSnapshot.ownCard!.cells,
+            });
+            expect(restartedSnapshot.ownMarks.map(({ ball }) => ball)).toEqual(
+              entry.state.round!.cards[0]!.marks.map(({ ball }) => ball),
+            );
+            expect(
+              restartedSnapshot.calls.map(({ position, ball }) => ({ position, ball })),
+            ).toEqual(entry.state.round!.calls.map(({ position, ball }) => ({ position, ball })));
+            expect(new Set(restartedSnapshot.calls.map(({ ball }) => ball)).size).toBe(
+              restartedSnapshot.calls.length,
+            );
+            expect(restartedEvents[index]).toEqual([]);
+            expect(JSON.stringify(restartedSnapshot)).not.toMatch(
+              new RegExp(
+                `${entry.fixture.foreignCardId}|drawOrder|tokenHash|commandResults|"events"`,
+              ),
+            );
+
+            if (entry.kind === "paused") {
+              expect(restartedSnapshot.round).toMatchObject({
+                stage: "paused",
+                pauseReason: "host-command",
+                pausedAt: pausedAt.toISOString(),
+              });
+            } else {
+              expect(restartedSnapshot.round).toMatchObject({
+                stage: "result",
+                result: {
+                  triggeringCallId,
+                  settledAt: entry.state.round!.resultSettledAt!.toISOString(),
+                  winnerParticipantIds: [entry.fixture.identity.participantId],
+                },
+              });
+            }
+          }
+        },
+        [
+          { label: "first game-server process", run: () => stopChild(firstProcess) },
+          { label: "restarted game-server process", run: () => stopChild(restartedProcess) },
+          { label: "PostgreSQL connection", run: () => database.disconnect() },
+        ],
+        10_000,
+      );
+    },
+    30_000,
   );
 
   testDatabase(

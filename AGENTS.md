@@ -350,7 +350,9 @@ then refactor while green.
   failed synchronization assertion cannot hang the suite.
 - Keep Node test files serialized when they can share `TEST_DATABASE_URL`;
   repository cleanup and Socket.IO recovery tests must never mutate one database
-  concurrently.
+  concurrently. Full-runtime restart tests must use a fresh, empty, migrated
+  database so process startup can recover the complete persisted lease set
+  without treating fixtures from earlier tests as unrelated process-local work.
 - Use multi-client Socket.IO tests for ordering, presence, reconnects, timers,
   and co-winner behavior.
 - Use React Testing Library for component behavior and Playwright for browser

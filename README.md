@@ -386,6 +386,7 @@ bun run test
 bun run db:generate
 DATABASE_URL='<approved-local-or-test-url>' bun run db:migrate:deploy
 TEST_DATABASE_URL='<migrated-test-url>' bun run test:database
+E2E_DATABASE_CONFIRMED_NONPRODUCTION=true TEST_DATABASE_URL='<fresh-empty-migrated-restart-test-url>' bun run test:restart
 bun run test:e2e
 E2E_DATABASE_CONFIRMED_NONPRODUCTION=true TEST_DATABASE_URL='<fresh-empty-migrated-browser-test-url>' PLAYWRIGHT_BROWSER_MATRIX=all PLAYWRIGHT_MATRIX_PROJECT='<one-project>' bun run test:e2e
 ```
@@ -407,8 +408,10 @@ dedicated database contains no existing lobbies, and run one project per fresh
 database.
 The generic Vitest run skips database integration tests when `TEST_DATABASE_URL`
 is absent; database changes must also run `test:database` against PostgreSQL 16
-after applying the committed migrations. Never run migration or integration-test
-commands against production.
+after applying the committed migrations. The process-restart suite requires its
+own fresh, empty, migrated nonproduction database because the game-server entry
+point recovers every persisted process-local lease. Never run migration or
+integration-test commands against production.
 
 ## Contributing
 

@@ -86,6 +86,7 @@ Next story: US-001
 - Socket.IO payload-cap regressions should verify all three transport boundaries: a valid below-cap packet reaches its handler, a near-cap packet reaches application validation, and an oversized packet disconnects before command execution; assert serialized packet sizes so fixture drift cannot invalidate the boundary evidence.
 - Single-instance performance evidence uses a fresh empty migrated database, derives the fixed 100-lobby/25-participant profile from runtime defaults, staggers lobby calls at the fastest supported automatic cadence, validates exact per-client events and actor snapshots, and writes ignored percentile evidence under `test-results`; never share that retained database with Vitest or browser suites.
 - Keep `/healthz` independent of PostgreSQL and implement `/readyz` with a bounded, coalesced, briefly cached database probe that retains ownership of timed-out work until it settles; derive database-dependent API handlers lazily so readiness can observe startup rejection without creating an unhandled secondary promise, and cache the operational logger with the global database/readiness state so retry and command contexts remain aligned across module reevaluation. Structured operational diagnostics use typed allowlisted scalar records, hash all client-controlled identifiers plus lobby/participant correlations, propagate hashed command context to command-driven transaction retries, log only fresh sequenced deliveries rather than exact echoes, adapt committed acknowledgements at the wire boundary, record terminal disconnect-pause failures, permanently drop output after an asynchronous stream error, and never serialize requests, commands, events, errors, snapshots, cards, credentials, or future draw data.
+- Full-runtime restart tests spawn the production game-server entry point against a fresh, empty, migrated nonproduction database; sharing the normal serialized `TEST_DATABASE_URL` lets legitimate persisted leases from earlier tests become unrelated process-local startup work.
 
 Append-only iteration log
 -------------------------
@@ -6186,3 +6187,117 @@ Targeted re-review outcome for US-061 at 2026-07-21 19:29 MST:
 - Command lookup correlation/outcomes, fatal disconnect-pause diagnostics, and asynchronous output failure containment are covered by focused regressions and the complete serial suite.
 - The QA fixed-delay note remains a documented low residual risk; external process/log-pipeline monitoring must detect the intentional permanent diagnostic drop after output failure.
 - No in-scope critical, high, or medium findings remain; US-061 can be marked passing and committed after the final consistency check.
+
+## 2026-07-21 19:52:01 MST - US-062
+- What was implemented
+  - Added a PostgreSQL-backed integration test that spawns the production game-server entry point, connects paused and settled co-winner lobby clients, terminates and awaits that OS process, proves PostgreSQL remains ready, starts a fresh process on the same port, and reconnects with fresh single-use tickets.
+  - Proved actor-scoped full snapshots preserve exact own cards, marks, ordered calls, pattern/stage, automatic call configuration, non-null pause state, and settled co-winner result while excluding foreign cards, private draw order, credentials, command results, and event history.
+  - Verified consumed pre-restart tickets remain rejected, no historical call is replayed, and durable call positions/balls remain unchanged and nonrepeating.
+  - Added a guarded `test:restart` command with a fresh-empty-database preflight, domain-valid canonical One Line winner data, and bounded all-step child/database cleanup.
+- Files changed: `AGENTS.md`, `README.md`, `apps/game-server/package.json`, `apps/game-server/src/socket-server.test.ts`, `bun.lock`, `package.json`, `packages/database/scripts/assert-empty-e2e-database.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-062 - Verify single-instance restart behavior`
+- Auto approval: `enabled`
+- Checks:
+  - `DATABASE_URL=<approved local database> bun run db:migrate:deploy` (pass; seven migrations on a dedicated nonproduction database)
+  - `E2E_DATABASE_CONFIRMED_NONPRODUCTION=true TEST_DATABASE_URL=<fresh empty migrated local database> bun run test:restart` (pass; one production-entrypoint process-restart test)
+  - `TEST_DATABASE_URL=<approved local database> bun run test` (pass after review remediation; typecheck, 42 files, 873 tests with the isolated restart test skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (initially failed for two unnecessary test-regex escapes; pass after correction)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (initially identified the new test; pass after formatting)
+  - `bun install --frozen-lockfile` (pass; 397 installs checked with no changes)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `test-automator`, `websocket-engineer`
+  - Used: `test-automator`, `websocket-engineer` for full-runtime lifecycle shape, ticket/privacy assertions, recovery seams, database isolation, and cleanup guidance
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`; targeted re-review by both after substantive remediation
+  - Findings: fixed skipped cleanup and the process-boundary gap; targeted code re-review passed, but QA found the settled result chronology/event history remained unreachable, so no commit was created
+- Decisions (why):
+  - Used two lobbies in one authority lifecycle because a durable paused round and a settled co-winner result are mutually exclusive stage projections, while both must be restored by the same restart path.
+  - Kept PostgreSQL continuously available through an independent connection while replacing the complete child process, runtime-owned database connection, Socket.IO authority, and module state, which proves the intended single-instance restart boundary without restarting infrastructure.
+  - Isolated the production entrypoint run on a fresh database instead of filtering recovery scans because process startup must exercise the complete persisted lease set and normal shared integration fixtures can contain unrelated valid leases.
+  - Added no production behavior because the complete runtime already satisfied the story; this iteration adds missing automated acceptance evidence and test isolation.
+  - Testing decision: this is test-only integration acceptance coverage, so no production behavior required a red-green cycle; the new test passed against existing runtime behavior, then repeat/full-suite runs exposed and fixed order-dependent test isolation.
+- **Learnings for future iterations:**
+  - Full-runtime restart coverage must distinguish process-local authority replacement from PostgreSQL availability by retaining an independent readiness connection across both runtime lifecycles.
+  - Shared database suites can contain valid persisted recovery leases from earlier tests even when files are serialized; a production-entrypoint restart test therefore needs a fresh empty migrated database rather than filtered production recovery behavior.
+  - A single actor-scoped snapshot can prove privacy with a foreign persisted card, while separate paused/result lobbies cover mutually exclusive stage-specific projections without weakening assertions to nullable fields.
+- Known issues / follow-ups:
+  - Root `bun run format:check` remains blocked by unrelated untracked `.playwright-mcp` artifacts; every tracked file passes Prettier.
+  - The dedicated nonproduction US-062 databases were retained because destructive cleanup was not required.
+  - The result fixture must align the triggering mark, co-winner opening, and winner confirmation timestamps and retain contract-valid committed call/window/result events before the review loop can pass.
+- Next iteration start:
+  - Resume US-062 by making the settled result fixture fully reachable, rerun the dedicated/full checks, and restart the staged review loop; keep `passes: false` until that review passes.
+---
+
+Initial review remediation for US-062 at 2026-07-21 20:03:34 MST:
+- `code-reviewer` found one medium cleanup leak risk and one low progress-record issue; `qa-expert` found two medium acceptance gaps because the restart remained in one Vitest process and the settled winner fixture had not completed its canonical pattern.
+- Replaced the in-process dependency-scoped restart with two sequential `bun apps/game-server/src/index.ts` child processes and asserted distinct process IDs while retaining the same PostgreSQL instance and listening port.
+- Added a dedicated fresh-empty-database preflight/command so production startup recovers its complete lease set, then seeded five ordered B/I/N/G/O calls and marks that complete the host card's top row on the triggering call.
+- Switched cleanup to the shared bounded cleanup runner so both child processes and PostgreSQL disconnect are attempted even when another cleanup phase fails.
+- Added README and AGENTS guidance for the isolated process-restart command and updated the progress record; targeted re-review includes both original specialists because both code and test coverage changed substantively.
+
+Targeted re-review outcome for US-062 at 2026-07-21 20:08 MST:
+- `code-reviewer` returned an empty actionable finding list and confirmed bounded all-step cleanup.
+- `qa-expert` confirmed the process/PID, fresh-ticket, snapshot, privacy, and cleanup remediation, but found one remaining medium blocker in the seeded settled result.
+- The final mark currently precedes the inherited co-winner opening, winner confirmation remains at the exclusive close deadline, and clearing all active events/sequence does not represent the atomic call/window/result history produced by authoritative commands.
+- Per the one-targeted-re-review limit, US-062 remains `passes: false`; no further implementation change, PRD update, or commit was made in this iteration.
+
+## 2026-07-21 20:13:45 MST - US-062
+- What was implemented
+  - Resumed the blocked restart story by making the settled-result fixture reachable through five ordered calls and marks that complete the canonical One Line top row on the triggering mark.
+  - Aligned the triggering mark, first-winner confirmation, and co-winner-window opening timestamp; settled the result at the exclusive close deadline.
+  - Retained and contract-validated the five committed call events, co-winner-window event, and settled-result event with monotonic sequences before proving the fresh process restores the same authoritative snapshot without replaying history.
+- Files changed: `AGENTS.md`, `README.md`, `apps/game-server/package.json`, `apps/game-server/src/socket-server.test.ts`, `bun.lock`, `package.json`, `packages/database/scripts/assert-empty-e2e-database.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-062 - Verify single-instance restart behavior`
+- Auto approval: `enabled`
+- Checks:
+  - `E2E_DATABASE_CONFIRMED_NONPRODUCTION=true RUN_GAME_SERVER_RESTART_TEST=true bunx vitest run apps/game-server/src/socket-server.test.ts -t 'game-server process restarts'` (expected red: failed because the triggering mark preceded the co-winner opening)
+  - `DATABASE_URL=<fresh empty migrated local database> bun run db:migrate:deploy` (pass; seven migrations)
+  - `E2E_DATABASE_CONFIRMED_NONPRODUCTION=true TEST_DATABASE_URL=<fresh empty migrated local database> bun run test:restart` (expected second red after adding event-contract validation: failed because seeded call events omitted `roundId`; pass after correction with one production-entrypoint process-restart test)
+  - `TEST_DATABASE_URL=<approved local database> bun run test` (pass; typecheck, 42 files, 873 tests with the isolated restart test skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass; complete tracked tree)
+  - `bun install --frozen-lockfile` (pass; 397 installs checked with no changes)
+  - `bun run test:e2e` (environment unavailable: three browser checks could not launch because the configured Playwright Chromium binary is not installed; one nonbrowser smoke passed and six database-backed checks skipped)
+  - `git diff --check && git diff --cached --check` (pass)
+- Implementation agents:
+  - Recommended: `test-automator`, `websocket-engineer`
+  - Used: skipped in this resumed iteration because both recommended agents already advised US-062 and the work directly addressed the concrete chronology/history finding from the prior complete review
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`
+  - Findings: pending complete staged-diff review
+- Decisions (why):
+  - Preserved direct durable seeding rather than replaying every setup command because the story verifies production-process replacement and restoration, while explicit chronology and contract parsing now prove the seeded settled state could have been produced by authoritative call, mark, window, and settlement transitions.
+  - Used event sequences one through seven for five calls, window opening, and settlement because those are the lobby-wide committed events; participant-private mark results correctly do not consume lobby sequences.
+  - Did not install the missing Playwright browser because that would write outside the project worktree; this backend integration story has no rendered UI change, and its dedicated plus complete Vitest checks pass.
+- **Learnings for future iterations:**
+  - Directly seeded lifecycle fixtures must validate both domain chronology and the exact wire contracts of retained durable events; database foreign keys alone do not prove a reachable authoritative history.
+  - The first winning mark and winner confirmation share the co-winner opening timestamp, additional winners must confirm before the exclusive close deadline, and settlement occurs no earlier than that deadline.
+- Known issues / follow-ups:
+  - Root `bun run format:check` remains blocked by unrelated untracked `.playwright-mcp` artifacts; every tracked file passes Prettier.
+  - Browser E2E execution remains unavailable in this worktree until the configured Playwright Chromium binary is installed outside the repository.
+  - The dedicated nonproduction US-062 databases were retained because destructive cleanup was not required.
+- Next iteration start:
+  - If review passes, implement US-063 final manual acceptance handoff; otherwise resume any recorded blocking finding.
+---
+
+Initial review remediation for resumed US-062 at 2026-07-21 20:21:15 MST:
+- The complete staged `code-reviewer` and `qa-expert` pass produced three blocking medium findings: the paused fixture lacked reachable call/pause event history, fixture validation opened PostgreSQL before assertions that could fail, and the no-replay assertion rejected only historical calls rather than every lobby event.
+- Added a failing paused-history assertion before persistence, then seeded a contract-valid call event and paused-stage event with monotonic sequences and matching durable state.
+- Moved all seeded chronology/event-contract checks before opening PostgreSQL so fixture failures cannot leak a pool, and now validate both paused and result histories through `ActiveLobbyEventSchema`.
+- Strengthened restart behavior to require the entire post-snapshot lobby-event collection to remain empty, covering call, stage, co-winner-window, result, presence, and any other historical event type.
+- Post-fix checks: dedicated fresh-database `bun run test:restart` passes; PostgreSQL-enabled `bun run test` passes 42 files and 873 tests; lint, tracked-tree Prettier, typecheck within the full test, and diff checks pass.
+- Testing decision:
+  - Change type: test-only acceptance remediation.
+  - Test-first required: yes for the unreachable paused fixture evidence.
+  - Red: the focused restart test failed because paused history was empty.
+  - Green: the dedicated fresh-database process-restart test passed after seeding and validating call/pause history.
+- Targeted re-review is limited to `code-reviewer` and `qa-expert` because fixes address findings from both original specialist areas.
+
+Targeted re-review outcome for resumed US-062 at 2026-07-21 20:25 MST:
+- `code-reviewer` and `qa-expert` reviewed the revised complete staged candidate and returned empty actionable finding lists.
+- Reachable paused/result histories, pre-connection fixture validation, complete historical-event suppression, fresh-ticket reconnects, process replacement, snapshot exactness/privacy, and bounded cleanup are covered.
+- Residual risk is limited to browser E2E being unavailable because the configured local Playwright Chromium binary is not installed; no UI files changed in this story.
+- No in-scope critical, high, or medium findings remain. US-062 can be marked passing and committed after the final consistency check.

@@ -22,6 +22,7 @@
     "test:e2e": "playwright test",
     "test:performance": "RUN_SINGLE_INSTANCE_LOAD=true bun scripts/run-single-instance-load.ts",
     "test:quality-tooling": "vitest run tests/quality/tooling.test.ts",
+    "test:restart": "bun packages/database/scripts/assert-empty-e2e-database.ts && RUN_GAME_SERVER_RESTART_TEST=true vitest run apps/game-server/src/socket-server.test.ts -t 'game-server process restarts'",
     "test:workspace-boundaries": "bun scripts/check-workspace-boundaries.test.mjs && bun run check:workspace-boundaries",
     "typecheck": "bun run test:workspace-boundaries && tsc --noEmit --pretty false && bun run --filter '@gamenight-bingo/*' typecheck"
   },

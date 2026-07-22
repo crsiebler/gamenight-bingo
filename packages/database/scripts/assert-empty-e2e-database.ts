@@ -2,11 +2,11 @@ import { Client } from "pg";
 
 const databaseUrl = process.env["TEST_DATABASE_URL"];
 if (databaseUrl === undefined || databaseUrl.length === 0) {
-  throw new Error("TEST_DATABASE_URL is required for the browser database preflight.");
+  throw new Error("TEST_DATABASE_URL is required for the full-stack database preflight.");
 }
 if (process.env["E2E_DATABASE_CONFIRMED_NONPRODUCTION"] !== "true") {
   throw new Error(
-    "E2E_DATABASE_CONFIRMED_NONPRODUCTION=true is required for the browser database preflight.",
+    "E2E_DATABASE_CONFIRMED_NONPRODUCTION=true is required for the full-stack database preflight.",
   );
 }
 
@@ -17,7 +17,7 @@ try {
     "SELECT EXISTS (SELECT 1 FROM lobbies LIMIT 1) AS has_lobby",
   );
   if (result.rows[0]?.has_lobby !== false) {
-    throw new Error("The Playwright database must be fresh and contain no lobbies.");
+    throw new Error("The full-stack test database must be fresh and contain no lobbies.");
   }
 } finally {
   await client.end();
