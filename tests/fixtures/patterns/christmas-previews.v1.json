@@ -1,0 +1,194 @@
+[
+  {
+    "id": "christmas-tree",
+    "name": "Christmas Tree",
+    "mode": "exact",
+    "source": {
+      "file": "christmas-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d01",
+        "classification": "exact",
+        "mask": "..#../.###./#####/..#../..#.."
+      }
+    ]
+  },
+  {
+    "id": "christmas-tinsel",
+    "name": "Tinsel",
+    "mode": "exact",
+    "source": {
+      "file": "christmas-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d02",
+        "classification": "exact",
+        "mask": "#.#.#/#.#.#/#.#.#/#.#.#/#.#.#"
+      }
+    ]
+  },
+  {
+    "id": "christmas-reindeer",
+    "name": "Reindeer",
+    "mode": "exact",
+    "source": {
+      "file": "christmas-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d03",
+        "classification": "exact",
+        "mask": "#...#/##.##/.###./.#.#./.###."
+      }
+    ]
+  },
+  {
+    "id": "christmas-skis",
+    "name": "Skis",
+    "mode": "exact",
+    "source": {
+      "file": "christmas-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d04",
+        "classification": "exact",
+        "mask": "#..../#####/...../#..../#####"
+      }
+    ]
+  },
+  {
+    "id": "christmas-wreath",
+    "name": "Wreath",
+    "mode": "exact",
+    "source": {
+      "file": "christmas-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d05",
+        "classification": "exact",
+        "mask": ".###./#####/##.##/#####/.###."
+      }
+    ]
+  },
+  {
+    "id": "christmas-cross",
+    "name": "Cross",
+    "mode": "exact",
+    "source": {
+      "file": "christmas-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d06",
+        "classification": "exact",
+        "mask": "..#../#####/..#../..#../..#.."
+      }
+    ]
+  },
+  {
+    "id": "christmas-bell",
+    "name": "Bell",
+    "mode": "exact",
+    "source": {
+      "file": "christmas-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d07",
+        "classification": "exact",
+        "mask": "..#../.###./.###./#####/..#.."
+      }
+    ]
+  },
+  {
+    "id": "christmas-snow-boot",
+    "name": "Snow Boot",
+    "mode": "exact",
+    "source": {
+      "file": "christmas-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d08",
+        "classification": "exact",
+        "mask": "..###/..###/..###/#####/#####"
+      }
+    ]
+  },
+  {
+    "id": "christmas-mittens",
+    "name": "Mittens",
+    "mode": "exact",
+    "source": {
+      "file": "christmas-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d09",
+        "classification": "exact",
+        "mask": "..##./.#..#/.#..#/##..#/.####"
+      }
+    ]
+  },
+  {
+    "id": "christmas-snow",
+    "name": "Snow",
+    "mode": "exact",
+    "source": {
+      "file": "christmas-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d10",
+        "classification": "exact",
+        "mask": "#.#.#/.#.#./#.#.#/.#.#./#.#.#"
+      }
+    ]
+  },
+  {
+    "id": "christmas-gift",
+    "name": "Gift",
+    "mode": "exact",
+    "source": {
+      "file": "christmas-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d11",
+        "classification": "exact",
+        "mask": "#####/#.#.#/#####/#.#.#/#####"
+      }
+    ]
+  },
+  {
+    "id": "christmas-snowmobile",
+    "name": "Snowmobile",
+    "mode": "exact",
+    "source": {
+      "file": "christmas-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d12",
+        "classification": "exact",
+        "mask": ".#.../#..../#####/.#.#./#####"
+      }
+    ]
+  }
+]

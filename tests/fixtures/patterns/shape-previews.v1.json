@@ -1,0 +1,391 @@
+[
+  {
+    "id": "standard-two-lines",
+    "name": "Two Lines",
+    "mode": "two-lines",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d02",
+        "classification": "flexible-rule-example",
+        "mask": "#####/#..../#..../#..../#...."
+      },
+      {
+        "reference": "p1/d25",
+        "classification": "flexible-rule-example",
+        "mask": ".#.#./.#.#./.#.#./.#.#./.#.#."
+      }
+    ]
+  },
+  {
+    "id": "standard-blackout",
+    "name": "Blackout",
+    "mode": "blackout",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": "Full House"
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d06",
+        "classification": "source-alias",
+        "mask": "#####/#####/#####/#####/#####"
+      }
+    ]
+  },
+  {
+    "id": "shape-bunny-ears",
+    "name": "Bunny Ears",
+    "mode": "exact",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d01",
+        "classification": "exact",
+        "mask": ".###./#.#.#/#.#.#/#.#.#/#.#.#"
+      }
+    ]
+  },
+  {
+    "id": "shape-four-corners",
+    "name": "Four Corners",
+    "mode": "exact",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d03",
+        "classification": "exact",
+        "mask": "#...#/...../...../...../#...#"
+      }
+    ]
+  },
+  {
+    "id": "shape-windmill",
+    "name": "Windmill",
+    "mode": "exact",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d04",
+        "classification": "exact",
+        "mask": "##.##/##.##/..#../##.##/##.##"
+      }
+    ]
+  },
+  {
+    "id": "shape-outside-edge",
+    "name": "Outside Edge",
+    "mode": "exact",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d05",
+        "classification": "exact",
+        "mask": "#####/#...#/#...#/#...#/#####"
+      }
+    ]
+  },
+  {
+    "id": "shape-airplane",
+    "name": "Airplane",
+    "mode": "exact",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d07",
+        "classification": "exact",
+        "mask": "...#./#..#./#####/#..#./...#."
+      }
+    ]
+  },
+  {
+    "id": "shape-wine-glass",
+    "name": "Wine Glass",
+    "mode": "exact",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d08",
+        "classification": "exact",
+        "mask": "#####/.###./..#../..#../.###."
+      }
+    ]
+  },
+  {
+    "id": "shape-x",
+    "name": "X",
+    "mode": "exact",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d09",
+        "classification": "exact",
+        "mask": "#...#/.#.#./..#../.#.#./#...#"
+      }
+    ]
+  },
+  {
+    "id": "shape-turtle",
+    "name": "Turtle",
+    "mode": "exact",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d10",
+        "classification": "exact",
+        "mask": "..#../#####/.###./.###./#...#"
+      }
+    ]
+  },
+  {
+    "id": "shape-stairs",
+    "name": "Stairs",
+    "mode": "exact",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d11",
+        "classification": "exact",
+        "mask": "....#/...##/..###/.####/#####"
+      }
+    ]
+  },
+  {
+    "id": "shape-bow-tie",
+    "name": "Bow Tie",
+    "mode": "exact",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d12",
+        "classification": "exact",
+        "mask": "...../##.##/#####/##.##/....."
+      }
+    ]
+  },
+  {
+    "id": "shape-cross",
+    "name": "Cross",
+    "mode": "exact",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d13",
+        "classification": "exact",
+        "mask": "..#../#####/..#../..#../..#.."
+      }
+    ]
+  },
+  {
+    "id": "shape-plus",
+    "name": "Plus",
+    "mode": "exact",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d14",
+        "classification": "exact",
+        "mask": "..#../..#../#####/..#../..#.."
+      }
+    ]
+  },
+  {
+    "id": "shape-rectangle",
+    "name": "Rectangle",
+    "mode": "exact",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d15",
+        "classification": "exact",
+        "mask": "...../#####/#...#/#####/....."
+      }
+    ]
+  },
+  {
+    "id": "shape-heart",
+    "name": "Heart",
+    "mode": "exact",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d16",
+        "classification": "exact",
+        "mask": ".#.#./#####/#####/.###./..#.."
+      }
+    ]
+  },
+  {
+    "id": "shape-hat",
+    "name": "Hat",
+    "mode": "exact",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d17",
+        "classification": "exact",
+        "mask": "...../.###./.###./#####/....."
+      }
+    ]
+  },
+  {
+    "id": "shape-hour-glass",
+    "name": "Hour Glass",
+    "mode": "exact",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d18",
+        "classification": "exact",
+        "mask": "#####/.###./..#../.###./#####"
+      }
+    ]
+  },
+  {
+    "id": "shape-pyramid",
+    "name": "Pyramid",
+    "mode": "exact",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d19",
+        "classification": "exact",
+        "mask": "...../...../..#../.###./#####"
+      }
+    ]
+  },
+  {
+    "id": "shape-checkerboard",
+    "name": "Checkerboard",
+    "mode": "exact",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d20",
+        "classification": "exact",
+        "mask": "#.#.#/.#.#./#.#.#/.#.#./#.#.#"
+      }
+    ]
+  },
+  {
+    "id": "shape-inside-square",
+    "name": "Inside Square",
+    "mode": "exact",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d21",
+        "classification": "exact",
+        "mask": "...../.###./.###./.###./....."
+      }
+    ]
+  },
+  {
+    "id": "shape-kite",
+    "name": "Kite",
+    "mode": "exact",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d22",
+        "classification": "exact",
+        "mask": "...##/...##/..#../.#.../#...."
+      }
+    ]
+  },
+  {
+    "id": "shape-smiley-face",
+    "name": "Smiley Face",
+    "mode": "exact",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d23",
+        "classification": "exact",
+        "mask": "...../.#.#./..#../#...#/.###."
+      }
+    ]
+  },
+  {
+    "id": "shape-block-of-nine",
+    "name": "Block of Nine",
+    "mode": "exact",
+    "source": {
+      "file": "shapes-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d24",
+        "classification": "exact",
+        "mask": "###../###../###../...../....."
+      }
+    ]
+  }
+]

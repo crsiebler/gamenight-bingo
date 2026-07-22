@@ -1,0 +1,628 @@
+<!doctype html>
+<!-- prettier-ignore -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GameNight Bingo theme moodboards</title>
+  <style>
+    * { box-sizing: border-box; }
+    html { background: #eceff2; color: #17243a; font-family: ui-sans-serif, system-ui, sans-serif; }
+    body { margin: 0; }
+    main { margin: 0 auto; max-width: 96rem; padding: clamp(1rem, 3vw, 3rem); }
+    h1 { font-family: Georgia, serif; font-size: clamp(2.4rem, 8vw, 5rem); line-height: .95; margin: 0 0 1rem; max-width: 12ch; }
+    .intro { font-size: 1.1rem; line-height: 1.6; max-width: 70ch; }
+    .catalog { display: grid; gap: 1.5rem; margin-top: 2rem; }
+    .theme-card { background: var(--bingo-theme-canvas); border: 3px solid var(--bingo-theme-border); border-radius: 1.25rem; color: var(--bingo-theme-text-primary); overflow: hidden; padding: clamp(1rem, 3vw, 2rem); }
+    .theme-card > header { border-bottom: 3px solid var(--bingo-theme-border); margin-bottom: 1.25rem; padding-bottom: 1rem; }
+    .theme-card h2 { font-family: Georgia, serif; font-size: clamp(2rem, 6vw, 3.5rem); line-height: 1; margin: .3rem 0 .75rem; }
+    .theme-card h3 { margin: 0 0 .7rem; }
+    .theme-card p { line-height: 1.5; }
+    .kicker { color: var(--bingo-theme-text-secondary); font-size: .85rem; font-weight: 800; letter-spacing: .08em; margin: 0; text-transform: uppercase; }
+    .theme-grid { display: grid; gap: 1.25rem; }
+    .bingo-preview, .token-row { display: grid; gap: .65rem; grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr)); }
+    .card-token-panel { background: var(--bingo-theme-card-surface); border: 3px solid var(--bingo-theme-card-border); border-radius: 1rem; padding: .65rem; }
+    .specimen { align-content: center; background: var(--set-background); border: 3px solid var(--set-border); border-radius: .75rem; color: var(--set-text); display: grid; gap: .2rem; min-height: 5.5rem; padding: .75rem; }
+    .specimen span { color: var(--set-indicator); font-size: 1.25rem; line-height: 1; }
+    .specimen small { font-weight: 700; }
+    .text-primary { --set-background: var(--bingo-theme-surface); --set-text: var(--bingo-theme-text-primary); --set-border: var(--bingo-theme-border); --set-indicator: var(--bingo-theme-text-primary); }
+    .text-secondary { --set-background: var(--bingo-theme-surface); --set-text: var(--bingo-theme-text-secondary); --set-border: var(--bingo-theme-border); --set-indicator: var(--bingo-theme-text-secondary); }
+    .text-inverse { --set-background: var(--bingo-theme-surface-inverse); --set-text: var(--bingo-theme-text-inverse); --set-border: var(--bingo-theme-text-inverse); --set-indicator: var(--bingo-theme-text-inverse); }
+    .text-link { --set-background: var(--bingo-theme-surface); --set-text: var(--bingo-theme-text-link); --set-border: var(--bingo-theme-border); --set-indicator: var(--bingo-theme-text-link); }
+    .text-danger { --set-background: var(--bingo-theme-surface); --set-text: var(--bingo-theme-text-danger); --set-border: var(--bingo-theme-border); --set-indicator: var(--bingo-theme-text-danger); }
+    .card-header { --set-background: var(--bingo-theme-card-header-background); --set-text: var(--bingo-theme-card-header-text); --set-border: var(--bingo-theme-card-header-border); --set-indicator: var(--bingo-theme-card-header-indicator); }
+    .card-uncalled { --set-background: var(--bingo-theme-card-uncalled-background); --set-text: var(--bingo-theme-card-uncalled-text); --set-border: var(--bingo-theme-card-uncalled-border); --set-indicator: var(--bingo-theme-card-uncalled-indicator); }
+    .card-called { --set-background: var(--bingo-theme-card-called-background); --set-text: var(--bingo-theme-card-called-text); --set-border: var(--bingo-theme-card-called-border); --set-indicator: var(--bingo-theme-card-called-indicator); border-style: double; }
+    .card-marked { --set-background: var(--bingo-theme-card-marked-background); --set-text: var(--bingo-theme-card-marked-text); --set-border: var(--bingo-theme-card-marked-border); --set-indicator: var(--bingo-theme-card-marked-indicator); }
+    .card-free { --set-background: var(--bingo-theme-card-free-background); --set-text: var(--bingo-theme-card-free-text); --set-border: var(--bingo-theme-card-free-border); --set-indicator: var(--bingo-theme-card-free-indicator); }
+    .card-unavailable { --set-background: var(--bingo-theme-card-unavailable-background); --set-text: var(--bingo-theme-card-unavailable-text); --set-border: var(--bingo-theme-card-unavailable-border); --set-indicator: var(--bingo-theme-card-unavailable-indicator); border-style: dashed; }
+    .state-neutral { --set-background: var(--bingo-theme-state-neutral-background); --set-text: var(--bingo-theme-state-neutral-text); --set-border: var(--bingo-theme-state-neutral-border); --set-indicator: var(--bingo-theme-state-neutral-indicator); }
+    .state-info { --set-background: var(--bingo-theme-state-info-background); --set-text: var(--bingo-theme-state-info-text); --set-border: var(--bingo-theme-state-info-border); --set-indicator: var(--bingo-theme-state-info-indicator); }
+    .state-success { --set-background: var(--bingo-theme-state-success-background); --set-text: var(--bingo-theme-state-success-text); --set-border: var(--bingo-theme-state-success-border); --set-indicator: var(--bingo-theme-state-success-indicator); }
+    .state-warning { --set-background: var(--bingo-theme-state-warning-background); --set-text: var(--bingo-theme-state-warning-text); --set-border: var(--bingo-theme-state-warning-border); --set-indicator: var(--bingo-theme-state-warning-indicator); }
+    .state-danger { --set-background: var(--bingo-theme-state-danger-background); --set-text: var(--bingo-theme-state-danger-text); --set-border: var(--bingo-theme-state-danger-border); --set-indicator: var(--bingo-theme-state-danger-indicator); }
+    .ball-current { --set-background: var(--bingo-theme-ball-current-background); --set-text: var(--bingo-theme-ball-current-text); --set-border: var(--bingo-theme-ball-current-border); --set-indicator: var(--bingo-theme-ball-current-indicator); border-radius: 50%; text-align: center; }
+    .ball-history { --set-background: var(--bingo-theme-ball-history-background); --set-text: var(--bingo-theme-ball-history-text); --set-border: var(--bingo-theme-ball-history-border); --set-indicator: var(--bingo-theme-ball-history-indicator); border-radius: 50%; text-align: center; }
+    .result-checking { --set-background: var(--bingo-theme-result-checking-background); --set-text: var(--bingo-theme-result-checking-text); --set-border: var(--bingo-theme-result-checking-border); --set-indicator: var(--bingo-theme-result-checking-indicator); }
+    .result-winner { --set-background: var(--bingo-theme-result-winner-background); --set-text: var(--bingo-theme-result-winner-text); --set-border: var(--bingo-theme-result-winner-border); --set-indicator: var(--bingo-theme-result-winner-indicator); }
+    .result-other { --set-background: var(--bingo-theme-result-other-winner-background); --set-text: var(--bingo-theme-result-other-winner-text); --set-border: var(--bingo-theme-result-other-winner-border); --set-indicator: var(--bingo-theme-result-other-winner-indicator); }
+    summary:focus-visible { outline: var(--bingo-theme-focus-width) solid var(--bingo-theme-focus-inner); outline-offset: var(--bingo-theme-focus-offset); box-shadow: 0 0 0 calc(var(--bingo-theme-focus-width) + var(--bingo-theme-focus-offset)) var(--bingo-theme-focus-outer); }
+    details { background: var(--bingo-theme-surface); border: 3px solid var(--bingo-theme-border); border-radius: .75rem; margin-top: 1.25rem; padding: .75rem; }
+    summary { cursor: pointer; font-weight: 800; min-height: 44px; padding: .6rem; }
+    dl { display: grid; gap: .55rem; grid-template-columns: minmax(7rem, auto) 1fr; }
+    dt { font-weight: 800; } dd { margin: 0; }
+    @media (min-width: 56rem) { .catalog { grid-template-columns: repeat(2, minmax(0, 1fr)); } .theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (prefers-contrast: more) { *, *::before, *::after { background-image: none !important; } a { text-decoration: underline; } .specimen, details, .theme-card { border-width: 3px; } }
+    @media (forced-colors: active) { .theme-card, .specimen, details { background: Canvas; border-color: CanvasText; color: CanvasText; } summary:focus-visible { box-shadow: none; outline-color: Highlight; } .card-called { border-style: double; } .card-unavailable { border-style: dashed; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: 0ms !important; } }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="kicker">Canonical design review</p>
+    <h1>Theme moodboards</h1>
+    <p class="intro">Eleven original visual directions share the same semantic roles. Color is always reinforced by text, glyph, and border treatment. Use Tab to review the two-tone focus treatment in every palette.</p>
+    <div class="catalog"><article class="theme-card" data-theme-id="animals" style="--bingo-theme-canvas:#fff8eb;--bingo-theme-surface:#ffffff;--bingo-theme-surface-inverse:#7a2e2a;--bingo-theme-surface-elevated:#f7ead6;--bingo-theme-border:#172b35;--bingo-theme-text-primary:#172b35;--bingo-theme-text-secondary:#44545b;--bingo-theme-text-inverse:#ffffff;--bingo-theme-text-link:#7a2e2a;--bingo-theme-text-danger:#8f1d1d;--bingo-theme-focus-inner:#ffffff;--bingo-theme-focus-outer:#172b35;--bingo-theme-focus-width:4px;--bingo-theme-focus-offset:3px;--bingo-theme-focus-outer-width:7px;--bingo-theme-card-surface:#ffffff;--bingo-theme-card-border:#172b35;--bingo-theme-card-header-background:#7a2e2a;--bingo-theme-card-header-text:#ffffff;--bingo-theme-card-header-border:#ffffff;--bingo-theme-card-header-indicator:#ffffff;--bingo-theme-card-uncalled-background:#f7ead6;--bingo-theme-card-uncalled-text:#172b35;--bingo-theme-card-uncalled-border:#172b35;--bingo-theme-card-uncalled-indicator:#172b35;--bingo-theme-card-called-background:#f2c14e;--bingo-theme-card-called-text:#17243a;--bingo-theme-card-called-border:#17243a;--bingo-theme-card-called-indicator:#17243a;--bingo-theme-card-marked-background:#7a2e2a;--bingo-theme-card-marked-text:#ffffff;--bingo-theme-card-marked-border:#ffffff;--bingo-theme-card-marked-indicator:#ffffff;--bingo-theme-card-free-background:#075a55;--bingo-theme-card-free-text:#ffffff;--bingo-theme-card-free-border:#ffffff;--bingo-theme-card-free-indicator:#ffffff;--bingo-theme-card-unavailable-background:#e3e6e8;--bingo-theme-card-unavailable-text:#26343f;--bingo-theme-card-unavailable-border:#26343f;--bingo-theme-card-unavailable-indicator:#26343f;--bingo-theme-state-neutral-background:#e3e6e8;--bingo-theme-state-neutral-text:#26343f;--bingo-theme-state-neutral-border:#26343f;--bingo-theme-state-neutral-indicator:#26343f;--bingo-theme-state-info-background:#dcebf8;--bingo-theme-state-info-text:#173b61;--bingo-theme-state-info-border:#173b61;--bingo-theme-state-info-indicator:#173b61;--bingo-theme-state-success-background:#dcefe6;--bingo-theme-state-success-text:#1c563d;--bingo-theme-state-success-border:#1c563d;--bingo-theme-state-success-indicator:#1c563d;--bingo-theme-state-warning-background:#fff1c2;--bingo-theme-state-warning-text:#664400;--bingo-theme-state-warning-border:#664400;--bingo-theme-state-warning-indicator:#664400;--bingo-theme-state-danger-background:#fbe1e1;--bingo-theme-state-danger-text:#7d1f1f;--bingo-theme-state-danger-border:#7d1f1f;--bingo-theme-state-danger-indicator:#7d1f1f;--bingo-theme-ball-current-background:#7a2e2a;--bingo-theme-ball-current-text:#ffffff;--bingo-theme-ball-current-border:#ffffff;--bingo-theme-ball-current-indicator:#ffffff;--bingo-theme-ball-history-background:#f7ead6;--bingo-theme-ball-history-text:#172b35;--bingo-theme-ball-history-border:#172b35;--bingo-theme-ball-history-indicator:#172b35;--bingo-theme-result-checking-background:#f2c14e;--bingo-theme-result-checking-text:#17243a;--bingo-theme-result-checking-border:#17243a;--bingo-theme-result-checking-indicator:#17243a;--bingo-theme-result-winner-background:#7a2e2a;--bingo-theme-result-winner-text:#ffffff;--bingo-theme-result-winner-border:#ffffff;--bingo-theme-result-winner-indicator:#ffffff;--bingo-theme-result-other-winner-background:#075a55;--bingo-theme-result-other-winner-text:#ffffff;--bingo-theme-result-other-winner-border:#ffffff;--bingo-theme-result-other-winner-indicator:#ffffff;--bingo-theme-motion-state:160ms;--bingo-theme-motion-daub:220ms;--bingo-theme-motion-celebration:700ms">
+  <header>
+    <p class="kicker">A warm, curious field guide made for a welcoming all-ages game night.</p>
+    <h2>Animals</h2>
+    <p>Cream paper, auburn warmth, deep teal, and sunlight gold feel friendly without becoming childish.</p>
+  </header>
+  <div class="theme-grid">
+    <section aria-labelledby="animals-card">
+      <h3 id="animals-card">Card states</h3>
+      <div class="bingo-preview card-token-panel" aria-label="Card state token preview">
+        <div class="specimen card-header"><span aria-hidden="true">●</span><strong>Card header</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-uncalled"><span aria-hidden="true">●</span><strong>Uncalled</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-called"><span aria-hidden="true">●</span><strong>Called</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-marked"><span aria-hidden="true">●</span><strong>Marked</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-free"><span aria-hidden="true">●</span><strong>Free</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-unavailable"><span aria-hidden="true">●</span><strong>Unavailable</strong><small>Text + glyph + border</small></div>
+      </div>
+    </section>
+    <section aria-labelledby="animals-status">
+      <h3 id="animals-status">Text, status, balls, and results</h3>
+      <div class="token-row">
+        <div class="specimen text-primary"><span aria-hidden="true">●</span><strong>Text primary</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-secondary"><span aria-hidden="true">●</span><strong>Text secondary</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-inverse"><span aria-hidden="true">●</span><strong>Text inverse</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-link"><span aria-hidden="true">●</span><strong>Text link</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-danger"><span aria-hidden="true">●</span><strong>Text danger</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-neutral"><span aria-hidden="true">●</span><strong>Neutral</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-info"><span aria-hidden="true">●</span><strong>Information</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-success"><span aria-hidden="true">●</span><strong>Connected</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-warning"><span aria-hidden="true">●</span><strong>Paused</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-danger"><span aria-hidden="true">●</span><strong>Offline</strong><small>Text + glyph + border</small></div>
+        <div class="specimen ball-current"><span aria-hidden="true">●</span><strong>Current ball</strong><small>Text + glyph + border</small></div>
+        <div class="specimen ball-history"><span aria-hidden="true">●</span><strong>History ball</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-checking"><span aria-hidden="true">●</span><strong>Checking</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-winner"><span aria-hidden="true">●</span><strong>You won</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-other"><span aria-hidden="true">●</span><strong>Another player won</strong><small>Text + glyph + border</small></div>
+      </div>
+    </section>
+  </div>
+  <details id="animals-direction">
+    <summary>Moodboard direction</summary>
+    <dl>
+      <dt>Motifs</dt><dd>paw-print geometry, feather arcs, leaf and habitat silhouettes</dd>
+      <dt>Shape language</dt><dd>Rounded tracks and irregular organic frames suggest movement while keeping controls calm and obvious.</dd>
+      <dt>Texture</dt><dd>Subtle recycled-paper grain and sparse linework provide tactility without obscuring text or card numbers.</dd>
+      <dt>Motion</dt><dd>Short curious peeks and gentle tracks may decorate transitions, with every state settling immediately.</dd>
+      <dt>Original direction</dt><dd>Use only original simplified habitat and animal-trace geometry rather than recognizable mascots.</dd>
+      <dt>Avoid</dt><dd>Recognizable characters, franchise costume language, or copied catchphrases; Brand logos, team marks, official seals, or protected trade dress; Cultural caricatures, gender stereotypes, gore, or hostile loser imagery</dd>
+    </dl>
+  </details>
+</article>
+<article class="theme-card" data-theme-id="nature" style="--bingo-theme-canvas:#f3f8ef;--bingo-theme-surface:#ffffff;--bingo-theme-surface-inverse:#24513f;--bingo-theme-surface-elevated:#e4efdf;--bingo-theme-border:#172d27;--bingo-theme-text-primary:#172d27;--bingo-theme-text-secondary:#41564d;--bingo-theme-text-inverse:#ffffff;--bingo-theme-text-link:#24513f;--bingo-theme-text-danger:#8f1d1d;--bingo-theme-focus-inner:#ffffff;--bingo-theme-focus-outer:#172d27;--bingo-theme-focus-width:4px;--bingo-theme-focus-offset:3px;--bingo-theme-focus-outer-width:7px;--bingo-theme-card-surface:#ffffff;--bingo-theme-card-border:#172d27;--bingo-theme-card-header-background:#24513f;--bingo-theme-card-header-text:#ffffff;--bingo-theme-card-header-border:#ffffff;--bingo-theme-card-header-indicator:#ffffff;--bingo-theme-card-uncalled-background:#e4efdf;--bingo-theme-card-uncalled-text:#172d27;--bingo-theme-card-uncalled-border:#172d27;--bingo-theme-card-uncalled-indicator:#172d27;--bingo-theme-card-called-background:#d6a436;--bingo-theme-card-called-text:#17243a;--bingo-theme-card-called-border:#17243a;--bingo-theme-card-called-indicator:#17243a;--bingo-theme-card-marked-background:#24513f;--bingo-theme-card-marked-text:#ffffff;--bingo-theme-card-marked-border:#ffffff;--bingo-theme-card-marked-indicator:#ffffff;--bingo-theme-card-free-background:#2b5263;--bingo-theme-card-free-text:#ffffff;--bingo-theme-card-free-border:#ffffff;--bingo-theme-card-free-indicator:#ffffff;--bingo-theme-card-unavailable-background:#e3e6e8;--bingo-theme-card-unavailable-text:#26343f;--bingo-theme-card-unavailable-border:#26343f;--bingo-theme-card-unavailable-indicator:#26343f;--bingo-theme-state-neutral-background:#e3e6e8;--bingo-theme-state-neutral-text:#26343f;--bingo-theme-state-neutral-border:#26343f;--bingo-theme-state-neutral-indicator:#26343f;--bingo-theme-state-info-background:#dcebf8;--bingo-theme-state-info-text:#173b61;--bingo-theme-state-info-border:#173b61;--bingo-theme-state-info-indicator:#173b61;--bingo-theme-state-success-background:#dcefe6;--bingo-theme-state-success-text:#1c563d;--bingo-theme-state-success-border:#1c563d;--bingo-theme-state-success-indicator:#1c563d;--bingo-theme-state-warning-background:#fff1c2;--bingo-theme-state-warning-text:#664400;--bingo-theme-state-warning-border:#664400;--bingo-theme-state-warning-indicator:#664400;--bingo-theme-state-danger-background:#fbe1e1;--bingo-theme-state-danger-text:#7d1f1f;--bingo-theme-state-danger-border:#7d1f1f;--bingo-theme-state-danger-indicator:#7d1f1f;--bingo-theme-ball-current-background:#24513f;--bingo-theme-ball-current-text:#ffffff;--bingo-theme-ball-current-border:#ffffff;--bingo-theme-ball-current-indicator:#ffffff;--bingo-theme-ball-history-background:#e4efdf;--bingo-theme-ball-history-text:#172d27;--bingo-theme-ball-history-border:#172d27;--bingo-theme-ball-history-indicator:#172d27;--bingo-theme-result-checking-background:#d6a436;--bingo-theme-result-checking-text:#17243a;--bingo-theme-result-checking-border:#17243a;--bingo-theme-result-checking-indicator:#17243a;--bingo-theme-result-winner-background:#24513f;--bingo-theme-result-winner-text:#ffffff;--bingo-theme-result-winner-border:#ffffff;--bingo-theme-result-winner-indicator:#ffffff;--bingo-theme-result-other-winner-background:#2b5263;--bingo-theme-result-other-winner-text:#ffffff;--bingo-theme-result-other-winner-border:#ffffff;--bingo-theme-result-other-winner-indicator:#ffffff;--bingo-theme-motion-state:160ms;--bingo-theme-motion-daub:220ms;--bingo-theme-motion-celebration:700ms">
+  <header>
+    <p class="kicker">A calm trail-map composition balancing forest shade, open water, and warm afternoon light.</p>
+    <h2>Nature</h2>
+    <p>Mist green, evergreen, lake blue, and ochre create an outdoors palette with strong readable anchors.</p>
+  </header>
+  <div class="theme-grid">
+    <section aria-labelledby="nature-card">
+      <h3 id="nature-card">Card states</h3>
+      <div class="bingo-preview card-token-panel" aria-label="Card state token preview">
+        <div class="specimen card-header"><span aria-hidden="true">●</span><strong>Card header</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-uncalled"><span aria-hidden="true">●</span><strong>Uncalled</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-called"><span aria-hidden="true">●</span><strong>Called</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-marked"><span aria-hidden="true">●</span><strong>Marked</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-free"><span aria-hidden="true">●</span><strong>Free</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-unavailable"><span aria-hidden="true">●</span><strong>Unavailable</strong><small>Text + glyph + border</small></div>
+      </div>
+    </section>
+    <section aria-labelledby="nature-status">
+      <h3 id="nature-status">Text, status, balls, and results</h3>
+      <div class="token-row">
+        <div class="specimen text-primary"><span aria-hidden="true">●</span><strong>Text primary</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-secondary"><span aria-hidden="true">●</span><strong>Text secondary</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-inverse"><span aria-hidden="true">●</span><strong>Text inverse</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-link"><span aria-hidden="true">●</span><strong>Text link</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-danger"><span aria-hidden="true">●</span><strong>Text danger</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-neutral"><span aria-hidden="true">●</span><strong>Neutral</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-info"><span aria-hidden="true">●</span><strong>Information</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-success"><span aria-hidden="true">●</span><strong>Connected</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-warning"><span aria-hidden="true">●</span><strong>Paused</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-danger"><span aria-hidden="true">●</span><strong>Offline</strong><small>Text + glyph + border</small></div>
+        <div class="specimen ball-current"><span aria-hidden="true">●</span><strong>Current ball</strong><small>Text + glyph + border</small></div>
+        <div class="specimen ball-history"><span aria-hidden="true">●</span><strong>History ball</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-checking"><span aria-hidden="true">●</span><strong>Checking</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-winner"><span aria-hidden="true">●</span><strong>You won</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-other"><span aria-hidden="true">●</span><strong>Another player won</strong><small>Text + glyph + border</small></div>
+      </div>
+    </section>
+  </div>
+  <details id="nature-direction">
+    <summary>Moodboard direction</summary>
+    <dl>
+      <dt>Motifs</dt><dd>contour lines, layered leaves, water ripples</dd>
+      <dt>Shape language</dt><dd>Layered topographic curves and vertical growth lines give structure without competing with the grid.</dd>
+      <dt>Texture</dt><dd>Fine contour strokes and broad matte color fields evoke maps and pressed leaves without visual noise.</dd>
+      <dt>Motion</dt><dd>Slow drift and brief leaf-settle cues may support decoration, never timing or game meaning.</dd>
+      <dt>Original direction</dt><dd>Build original botanical and landscape abstractions instead of tracing protected illustrations.</dd>
+      <dt>Avoid</dt><dd>Recognizable characters, franchise costume language, or copied catchphrases; Brand logos, team marks, official seals, or protected trade dress; Cultural caricatures, gender stereotypes, gore, or hostile loser imagery</dd>
+    </dl>
+  </details>
+</article>
+<article class="theme-card" data-theme-id="superheroes" style="--bingo-theme-canvas:#f5f7fb;--bingo-theme-surface:#ffffff;--bingo-theme-surface-inverse:#173f7a;--bingo-theme-surface-elevated:#e7edf7;--bingo-theme-border:#17243a;--bingo-theme-text-primary:#17243a;--bingo-theme-text-secondary:#42516a;--bingo-theme-text-inverse:#ffffff;--bingo-theme-text-link:#173f7a;--bingo-theme-text-danger:#8f1d1d;--bingo-theme-focus-inner:#ffffff;--bingo-theme-focus-outer:#17243a;--bingo-theme-focus-width:4px;--bingo-theme-focus-offset:3px;--bingo-theme-focus-outer-width:7px;--bingo-theme-card-surface:#ffffff;--bingo-theme-card-border:#17243a;--bingo-theme-card-header-background:#173f7a;--bingo-theme-card-header-text:#ffffff;--bingo-theme-card-header-border:#ffffff;--bingo-theme-card-header-indicator:#ffffff;--bingo-theme-card-uncalled-background:#e7edf7;--bingo-theme-card-uncalled-text:#17243a;--bingo-theme-card-uncalled-border:#17243a;--bingo-theme-card-uncalled-indicator:#17243a;--bingo-theme-card-called-background:#e2ad2f;--bingo-theme-card-called-text:#17243a;--bingo-theme-card-called-border:#17243a;--bingo-theme-card-called-indicator:#17243a;--bingo-theme-card-marked-background:#173f7a;--bingo-theme-card-marked-text:#ffffff;--bingo-theme-card-marked-border:#ffffff;--bingo-theme-card-marked-indicator:#ffffff;--bingo-theme-card-free-background:#842d3a;--bingo-theme-card-free-text:#ffffff;--bingo-theme-card-free-border:#ffffff;--bingo-theme-card-free-indicator:#ffffff;--bingo-theme-card-unavailable-background:#e3e6e8;--bingo-theme-card-unavailable-text:#26343f;--bingo-theme-card-unavailable-border:#26343f;--bingo-theme-card-unavailable-indicator:#26343f;--bingo-theme-state-neutral-background:#e3e6e8;--bingo-theme-state-neutral-text:#26343f;--bingo-theme-state-neutral-border:#26343f;--bingo-theme-state-neutral-indicator:#26343f;--bingo-theme-state-info-background:#dcebf8;--bingo-theme-state-info-text:#173b61;--bingo-theme-state-info-border:#173b61;--bingo-theme-state-info-indicator:#173b61;--bingo-theme-state-success-background:#dcefe6;--bingo-theme-state-success-text:#1c563d;--bingo-theme-state-success-border:#1c563d;--bingo-theme-state-success-indicator:#1c563d;--bingo-theme-state-warning-background:#fff1c2;--bingo-theme-state-warning-text:#664400;--bingo-theme-state-warning-border:#664400;--bingo-theme-state-warning-indicator:#664400;--bingo-theme-state-danger-background:#fbe1e1;--bingo-theme-state-danger-text:#7d1f1f;--bingo-theme-state-danger-border:#7d1f1f;--bingo-theme-state-danger-indicator:#7d1f1f;--bingo-theme-ball-current-background:#173f7a;--bingo-theme-ball-current-text:#ffffff;--bingo-theme-ball-current-border:#ffffff;--bingo-theme-ball-current-indicator:#ffffff;--bingo-theme-ball-history-background:#e7edf7;--bingo-theme-ball-history-text:#17243a;--bingo-theme-ball-history-border:#17243a;--bingo-theme-ball-history-indicator:#17243a;--bingo-theme-result-checking-background:#e2ad2f;--bingo-theme-result-checking-text:#17243a;--bingo-theme-result-checking-border:#17243a;--bingo-theme-result-checking-indicator:#17243a;--bingo-theme-result-winner-background:#173f7a;--bingo-theme-result-winner-text:#ffffff;--bingo-theme-result-winner-border:#ffffff;--bingo-theme-result-winner-indicator:#ffffff;--bingo-theme-result-other-winner-background:#842d3a;--bingo-theme-result-other-winner-text:#ffffff;--bingo-theme-result-other-winner-border:#ffffff;--bingo-theme-result-other-winner-indicator:#ffffff;--bingo-theme-motion-state:160ms;--bingo-theme-motion-daub:220ms;--bingo-theme-motion-celebration:700ms">
+  <header>
+    <p class="kicker">An optimistic kinetic comic layout about teamwork, courage, and shared celebration.</p>
+    <h2>Superheroes</h2>
+    <p>Off-white, midnight blue, cobalt, coral-red, and amber provide bold panels without franchise mimicry.</p>
+  </header>
+  <div class="theme-grid">
+    <section aria-labelledby="superheroes-card">
+      <h3 id="superheroes-card">Card states</h3>
+      <div class="bingo-preview card-token-panel" aria-label="Card state token preview">
+        <div class="specimen card-header"><span aria-hidden="true">●</span><strong>Card header</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-uncalled"><span aria-hidden="true">●</span><strong>Uncalled</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-called"><span aria-hidden="true">●</span><strong>Called</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-marked"><span aria-hidden="true">●</span><strong>Marked</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-free"><span aria-hidden="true">●</span><strong>Free</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-unavailable"><span aria-hidden="true">●</span><strong>Unavailable</strong><small>Text + glyph + border</small></div>
+      </div>
+    </section>
+    <section aria-labelledby="superheroes-status">
+      <h3 id="superheroes-status">Text, status, balls, and results</h3>
+      <div class="token-row">
+        <div class="specimen text-primary"><span aria-hidden="true">●</span><strong>Text primary</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-secondary"><span aria-hidden="true">●</span><strong>Text secondary</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-inverse"><span aria-hidden="true">●</span><strong>Text inverse</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-link"><span aria-hidden="true">●</span><strong>Text link</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-danger"><span aria-hidden="true">●</span><strong>Text danger</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-neutral"><span aria-hidden="true">●</span><strong>Neutral</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-info"><span aria-hidden="true">●</span><strong>Information</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-success"><span aria-hidden="true">●</span><strong>Connected</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-warning"><span aria-hidden="true">●</span><strong>Paused</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-danger"><span aria-hidden="true">●</span><strong>Offline</strong><small>Text + glyph + border</small></div>
+        <div class="specimen ball-current"><span aria-hidden="true">●</span><strong>Current ball</strong><small>Text + glyph + border</small></div>
+        <div class="specimen ball-history"><span aria-hidden="true">●</span><strong>History ball</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-checking"><span aria-hidden="true">●</span><strong>Checking</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-winner"><span aria-hidden="true">●</span><strong>You won</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-other"><span aria-hidden="true">●</span><strong>Another player won</strong><small>Text + glyph + border</small></div>
+      </div>
+    </section>
+  </div>
+  <details id="superheroes-direction">
+    <summary>Moodboard direction</summary>
+    <dl>
+      <dt>Motifs</dt><dd>original ray fields, abstract shield geometry, motion-line bursts</dd>
+      <dt>Shape language</dt><dd>Strong diagonals, offset panels, and compact bursts communicate energy while preserving reading order.</dd>
+      <dt>Texture</dt><dd>Sparse original halftone fields can appear only as decoration behind opaque accessible surfaces.</dd>
+      <dt>Motion</dt><dd>One quick swoop may introduce decoration, then stop; reduced motion shows the final composition at once.</dd>
+      <dt>Original direction</dt><dd>Create an original generic hero language with no character likenesses, emblems, uniforms, or slogans.</dd>
+      <dt>Avoid</dt><dd>Recognizable characters, franchise costume language, or copied catchphrases; Brand logos, team marks, official seals, or protected trade dress; Cultural caricatures, gender stereotypes, gore, or hostile loser imagery; Color blocking strongly associated with a named hero or entertainment property</dd>
+    </dl>
+  </details>
+</article>
+<article class="theme-card" data-theme-id="pirates" style="--bingo-theme-canvas:#fbf3df;--bingo-theme-surface:#ffffff;--bingo-theme-surface-inverse:#25475a;--bingo-theme-surface-elevated:#eee0bd;--bingo-theme-border:#25333a;--bingo-theme-text-primary:#25333a;--bingo-theme-text-secondary:#505b5f;--bingo-theme-text-inverse:#ffffff;--bingo-theme-text-link:#25475a;--bingo-theme-text-danger:#8f1d1d;--bingo-theme-focus-inner:#ffffff;--bingo-theme-focus-outer:#25333a;--bingo-theme-focus-width:4px;--bingo-theme-focus-offset:3px;--bingo-theme-focus-outer-width:7px;--bingo-theme-card-surface:#ffffff;--bingo-theme-card-border:#25333a;--bingo-theme-card-header-background:#25475a;--bingo-theme-card-header-text:#ffffff;--bingo-theme-card-header-border:#ffffff;--bingo-theme-card-header-indicator:#ffffff;--bingo-theme-card-uncalled-background:#eee0bd;--bingo-theme-card-uncalled-text:#25333a;--bingo-theme-card-uncalled-border:#25333a;--bingo-theme-card-uncalled-indicator:#25333a;--bingo-theme-card-called-background:#c69b45;--bingo-theme-card-called-text:#17243a;--bingo-theme-card-called-border:#17243a;--bingo-theme-card-called-indicator:#17243a;--bingo-theme-card-marked-background:#25475a;--bingo-theme-card-marked-text:#ffffff;--bingo-theme-card-marked-border:#ffffff;--bingo-theme-card-marked-indicator:#ffffff;--bingo-theme-card-free-background:#633a24;--bingo-theme-card-free-text:#ffffff;--bingo-theme-card-free-border:#ffffff;--bingo-theme-card-free-indicator:#ffffff;--bingo-theme-card-unavailable-background:#e3e6e8;--bingo-theme-card-unavailable-text:#26343f;--bingo-theme-card-unavailable-border:#26343f;--bingo-theme-card-unavailable-indicator:#26343f;--bingo-theme-state-neutral-background:#e3e6e8;--bingo-theme-state-neutral-text:#26343f;--bingo-theme-state-neutral-border:#26343f;--bingo-theme-state-neutral-indicator:#26343f;--bingo-theme-state-info-background:#dcebf8;--bingo-theme-state-info-text:#173b61;--bingo-theme-state-info-border:#173b61;--bingo-theme-state-info-indicator:#173b61;--bingo-theme-state-success-background:#dcefe6;--bingo-theme-state-success-text:#1c563d;--bingo-theme-state-success-border:#1c563d;--bingo-theme-state-success-indicator:#1c563d;--bingo-theme-state-warning-background:#fff1c2;--bingo-theme-state-warning-text:#664400;--bingo-theme-state-warning-border:#664400;--bingo-theme-state-warning-indicator:#664400;--bingo-theme-state-danger-background:#fbe1e1;--bingo-theme-state-danger-text:#7d1f1f;--bingo-theme-state-danger-border:#7d1f1f;--bingo-theme-state-danger-indicator:#7d1f1f;--bingo-theme-ball-current-background:#25475a;--bingo-theme-ball-current-text:#ffffff;--bingo-theme-ball-current-border:#ffffff;--bingo-theme-ball-current-indicator:#ffffff;--bingo-theme-ball-history-background:#eee0bd;--bingo-theme-ball-history-text:#25333a;--bingo-theme-ball-history-border:#25333a;--bingo-theme-ball-history-indicator:#25333a;--bingo-theme-result-checking-background:#c69b45;--bingo-theme-result-checking-text:#17243a;--bingo-theme-result-checking-border:#17243a;--bingo-theme-result-checking-indicator:#17243a;--bingo-theme-result-winner-background:#25475a;--bingo-theme-result-winner-text:#ffffff;--bingo-theme-result-winner-border:#ffffff;--bingo-theme-result-winner-indicator:#ffffff;--bingo-theme-result-other-winner-background:#633a24;--bingo-theme-result-other-winner-text:#ffffff;--bingo-theme-result-other-winner-border:#ffffff;--bingo-theme-result-other-winner-indicator:#ffffff;--bingo-theme-motion-state:160ms;--bingo-theme-motion-daub:220ms;--bingo-theme-motion-celebration:700ms">
+  <header>
+    <p class="kicker">A playful storybook voyage centered on maps, teamwork, and a bright horizon rather than menace.</p>
+    <h2>Pirates</h2>
+    <p>Parchment, deep sea blue, warm brown, and brass create adventure while retaining crisp contrast.</p>
+  </header>
+  <div class="theme-grid">
+    <section aria-labelledby="pirates-card">
+      <h3 id="pirates-card">Card states</h3>
+      <div class="bingo-preview card-token-panel" aria-label="Card state token preview">
+        <div class="specimen card-header"><span aria-hidden="true">●</span><strong>Card header</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-uncalled"><span aria-hidden="true">●</span><strong>Uncalled</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-called"><span aria-hidden="true">●</span><strong>Called</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-marked"><span aria-hidden="true">●</span><strong>Marked</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-free"><span aria-hidden="true">●</span><strong>Free</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-unavailable"><span aria-hidden="true">●</span><strong>Unavailable</strong><small>Text + glyph + border</small></div>
+      </div>
+    </section>
+    <section aria-labelledby="pirates-status">
+      <h3 id="pirates-status">Text, status, balls, and results</h3>
+      <div class="token-row">
+        <div class="specimen text-primary"><span aria-hidden="true">●</span><strong>Text primary</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-secondary"><span aria-hidden="true">●</span><strong>Text secondary</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-inverse"><span aria-hidden="true">●</span><strong>Text inverse</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-link"><span aria-hidden="true">●</span><strong>Text link</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-danger"><span aria-hidden="true">●</span><strong>Text danger</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-neutral"><span aria-hidden="true">●</span><strong>Neutral</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-info"><span aria-hidden="true">●</span><strong>Information</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-success"><span aria-hidden="true">●</span><strong>Connected</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-warning"><span aria-hidden="true">●</span><strong>Paused</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-danger"><span aria-hidden="true">●</span><strong>Offline</strong><small>Text + glyph + border</small></div>
+        <div class="specimen ball-current"><span aria-hidden="true">●</span><strong>Current ball</strong><small>Text + glyph + border</small></div>
+        <div class="specimen ball-history"><span aria-hidden="true">●</span><strong>History ball</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-checking"><span aria-hidden="true">●</span><strong>Checking</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-winner"><span aria-hidden="true">●</span><strong>You won</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-other"><span aria-hidden="true">●</span><strong>Another player won</strong><small>Text + glyph + border</small></div>
+      </div>
+    </section>
+  </div>
+  <details id="pirates-direction">
+    <summary>Moodboard direction</summary>
+    <dl>
+      <dt>Motifs</dt><dd>rope curves, compass geometry, map routes and wave lines</dd>
+      <dt>Shape language</dt><dd>Curved routes, stamped circles, and sturdy plank-like rectangles support a clear navigational rhythm.</dd>
+      <dt>Texture</dt><dd>Light map speckle and line hatching stay outside text and number surfaces to preserve legibility.</dd>
+      <dt>Motion</dt><dd>A short rolling-wave or compass-settle gesture may decorate success before becoming fully static.</dd>
+      <dt>Original direction</dt><dd>Use original seafaring symbols and a cartoon tone without copying fictional crews, flags, or ships.</dd>
+      <dt>Avoid</dt><dd>Recognizable characters, franchise costume language, or copied catchphrases; Brand logos, team marks, official seals, or protected trade dress; Cultural caricatures, gender stereotypes, gore, or hostile loser imagery; Violent punishment, hostile walk-the-plank loss scenes, or demeaning pirate stereotypes</dd>
+    </dl>
+  </details>
+</article>
+<article class="theme-card" data-theme-id="ghosts" style="--bingo-theme-canvas:#f5f2fb;--bingo-theme-surface:#ffffff;--bingo-theme-surface-inverse:#352b67;--bingo-theme-surface-elevated:#e9e2f4;--bingo-theme-border:#28233f;--bingo-theme-text-primary:#28233f;--bingo-theme-text-secondary:#514a68;--bingo-theme-text-inverse:#ffffff;--bingo-theme-text-link:#352b67;--bingo-theme-text-danger:#8f1d1d;--bingo-theme-focus-inner:#ffffff;--bingo-theme-focus-outer:#28233f;--bingo-theme-focus-width:4px;--bingo-theme-focus-offset:3px;--bingo-theme-focus-outer-width:7px;--bingo-theme-card-surface:#ffffff;--bingo-theme-card-border:#28233f;--bingo-theme-card-header-background:#352b67;--bingo-theme-card-header-text:#ffffff;--bingo-theme-card-header-border:#ffffff;--bingo-theme-card-header-indicator:#ffffff;--bingo-theme-card-uncalled-background:#e9e2f4;--bingo-theme-card-uncalled-text:#28233f;--bingo-theme-card-uncalled-border:#28233f;--bingo-theme-card-uncalled-indicator:#28233f;--bingo-theme-card-called-background:#8fd8c8;--bingo-theme-card-called-text:#17243a;--bingo-theme-card-called-border:#17243a;--bingo-theme-card-called-indicator:#17243a;--bingo-theme-card-marked-background:#352b67;--bingo-theme-card-marked-text:#ffffff;--bingo-theme-card-marked-border:#ffffff;--bingo-theme-card-marked-indicator:#ffffff;--bingo-theme-card-free-background:#5a3a73;--bingo-theme-card-free-text:#ffffff;--bingo-theme-card-free-border:#ffffff;--bingo-theme-card-free-indicator:#ffffff;--bingo-theme-card-unavailable-background:#e3e6e8;--bingo-theme-card-unavailable-text:#26343f;--bingo-theme-card-unavailable-border:#26343f;--bingo-theme-card-unavailable-indicator:#26343f;--bingo-theme-state-neutral-background:#e3e6e8;--bingo-theme-state-neutral-text:#26343f;--bingo-theme-state-neutral-border:#26343f;--bingo-theme-state-neutral-indicator:#26343f;--bingo-theme-state-info-background:#dcebf8;--bingo-theme-state-info-text:#173b61;--bingo-theme-state-info-border:#173b61;--bingo-theme-state-info-indicator:#173b61;--bingo-theme-state-success-background:#dcefe6;--bingo-theme-state-success-text:#1c563d;--bingo-theme-state-success-border:#1c563d;--bingo-theme-state-success-indicator:#1c563d;--bingo-theme-state-warning-background:#fff1c2;--bingo-theme-state-warning-text:#664400;--bingo-theme-state-warning-border:#664400;--bingo-theme-state-warning-indicator:#664400;--bingo-theme-state-danger-background:#fbe1e1;--bingo-theme-state-danger-text:#7d1f1f;--bingo-theme-state-danger-border:#7d1f1f;--bingo-theme-state-danger-indicator:#7d1f1f;--bingo-theme-ball-current-background:#352b67;--bingo-theme-ball-current-text:#ffffff;--bingo-theme-ball-current-border:#ffffff;--bingo-theme-ball-current-indicator:#ffffff;--bingo-theme-ball-history-background:#e9e2f4;--bingo-theme-ball-history-text:#28233f;--bingo-theme-ball-history-border:#28233f;--bingo-theme-ball-history-indicator:#28233f;--bingo-theme-result-checking-background:#8fd8c8;--bingo-theme-result-checking-text:#17243a;--bingo-theme-result-checking-border:#17243a;--bingo-theme-result-checking-indicator:#17243a;--bingo-theme-result-winner-background:#352b67;--bingo-theme-result-winner-text:#ffffff;--bingo-theme-result-winner-border:#ffffff;--bingo-theme-result-winner-indicator:#ffffff;--bingo-theme-result-other-winner-background:#5a3a73;--bingo-theme-result-other-winner-text:#ffffff;--bingo-theme-result-other-winner-border:#ffffff;--bingo-theme-result-other-winner-indicator:#ffffff;--bingo-theme-motion-state:160ms;--bingo-theme-motion-daub:220ms;--bingo-theme-motion-celebration:700ms">
+  <header>
+    <p class="kicker">A friendly moonlit gathering with soft mystery, gentle humor, and no horror dependence.</p>
+    <h2>Ghosts</h2>
+    <p>Fog white, indigo, lavender, and mint-aqua feel nocturnal while keeping cards bright and direct.</p>
+  </header>
+  <div class="theme-grid">
+    <section aria-labelledby="ghosts-card">
+      <h3 id="ghosts-card">Card states</h3>
+      <div class="bingo-preview card-token-panel" aria-label="Card state token preview">
+        <div class="specimen card-header"><span aria-hidden="true">●</span><strong>Card header</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-uncalled"><span aria-hidden="true">●</span><strong>Uncalled</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-called"><span aria-hidden="true">●</span><strong>Called</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-marked"><span aria-hidden="true">●</span><strong>Marked</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-free"><span aria-hidden="true">●</span><strong>Free</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-unavailable"><span aria-hidden="true">●</span><strong>Unavailable</strong><small>Text + glyph + border</small></div>
+      </div>
+    </section>
+    <section aria-labelledby="ghosts-status">
+      <h3 id="ghosts-status">Text, status, balls, and results</h3>
+      <div class="token-row">
+        <div class="specimen text-primary"><span aria-hidden="true">●</span><strong>Text primary</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-secondary"><span aria-hidden="true">●</span><strong>Text secondary</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-inverse"><span aria-hidden="true">●</span><strong>Text inverse</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-link"><span aria-hidden="true">●</span><strong>Text link</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-danger"><span aria-hidden="true">●</span><strong>Text danger</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-neutral"><span aria-hidden="true">●</span><strong>Neutral</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-info"><span aria-hidden="true">●</span><strong>Information</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-success"><span aria-hidden="true">●</span><strong>Connected</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-warning"><span aria-hidden="true">●</span><strong>Paused</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-danger"><span aria-hidden="true">●</span><strong>Offline</strong><small>Text + glyph + border</small></div>
+        <div class="specimen ball-current"><span aria-hidden="true">●</span><strong>Current ball</strong><small>Text + glyph + border</small></div>
+        <div class="specimen ball-history"><span aria-hidden="true">●</span><strong>History ball</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-checking"><span aria-hidden="true">●</span><strong>Checking</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-winner"><span aria-hidden="true">●</span><strong>You won</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-other"><span aria-hidden="true">●</span><strong>Another player won</strong><small>Text + glyph + border</small></div>
+      </div>
+    </section>
+  </div>
+  <details id="ghosts-direction">
+    <summary>Moodboard direction</summary>
+    <dl>
+      <dt>Motifs</dt><dd>floating sheet curves, moon crescents, fog ribbons</dd>
+      <dt>Shape language</dt><dd>Soft vertical floats and rounded scallops contrast with firm rectangular interaction boundaries.</dd>
+      <dt>Texture</dt><dd>Translucent-looking layers are illustrative only; all semantic surfaces remain opaque and contrast-tested.</dd>
+      <dt>Motion</dt><dd>A slow decorative float can stop instantly, while controls and announcements remain unaffected.</dd>
+      <dt>Original direction</dt><dd>Draw original friendly spectral silhouettes without recreating recognizable characters or films.</dd>
+      <dt>Avoid</dt><dd>Recognizable characters, franchise costume language, or copied catchphrases; Brand logos, team marks, official seals, or protected trade dress; Cultural caricatures, gender stereotypes, gore, or hostile loser imagery</dd>
+    </dl>
+  </details>
+</article>
+<article class="theme-card" data-theme-id="sports" style="--bingo-theme-canvas:#f4f7f5;--bingo-theme-surface:#ffffff;--bingo-theme-surface-inverse:#173b61;--bingo-theme-surface-elevated:#e4ece7;--bingo-theme-border:#172b35;--bingo-theme-text-primary:#172b35;--bingo-theme-text-secondary:#43565d;--bingo-theme-text-inverse:#ffffff;--bingo-theme-text-link:#173b61;--bingo-theme-text-danger:#8f1d1d;--bingo-theme-focus-inner:#ffffff;--bingo-theme-focus-outer:#172b35;--bingo-theme-focus-width:4px;--bingo-theme-focus-offset:3px;--bingo-theme-focus-outer-width:7px;--bingo-theme-card-surface:#ffffff;--bingo-theme-card-border:#172b35;--bingo-theme-card-header-background:#173b61;--bingo-theme-card-header-text:#ffffff;--bingo-theme-card-header-border:#ffffff;--bingo-theme-card-header-indicator:#ffffff;--bingo-theme-card-uncalled-background:#e4ece7;--bingo-theme-card-uncalled-text:#172b35;--bingo-theme-card-uncalled-border:#172b35;--bingo-theme-card-uncalled-indicator:#172b35;--bingo-theme-card-called-background:#e09b35;--bingo-theme-card-called-text:#17243a;--bingo-theme-card-called-border:#17243a;--bingo-theme-card-called-indicator:#17243a;--bingo-theme-card-marked-background:#173b61;--bingo-theme-card-marked-text:#ffffff;--bingo-theme-card-marked-border:#ffffff;--bingo-theme-card-marked-indicator:#ffffff;--bingo-theme-card-free-background:#27613f;--bingo-theme-card-free-text:#ffffff;--bingo-theme-card-free-border:#ffffff;--bingo-theme-card-free-indicator:#ffffff;--bingo-theme-card-unavailable-background:#e3e6e8;--bingo-theme-card-unavailable-text:#26343f;--bingo-theme-card-unavailable-border:#26343f;--bingo-theme-card-unavailable-indicator:#26343f;--bingo-theme-state-neutral-background:#e3e6e8;--bingo-theme-state-neutral-text:#26343f;--bingo-theme-state-neutral-border:#26343f;--bingo-theme-state-neutral-indicator:#26343f;--bingo-theme-state-info-background:#dcebf8;--bingo-theme-state-info-text:#173b61;--bingo-theme-state-info-border:#173b61;--bingo-theme-state-info-indicator:#173b61;--bingo-theme-state-success-background:#dcefe6;--bingo-theme-state-success-text:#1c563d;--bingo-theme-state-success-border:#1c563d;--bingo-theme-state-success-indicator:#1c563d;--bingo-theme-state-warning-background:#fff1c2;--bingo-theme-state-warning-text:#664400;--bingo-theme-state-warning-border:#664400;--bingo-theme-state-warning-indicator:#664400;--bingo-theme-state-danger-background:#fbe1e1;--bingo-theme-state-danger-text:#7d1f1f;--bingo-theme-state-danger-border:#7d1f1f;--bingo-theme-state-danger-indicator:#7d1f1f;--bingo-theme-ball-current-background:#173b61;--bingo-theme-ball-current-text:#ffffff;--bingo-theme-ball-current-border:#ffffff;--bingo-theme-ball-current-indicator:#ffffff;--bingo-theme-ball-history-background:#e4ece7;--bingo-theme-ball-history-text:#172b35;--bingo-theme-ball-history-border:#172b35;--bingo-theme-ball-history-indicator:#172b35;--bingo-theme-result-checking-background:#e09b35;--bingo-theme-result-checking-text:#17243a;--bingo-theme-result-checking-border:#17243a;--bingo-theme-result-checking-indicator:#17243a;--bingo-theme-result-winner-background:#173b61;--bingo-theme-result-winner-text:#ffffff;--bingo-theme-result-winner-border:#ffffff;--bingo-theme-result-winner-indicator:#ffffff;--bingo-theme-result-other-winner-background:#27613f;--bingo-theme-result-other-winner-text:#ffffff;--bingo-theme-result-other-winner-border:#ffffff;--bingo-theme-result-other-winner-indicator:#ffffff;--bingo-theme-motion-state:160ms;--bingo-theme-motion-daub:220ms;--bingo-theme-motion-celebration:700ms">
+  <header>
+    <p class="kicker">An inclusive community recreation night inspired by scoreboards, teamwork, and shared effort.</p>
+    <h2>Sports</h2>
+    <p>Stadium navy, field green, warm orange, and clean white create an energetic neutral foundation.</p>
+  </header>
+  <div class="theme-grid">
+    <section aria-labelledby="sports-card">
+      <h3 id="sports-card">Card states</h3>
+      <div class="bingo-preview card-token-panel" aria-label="Card state token preview">
+        <div class="specimen card-header"><span aria-hidden="true">●</span><strong>Card header</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-uncalled"><span aria-hidden="true">●</span><strong>Uncalled</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-called"><span aria-hidden="true">●</span><strong>Called</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-marked"><span aria-hidden="true">●</span><strong>Marked</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-free"><span aria-hidden="true">●</span><strong>Free</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-unavailable"><span aria-hidden="true">●</span><strong>Unavailable</strong><small>Text + glyph + border</small></div>
+      </div>
+    </section>
+    <section aria-labelledby="sports-status">
+      <h3 id="sports-status">Text, status, balls, and results</h3>
+      <div class="token-row">
+        <div class="specimen text-primary"><span aria-hidden="true">●</span><strong>Text primary</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-secondary"><span aria-hidden="true">●</span><strong>Text secondary</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-inverse"><span aria-hidden="true">●</span><strong>Text inverse</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-link"><span aria-hidden="true">●</span><strong>Text link</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-danger"><span aria-hidden="true">●</span><strong>Text danger</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-neutral"><span aria-hidden="true">●</span><strong>Neutral</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-info"><span aria-hidden="true">●</span><strong>Information</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-success"><span aria-hidden="true">●</span><strong>Connected</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-warning"><span aria-hidden="true">●</span><strong>Paused</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-danger"><span aria-hidden="true">●</span><strong>Offline</strong><small>Text + glyph + border</small></div>
+        <div class="specimen ball-current"><span aria-hidden="true">●</span><strong>Current ball</strong><small>Text + glyph + border</small></div>
+        <div class="specimen ball-history"><span aria-hidden="true">●</span><strong>History ball</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-checking"><span aria-hidden="true">●</span><strong>Checking</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-winner"><span aria-hidden="true">●</span><strong>You won</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-other"><span aria-hidden="true">●</span><strong>Another player won</strong><small>Text + glyph + border</small></div>
+      </div>
+    </section>
+  </div>
+  <details id="sports-direction">
+    <summary>Moodboard direction</summary>
+    <dl>
+      <dt>Motifs</dt><dd>scoreboard blocks, field and court lines, multi-sport ball arcs</dd>
+      <dt>Shape language</dt><dd>Measured lanes, bold numerals, and modular score panels keep information structured and quick to scan.</dd>
+      <dt>Texture</dt><dd>Very light field markings and perforation dots may frame content but never sit beneath essential labels.</dd>
+      <dt>Motion</dt><dd>Brief score flips or trajectory arcs may celebrate updates, with no flashing or repeated motion.</dd>
+      <dt>Original direction</dt><dd>Represent multiple recreational and adaptive sports through original generic equipment geometry.</dd>
+      <dt>Avoid</dt><dd>Recognizable characters, franchise costume language, or copied catchphrases; Brand logos, team marks, official seals, or protected trade dress; Cultural caricatures, gender stereotypes, gore, or hostile loser imagery; Professional team colors, league marks, athlete likenesses, or winner-versus-loser taunting</dd>
+    </dl>
+  </details>
+</article>
+<article class="theme-card" data-theme-id="christmas" style="--bingo-theme-canvas:#fbf7ea;--bingo-theme-surface:#ffffff;--bingo-theme-surface-inverse:#1f573e;--bingo-theme-surface-elevated:#efe8d2;--bingo-theme-border:#20352e;--bingo-theme-text-primary:#20352e;--bingo-theme-text-secondary:#4b5b55;--bingo-theme-text-inverse:#ffffff;--bingo-theme-text-link:#1f573e;--bingo-theme-text-danger:#8f1d1d;--bingo-theme-focus-inner:#ffffff;--bingo-theme-focus-outer:#20352e;--bingo-theme-focus-width:4px;--bingo-theme-focus-offset:3px;--bingo-theme-focus-outer-width:7px;--bingo-theme-card-surface:#ffffff;--bingo-theme-card-border:#20352e;--bingo-theme-card-header-background:#1f573e;--bingo-theme-card-header-text:#ffffff;--bingo-theme-card-header-border:#ffffff;--bingo-theme-card-header-indicator:#ffffff;--bingo-theme-card-uncalled-background:#efe8d2;--bingo-theme-card-uncalled-text:#20352e;--bingo-theme-card-uncalled-border:#20352e;--bingo-theme-card-uncalled-indicator:#20352e;--bingo-theme-card-called-background:#d3a52f;--bingo-theme-card-called-text:#17243a;--bingo-theme-card-called-border:#17243a;--bingo-theme-card-called-indicator:#17243a;--bingo-theme-card-marked-background:#1f573e;--bingo-theme-card-marked-text:#ffffff;--bingo-theme-card-marked-border:#ffffff;--bingo-theme-card-marked-indicator:#ffffff;--bingo-theme-card-free-background:#7b2936;--bingo-theme-card-free-text:#ffffff;--bingo-theme-card-free-border:#ffffff;--bingo-theme-card-free-indicator:#ffffff;--bingo-theme-card-unavailable-background:#e3e6e8;--bingo-theme-card-unavailable-text:#26343f;--bingo-theme-card-unavailable-border:#26343f;--bingo-theme-card-unavailable-indicator:#26343f;--bingo-theme-state-neutral-background:#e3e6e8;--bingo-theme-state-neutral-text:#26343f;--bingo-theme-state-neutral-border:#26343f;--bingo-theme-state-neutral-indicator:#26343f;--bingo-theme-state-info-background:#dcebf8;--bingo-theme-state-info-text:#173b61;--bingo-theme-state-info-border:#173b61;--bingo-theme-state-info-indicator:#173b61;--bingo-theme-state-success-background:#dcefe6;--bingo-theme-state-success-text:#1c563d;--bingo-theme-state-success-border:#1c563d;--bingo-theme-state-success-indicator:#1c563d;--bingo-theme-state-warning-background:#fff1c2;--bingo-theme-state-warning-text:#664400;--bingo-theme-state-warning-border:#664400;--bingo-theme-state-warning-indicator:#664400;--bingo-theme-state-danger-background:#fbe1e1;--bingo-theme-state-danger-text:#7d1f1f;--bingo-theme-state-danger-border:#7d1f1f;--bingo-theme-state-danger-indicator:#7d1f1f;--bingo-theme-ball-current-background:#1f573e;--bingo-theme-ball-current-text:#ffffff;--bingo-theme-ball-current-border:#ffffff;--bingo-theme-ball-current-indicator:#ffffff;--bingo-theme-ball-history-background:#efe8d2;--bingo-theme-ball-history-text:#20352e;--bingo-theme-ball-history-border:#20352e;--bingo-theme-ball-history-indicator:#20352e;--bingo-theme-result-checking-background:#d3a52f;--bingo-theme-result-checking-text:#17243a;--bingo-theme-result-checking-border:#17243a;--bingo-theme-result-checking-indicator:#17243a;--bingo-theme-result-winner-background:#1f573e;--bingo-theme-result-winner-text:#ffffff;--bingo-theme-result-winner-border:#ffffff;--bingo-theme-result-winner-indicator:#ffffff;--bingo-theme-result-other-winner-background:#7b2936;--bingo-theme-result-other-winner-text:#ffffff;--bingo-theme-result-other-winner-border:#ffffff;--bingo-theme-result-other-winner-indicator:#ffffff;--bingo-theme-motion-state:160ms;--bingo-theme-motion-daub:220ms;--bingo-theme-motion-celebration:700ms">
+  <header>
+    <p class="kicker">A warm winter paper-craft gathering focused on lights, greenery, gifts, and generous welcome.</p>
+    <h2>Christmas</h2>
+    <p>Snow cream, pine, cranberry, and muted gold create a festive but readable seasonal palette.</p>
+  </header>
+  <div class="theme-grid">
+    <section aria-labelledby="christmas-card">
+      <h3 id="christmas-card">Card states</h3>
+      <div class="bingo-preview card-token-panel" aria-label="Card state token preview">
+        <div class="specimen card-header"><span aria-hidden="true">●</span><strong>Card header</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-uncalled"><span aria-hidden="true">●</span><strong>Uncalled</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-called"><span aria-hidden="true">●</span><strong>Called</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-marked"><span aria-hidden="true">●</span><strong>Marked</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-free"><span aria-hidden="true">●</span><strong>Free</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-unavailable"><span aria-hidden="true">●</span><strong>Unavailable</strong><small>Text + glyph + border</small></div>
+      </div>
+    </section>
+    <section aria-labelledby="christmas-status">
+      <h3 id="christmas-status">Text, status, balls, and results</h3>
+      <div class="token-row">
+        <div class="specimen text-primary"><span aria-hidden="true">●</span><strong>Text primary</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-secondary"><span aria-hidden="true">●</span><strong>Text secondary</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-inverse"><span aria-hidden="true">●</span><strong>Text inverse</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-link"><span aria-hidden="true">●</span><strong>Text link</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-danger"><span aria-hidden="true">●</span><strong>Text danger</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-neutral"><span aria-hidden="true">●</span><strong>Neutral</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-info"><span aria-hidden="true">●</span><strong>Information</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-success"><span aria-hidden="true">●</span><strong>Connected</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-warning"><span aria-hidden="true">●</span><strong>Paused</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-danger"><span aria-hidden="true">●</span><strong>Offline</strong><small>Text + glyph + border</small></div>
+        <div class="specimen ball-current"><span aria-hidden="true">●</span><strong>Current ball</strong><small>Text + glyph + border</small></div>
+        <div class="specimen ball-history"><span aria-hidden="true">●</span><strong>History ball</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-checking"><span aria-hidden="true">●</span><strong>Checking</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-winner"><span aria-hidden="true">●</span><strong>You won</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-other"><span aria-hidden="true">●</span><strong>Another player won</strong><small>Text + glyph + border</small></div>
+      </div>
+    </section>
+  </div>
+  <details id="christmas-direction">
+    <summary>Moodboard direction</summary>
+    <dl>
+      <dt>Motifs</dt><dd>paper-cut evergreen, ribbon loops, warm light dots</dd>
+      <dt>Shape language</dt><dd>Layered paper edges, tidy ribbons, and simple ornament circles frame content without crowding it.</dd>
+      <dt>Texture</dt><dd>Matte paper and soft needle-line details remain decorative and disappear cleanly in contrast modes.</dd>
+      <dt>Motion</dt><dd>A single light shimmer or ribbon settle may accompany celebration, never loop or carry meaning.</dd>
+      <dt>Original direction</dt><dd>Use original winter celebration craftwork without branded characters, songs, or commercial imagery.</dd>
+      <dt>Avoid</dt><dd>Recognizable characters, franchise costume language, or copied catchphrases; Brand logos, team marks, official seals, or protected trade dress; Cultural caricatures, gender stereotypes, gore, or hostile loser imagery; Assuming every participant shares a faith practice or using sacred symbols as casual decoration</dd>
+    </dl>
+  </details>
+</article>
+<article class="theme-card" data-theme-id="halloween" style="--bingo-theme-canvas:#f8f1e8;--bingo-theme-surface:#ffffff;--bingo-theme-surface-inverse:#302940;--bingo-theme-surface-elevated:#ede2d6;--bingo-theme-border:#2a2733;--bingo-theme-text-primary:#2a2733;--bingo-theme-text-secondary:#554f5d;--bingo-theme-text-inverse:#ffffff;--bingo-theme-text-link:#302940;--bingo-theme-text-danger:#8f1d1d;--bingo-theme-focus-inner:#ffffff;--bingo-theme-focus-outer:#2a2733;--bingo-theme-focus-width:4px;--bingo-theme-focus-offset:3px;--bingo-theme-focus-outer-width:7px;--bingo-theme-card-surface:#ffffff;--bingo-theme-card-border:#2a2733;--bingo-theme-card-header-background:#302940;--bingo-theme-card-header-text:#ffffff;--bingo-theme-card-header-border:#ffffff;--bingo-theme-card-header-indicator:#ffffff;--bingo-theme-card-uncalled-background:#ede2d6;--bingo-theme-card-uncalled-text:#2a2733;--bingo-theme-card-uncalled-border:#2a2733;--bingo-theme-card-uncalled-indicator:#2a2733;--bingo-theme-card-called-background:#e58a2c;--bingo-theme-card-called-text:#17243a;--bingo-theme-card-called-border:#17243a;--bingo-theme-card-called-indicator:#17243a;--bingo-theme-card-marked-background:#302940;--bingo-theme-card-marked-text:#ffffff;--bingo-theme-card-marked-border:#ffffff;--bingo-theme-card-marked-indicator:#ffffff;--bingo-theme-card-free-background:#653876;--bingo-theme-card-free-text:#ffffff;--bingo-theme-card-free-border:#ffffff;--bingo-theme-card-free-indicator:#ffffff;--bingo-theme-card-unavailable-background:#e3e6e8;--bingo-theme-card-unavailable-text:#26343f;--bingo-theme-card-unavailable-border:#26343f;--bingo-theme-card-unavailable-indicator:#26343f;--bingo-theme-state-neutral-background:#e3e6e8;--bingo-theme-state-neutral-text:#26343f;--bingo-theme-state-neutral-border:#26343f;--bingo-theme-state-neutral-indicator:#26343f;--bingo-theme-state-info-background:#dcebf8;--bingo-theme-state-info-text:#173b61;--bingo-theme-state-info-border:#173b61;--bingo-theme-state-info-indicator:#173b61;--bingo-theme-state-success-background:#dcefe6;--bingo-theme-state-success-text:#1c563d;--bingo-theme-state-success-border:#1c563d;--bingo-theme-state-success-indicator:#1c563d;--bingo-theme-state-warning-background:#fff1c2;--bingo-theme-state-warning-text:#664400;--bingo-theme-state-warning-border:#664400;--bingo-theme-state-warning-indicator:#664400;--bingo-theme-state-danger-background:#fbe1e1;--bingo-theme-state-danger-text:#7d1f1f;--bingo-theme-state-danger-border:#7d1f1f;--bingo-theme-state-danger-indicator:#7d1f1f;--bingo-theme-ball-current-background:#302940;--bingo-theme-ball-current-text:#ffffff;--bingo-theme-ball-current-border:#ffffff;--bingo-theme-ball-current-indicator:#ffffff;--bingo-theme-ball-history-background:#ede2d6;--bingo-theme-ball-history-text:#2a2733;--bingo-theme-ball-history-border:#2a2733;--bingo-theme-ball-history-indicator:#2a2733;--bingo-theme-result-checking-background:#e58a2c;--bingo-theme-result-checking-text:#17243a;--bingo-theme-result-checking-border:#17243a;--bingo-theme-result-checking-indicator:#17243a;--bingo-theme-result-winner-background:#302940;--bingo-theme-result-winner-text:#ffffff;--bingo-theme-result-winner-border:#ffffff;--bingo-theme-result-winner-indicator:#ffffff;--bingo-theme-result-other-winner-background:#653876;--bingo-theme-result-other-winner-text:#ffffff;--bingo-theme-result-other-winner-border:#ffffff;--bingo-theme-result-other-winner-indicator:#ffffff;--bingo-theme-motion-state:160ms;--bingo-theme-motion-daub:220ms;--bingo-theme-motion-celebration:700ms">
+  <header>
+    <p class="kicker">A playful autumn night with porch-light warmth, theatrical shadows, and gentle surprise.</p>
+    <h2>Halloween</h2>
+    <p>Cream, charcoal, violet, and pumpkin orange feel seasonal without sacrificing bright reading surfaces.</p>
+  </header>
+  <div class="theme-grid">
+    <section aria-labelledby="halloween-card">
+      <h3 id="halloween-card">Card states</h3>
+      <div class="bingo-preview card-token-panel" aria-label="Card state token preview">
+        <div class="specimen card-header"><span aria-hidden="true">●</span><strong>Card header</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-uncalled"><span aria-hidden="true">●</span><strong>Uncalled</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-called"><span aria-hidden="true">●</span><strong>Called</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-marked"><span aria-hidden="true">●</span><strong>Marked</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-free"><span aria-hidden="true">●</span><strong>Free</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-unavailable"><span aria-hidden="true">●</span><strong>Unavailable</strong><small>Text + glyph + border</small></div>
+      </div>
+    </section>
+    <section aria-labelledby="halloween-status">
+      <h3 id="halloween-status">Text, status, balls, and results</h3>
+      <div class="token-row">
+        <div class="specimen text-primary"><span aria-hidden="true">●</span><strong>Text primary</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-secondary"><span aria-hidden="true">●</span><strong>Text secondary</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-inverse"><span aria-hidden="true">●</span><strong>Text inverse</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-link"><span aria-hidden="true">●</span><strong>Text link</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-danger"><span aria-hidden="true">●</span><strong>Text danger</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-neutral"><span aria-hidden="true">●</span><strong>Neutral</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-info"><span aria-hidden="true">●</span><strong>Information</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-success"><span aria-hidden="true">●</span><strong>Connected</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-warning"><span aria-hidden="true">●</span><strong>Paused</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-danger"><span aria-hidden="true">●</span><strong>Offline</strong><small>Text + glyph + border</small></div>
+        <div class="specimen ball-current"><span aria-hidden="true">●</span><strong>Current ball</strong><small>Text + glyph + border</small></div>
+        <div class="specimen ball-history"><span aria-hidden="true">●</span><strong>History ball</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-checking"><span aria-hidden="true">●</span><strong>Checking</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-winner"><span aria-hidden="true">●</span><strong>You won</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-other"><span aria-hidden="true">●</span><strong>Another player won</strong><small>Text + glyph + border</small></div>
+      </div>
+    </section>
+  </div>
+  <details id="halloween-direction">
+    <summary>Moodboard direction</summary>
+    <dl>
+      <dt>Motifs</dt><dd>pumpkin facets, bat-wing geometry, cobweb corner lines</dd>
+      <dt>Shape language</dt><dd>Angular silhouettes and rounded lantern forms alternate around stable, high-contrast controls.</dd>
+      <dt>Texture</dt><dd>Paper-cut shadow layers and sparse web lines stay ornamental and never encode called or marked state.</dd>
+      <dt>Motion</dt><dd>One playful pop or bat crossing may decorate a result, with static immediate reduced-motion output.</dd>
+      <dt>Original direction</dt><dd>Create original autumn-night forms with friendly expression and no borrowed horror properties.</dd>
+      <dt>Avoid</dt><dd>Recognizable characters, franchise costume language, or copied catchphrases; Brand logos, team marks, official seals, or protected trade dress; Cultural caricatures, gender stereotypes, gore, or hostile loser imagery; Gore, startle-dependent interaction, occult stereotypes, or frightening loss treatment</dd>
+    </dl>
+  </details>
+</article>
+<article class="theme-card" data-theme-id="july-4th" style="--bingo-theme-canvas:#f6f7fa;--bingo-theme-surface:#ffffff;--bingo-theme-surface-inverse:#173b66;--bingo-theme-surface-elevated:#e7edf4;--bingo-theme-border:#17283e;--bingo-theme-text-primary:#17283e;--bingo-theme-text-secondary:#46566a;--bingo-theme-text-inverse:#ffffff;--bingo-theme-text-link:#173b66;--bingo-theme-text-danger:#8f1d1d;--bingo-theme-focus-inner:#ffffff;--bingo-theme-focus-outer:#17283e;--bingo-theme-focus-width:4px;--bingo-theme-focus-offset:3px;--bingo-theme-focus-outer-width:7px;--bingo-theme-card-surface:#ffffff;--bingo-theme-card-border:#17283e;--bingo-theme-card-header-background:#173b66;--bingo-theme-card-header-text:#ffffff;--bingo-theme-card-header-border:#ffffff;--bingo-theme-card-header-indicator:#ffffff;--bingo-theme-card-uncalled-background:#e7edf4;--bingo-theme-card-uncalled-text:#17283e;--bingo-theme-card-uncalled-border:#17283e;--bingo-theme-card-uncalled-indicator:#17283e;--bingo-theme-card-called-background:#7db6d6;--bingo-theme-card-called-text:#17243a;--bingo-theme-card-called-border:#17243a;--bingo-theme-card-called-indicator:#17243a;--bingo-theme-card-marked-background:#173b66;--bingo-theme-card-marked-text:#ffffff;--bingo-theme-card-marked-border:#ffffff;--bingo-theme-card-marked-indicator:#ffffff;--bingo-theme-card-free-background:#7f2d34;--bingo-theme-card-free-text:#ffffff;--bingo-theme-card-free-border:#ffffff;--bingo-theme-card-free-indicator:#ffffff;--bingo-theme-card-unavailable-background:#e3e6e8;--bingo-theme-card-unavailable-text:#26343f;--bingo-theme-card-unavailable-border:#26343f;--bingo-theme-card-unavailable-indicator:#26343f;--bingo-theme-state-neutral-background:#e3e6e8;--bingo-theme-state-neutral-text:#26343f;--bingo-theme-state-neutral-border:#26343f;--bingo-theme-state-neutral-indicator:#26343f;--bingo-theme-state-info-background:#dcebf8;--bingo-theme-state-info-text:#173b61;--bingo-theme-state-info-border:#173b61;--bingo-theme-state-info-indicator:#173b61;--bingo-theme-state-success-background:#dcefe6;--bingo-theme-state-success-text:#1c563d;--bingo-theme-state-success-border:#1c563d;--bingo-theme-state-success-indicator:#1c563d;--bingo-theme-state-warning-background:#fff1c2;--bingo-theme-state-warning-text:#664400;--bingo-theme-state-warning-border:#664400;--bingo-theme-state-warning-indicator:#664400;--bingo-theme-state-danger-background:#fbe1e1;--bingo-theme-state-danger-text:#7d1f1f;--bingo-theme-state-danger-border:#7d1f1f;--bingo-theme-state-danger-indicator:#7d1f1f;--bingo-theme-ball-current-background:#173b66;--bingo-theme-ball-current-text:#ffffff;--bingo-theme-ball-current-border:#ffffff;--bingo-theme-ball-current-indicator:#ffffff;--bingo-theme-ball-history-background:#e7edf4;--bingo-theme-ball-history-text:#17283e;--bingo-theme-ball-history-border:#17283e;--bingo-theme-ball-history-indicator:#17283e;--bingo-theme-result-checking-background:#7db6d6;--bingo-theme-result-checking-text:#17243a;--bingo-theme-result-checking-border:#17243a;--bingo-theme-result-checking-indicator:#17243a;--bingo-theme-result-winner-background:#173b66;--bingo-theme-result-winner-text:#ffffff;--bingo-theme-result-winner-border:#ffffff;--bingo-theme-result-winner-indicator:#ffffff;--bingo-theme-result-other-winner-background:#7f2d34;--bingo-theme-result-other-winner-text:#ffffff;--bingo-theme-result-other-winner-border:#ffffff;--bingo-theme-result-other-winner-indicator:#ffffff;--bingo-theme-motion-state:160ms;--bingo-theme-motion-daub:220ms;--bingo-theme-motion-celebration:700ms">
+  <header>
+    <p class="kicker">A relaxed summer civic picnic with night-sky sparkle and room for many ways of belonging.</p>
+    <h2>July 4th</h2>
+    <p>Cream-white, navy, restrained brick red, and sky blue keep the celebration clear and balanced.</p>
+  </header>
+  <div class="theme-grid">
+    <section aria-labelledby="july-4th-card">
+      <h3 id="july-4th-card">Card states</h3>
+      <div class="bingo-preview card-token-panel" aria-label="Card state token preview">
+        <div class="specimen card-header"><span aria-hidden="true">●</span><strong>Card header</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-uncalled"><span aria-hidden="true">●</span><strong>Uncalled</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-called"><span aria-hidden="true">●</span><strong>Called</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-marked"><span aria-hidden="true">●</span><strong>Marked</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-free"><span aria-hidden="true">●</span><strong>Free</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-unavailable"><span aria-hidden="true">●</span><strong>Unavailable</strong><small>Text + glyph + border</small></div>
+      </div>
+    </section>
+    <section aria-labelledby="july-4th-status">
+      <h3 id="july-4th-status">Text, status, balls, and results</h3>
+      <div class="token-row">
+        <div class="specimen text-primary"><span aria-hidden="true">●</span><strong>Text primary</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-secondary"><span aria-hidden="true">●</span><strong>Text secondary</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-inverse"><span aria-hidden="true">●</span><strong>Text inverse</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-link"><span aria-hidden="true">●</span><strong>Text link</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-danger"><span aria-hidden="true">●</span><strong>Text danger</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-neutral"><span aria-hidden="true">●</span><strong>Neutral</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-info"><span aria-hidden="true">●</span><strong>Information</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-success"><span aria-hidden="true">●</span><strong>Connected</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-warning"><span aria-hidden="true">●</span><strong>Paused</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-danger"><span aria-hidden="true">●</span><strong>Offline</strong><small>Text + glyph + border</small></div>
+        <div class="specimen ball-current"><span aria-hidden="true">●</span><strong>Current ball</strong><small>Text + glyph + border</small></div>
+        <div class="specimen ball-history"><span aria-hidden="true">●</span><strong>History ball</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-checking"><span aria-hidden="true">●</span><strong>Checking</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-winner"><span aria-hidden="true">●</span><strong>You won</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-other"><span aria-hidden="true">●</span><strong>Another player won</strong><small>Text + glyph + border</small></div>
+      </div>
+    </section>
+  </div>
+  <details id="july-4th-direction">
+    <summary>Moodboard direction</summary>
+    <dl>
+      <dt>Motifs</dt><dd>abstract star fields, bunting arcs, firework radial lines</dd>
+      <dt>Shape language</dt><dd>Open radial bursts and repeating flag-like triangles create rhythm around stable rectangular content.</dd>
+      <dt>Texture</dt><dd>Light paper bunting and sparse night-sky dots remain removable decoration behind opaque information panels.</dd>
+      <dt>Motion</dt><dd>One slow radial reveal may decorate a win, with no flashing and an immediate static alternative.</dd>
+      <dt>Original direction</dt><dd>Use original civic celebration geometry without official seals, political messaging, or copied emblems.</dd>
+      <dt>Avoid</dt><dd>Recognizable characters, franchise costume language, or copied catchphrases; Brand logos, team marks, official seals, or protected trade dress; Cultural caricatures, gender stereotypes, gore, or hostile loser imagery; Militaristic victory framing, partisan symbols, or imagery that excludes participants</dd>
+    </dl>
+  </details>
+</article>
+<article class="theme-card" data-theme-id="valentines-day" style="--bingo-theme-canvas:#fff5f6;--bingo-theme-surface:#ffffff;--bingo-theme-surface-inverse:#7b2848;--bingo-theme-surface-elevated:#f5e2e7;--bingo-theme-border:#382530;--bingo-theme-text-primary:#382530;--bingo-theme-text-secondary:#604b56;--bingo-theme-text-inverse:#ffffff;--bingo-theme-text-link:#7b2848;--bingo-theme-text-danger:#8f1d1d;--bingo-theme-focus-inner:#ffffff;--bingo-theme-focus-outer:#382530;--bingo-theme-focus-width:4px;--bingo-theme-focus-offset:3px;--bingo-theme-focus-outer-width:7px;--bingo-theme-card-surface:#ffffff;--bingo-theme-card-border:#382530;--bingo-theme-card-header-background:#7b2848;--bingo-theme-card-header-text:#ffffff;--bingo-theme-card-header-border:#ffffff;--bingo-theme-card-header-indicator:#ffffff;--bingo-theme-card-uncalled-background:#f5e2e7;--bingo-theme-card-uncalled-text:#382530;--bingo-theme-card-uncalled-border:#382530;--bingo-theme-card-uncalled-indicator:#382530;--bingo-theme-card-called-background:#e2a0b0;--bingo-theme-card-called-text:#382530;--bingo-theme-card-called-border:#382530;--bingo-theme-card-called-indicator:#382530;--bingo-theme-card-marked-background:#7b2848;--bingo-theme-card-marked-text:#ffffff;--bingo-theme-card-marked-border:#ffffff;--bingo-theme-card-marked-indicator:#ffffff;--bingo-theme-card-free-background:#603352;--bingo-theme-card-free-text:#ffffff;--bingo-theme-card-free-border:#ffffff;--bingo-theme-card-free-indicator:#ffffff;--bingo-theme-card-unavailable-background:#e3e6e8;--bingo-theme-card-unavailable-text:#26343f;--bingo-theme-card-unavailable-border:#26343f;--bingo-theme-card-unavailable-indicator:#26343f;--bingo-theme-state-neutral-background:#e3e6e8;--bingo-theme-state-neutral-text:#26343f;--bingo-theme-state-neutral-border:#26343f;--bingo-theme-state-neutral-indicator:#26343f;--bingo-theme-state-info-background:#dcebf8;--bingo-theme-state-info-text:#173b61;--bingo-theme-state-info-border:#173b61;--bingo-theme-state-info-indicator:#173b61;--bingo-theme-state-success-background:#dcefe6;--bingo-theme-state-success-text:#1c563d;--bingo-theme-state-success-border:#1c563d;--bingo-theme-state-success-indicator:#1c563d;--bingo-theme-state-warning-background:#fff1c2;--bingo-theme-state-warning-text:#664400;--bingo-theme-state-warning-border:#664400;--bingo-theme-state-warning-indicator:#664400;--bingo-theme-state-danger-background:#fbe1e1;--bingo-theme-state-danger-text:#7d1f1f;--bingo-theme-state-danger-border:#7d1f1f;--bingo-theme-state-danger-indicator:#7d1f1f;--bingo-theme-ball-current-background:#7b2848;--bingo-theme-ball-current-text:#ffffff;--bingo-theme-ball-current-border:#ffffff;--bingo-theme-ball-current-indicator:#ffffff;--bingo-theme-ball-history-background:#f5e2e7;--bingo-theme-ball-history-text:#382530;--bingo-theme-ball-history-border:#382530;--bingo-theme-ball-history-indicator:#382530;--bingo-theme-result-checking-background:#e2a0b0;--bingo-theme-result-checking-text:#382530;--bingo-theme-result-checking-border:#382530;--bingo-theme-result-checking-indicator:#382530;--bingo-theme-result-winner-background:#7b2848;--bingo-theme-result-winner-text:#ffffff;--bingo-theme-result-winner-border:#ffffff;--bingo-theme-result-winner-indicator:#ffffff;--bingo-theme-result-other-winner-background:#603352;--bingo-theme-result-other-winner-text:#ffffff;--bingo-theme-result-other-winner-border:#ffffff;--bingo-theme-result-other-winner-indicator:#ffffff;--bingo-theme-motion-state:160ms;--bingo-theme-motion-daub:220ms;--bingo-theme-motion-celebration:700ms">
+  <header>
+    <p class="kicker">An inclusive handmade-card table celebrating affection, friendship, family, and community care.</p>
+    <h2>Valentine&#39;s Day</h2>
+    <p>Cream, berry, plum, rose, and blush provide warmth without gender-coded defaults.</p>
+  </header>
+  <div class="theme-grid">
+    <section aria-labelledby="valentines-day-card">
+      <h3 id="valentines-day-card">Card states</h3>
+      <div class="bingo-preview card-token-panel" aria-label="Card state token preview">
+        <div class="specimen card-header"><span aria-hidden="true">●</span><strong>Card header</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-uncalled"><span aria-hidden="true">●</span><strong>Uncalled</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-called"><span aria-hidden="true">●</span><strong>Called</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-marked"><span aria-hidden="true">●</span><strong>Marked</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-free"><span aria-hidden="true">●</span><strong>Free</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-unavailable"><span aria-hidden="true">●</span><strong>Unavailable</strong><small>Text + glyph + border</small></div>
+      </div>
+    </section>
+    <section aria-labelledby="valentines-day-status">
+      <h3 id="valentines-day-status">Text, status, balls, and results</h3>
+      <div class="token-row">
+        <div class="specimen text-primary"><span aria-hidden="true">●</span><strong>Text primary</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-secondary"><span aria-hidden="true">●</span><strong>Text secondary</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-inverse"><span aria-hidden="true">●</span><strong>Text inverse</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-link"><span aria-hidden="true">●</span><strong>Text link</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-danger"><span aria-hidden="true">●</span><strong>Text danger</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-neutral"><span aria-hidden="true">●</span><strong>Neutral</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-info"><span aria-hidden="true">●</span><strong>Information</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-success"><span aria-hidden="true">●</span><strong>Connected</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-warning"><span aria-hidden="true">●</span><strong>Paused</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-danger"><span aria-hidden="true">●</span><strong>Offline</strong><small>Text + glyph + border</small></div>
+        <div class="specimen ball-current"><span aria-hidden="true">●</span><strong>Current ball</strong><small>Text + glyph + border</small></div>
+        <div class="specimen ball-history"><span aria-hidden="true">●</span><strong>History ball</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-checking"><span aria-hidden="true">●</span><strong>Checking</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-winner"><span aria-hidden="true">●</span><strong>You won</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-other"><span aria-hidden="true">●</span><strong>Another player won</strong><small>Text + glyph + border</small></div>
+      </div>
+    </section>
+  </div>
+  <details id="valentines-day-direction">
+    <summary>Moodboard direction</summary>
+    <dl>
+      <dt>Motifs</dt><dd>interlocking heart geometry, paper-note folds, ribbon loops</dd>
+      <dt>Shape language</dt><dd>Folded-paper diamonds, linked curves, and hand-cut edges support a personal but organized feel.</dd>
+      <dt>Texture</dt><dd>Subtle paper fiber and stitch-like borders add craft character while semantic areas stay fully opaque.</dd>
+      <dt>Motion</dt><dd>A brief linked-shape settle may decorate success, while reduced motion presents the final state directly.</dd>
+      <dt>Original direction</dt><dd>Use original inclusive paper-craft forms rather than branded cards, mascots, or romantic clichés.</dd>
+      <dt>Avoid</dt><dd>Recognizable characters, franchise costume language, or copied catchphrases; Brand logos, team marks, official seals, or protected trade dress; Cultural caricatures, gender stereotypes, gore, or hostile loser imagery; Gender assumptions, couple-only language, body stereotypes, or humiliating rejection imagery</dd>
+    </dl>
+  </details>
+</article>
+<article class="theme-card" data-theme-id="birthday" style="--bingo-theme-canvas:#f7f5fc;--bingo-theme-surface:#ffffff;--bingo-theme-surface-inverse:#3a3278;--bingo-theme-surface-elevated:#ebe6f5;--bingo-theme-border:#28253f;--bingo-theme-text-primary:#28253f;--bingo-theme-text-secondary:#514d68;--bingo-theme-text-inverse:#ffffff;--bingo-theme-text-link:#3a3278;--bingo-theme-text-danger:#8f1d1d;--bingo-theme-focus-inner:#ffffff;--bingo-theme-focus-outer:#28253f;--bingo-theme-focus-width:4px;--bingo-theme-focus-offset:3px;--bingo-theme-focus-outer-width:7px;--bingo-theme-card-surface:#ffffff;--bingo-theme-card-border:#28253f;--bingo-theme-card-header-background:#3a3278;--bingo-theme-card-header-text:#ffffff;--bingo-theme-card-header-border:#ffffff;--bingo-theme-card-header-indicator:#ffffff;--bingo-theme-card-uncalled-background:#ebe6f5;--bingo-theme-card-uncalled-text:#28253f;--bingo-theme-card-uncalled-border:#28253f;--bingo-theme-card-uncalled-indicator:#28253f;--bingo-theme-card-called-background:#e68a42;--bingo-theme-card-called-text:#28253f;--bingo-theme-card-called-border:#28253f;--bingo-theme-card-called-indicator:#28253f;--bingo-theme-card-marked-background:#3a3278;--bingo-theme-card-marked-text:#ffffff;--bingo-theme-card-marked-border:#ffffff;--bingo-theme-card-marked-indicator:#ffffff;--bingo-theme-card-free-background:#0e606a;--bingo-theme-card-free-text:#ffffff;--bingo-theme-card-free-border:#ffffff;--bingo-theme-card-free-indicator:#ffffff;--bingo-theme-card-unavailable-background:#e3e6e8;--bingo-theme-card-unavailable-text:#26343f;--bingo-theme-card-unavailable-border:#26343f;--bingo-theme-card-unavailable-indicator:#26343f;--bingo-theme-state-neutral-background:#e3e6e8;--bingo-theme-state-neutral-text:#26343f;--bingo-theme-state-neutral-border:#26343f;--bingo-theme-state-neutral-indicator:#26343f;--bingo-theme-state-info-background:#dcebf8;--bingo-theme-state-info-text:#173b61;--bingo-theme-state-info-border:#173b61;--bingo-theme-state-info-indicator:#173b61;--bingo-theme-state-success-background:#dcefe6;--bingo-theme-state-success-text:#1c563d;--bingo-theme-state-success-border:#1c563d;--bingo-theme-state-success-indicator:#1c563d;--bingo-theme-state-warning-background:#fff1c2;--bingo-theme-state-warning-text:#664400;--bingo-theme-state-warning-border:#664400;--bingo-theme-state-warning-indicator:#664400;--bingo-theme-state-danger-background:#fbe1e1;--bingo-theme-state-danger-text:#7d1f1f;--bingo-theme-state-danger-border:#7d1f1f;--bingo-theme-state-danger-indicator:#7d1f1f;--bingo-theme-ball-current-background:#3a3278;--bingo-theme-ball-current-text:#ffffff;--bingo-theme-ball-current-border:#ffffff;--bingo-theme-ball-current-indicator:#ffffff;--bingo-theme-ball-history-background:#ebe6f5;--bingo-theme-ball-history-text:#28253f;--bingo-theme-ball-history-border:#28253f;--bingo-theme-ball-history-indicator:#28253f;--bingo-theme-result-checking-background:#e68a42;--bingo-theme-result-checking-text:#28253f;--bingo-theme-result-checking-border:#28253f;--bingo-theme-result-checking-indicator:#28253f;--bingo-theme-result-winner-background:#3a3278;--bingo-theme-result-winner-text:#ffffff;--bingo-theme-result-winner-border:#ffffff;--bingo-theme-result-winner-indicator:#ffffff;--bingo-theme-result-other-winner-background:#0e606a;--bingo-theme-result-other-winner-text:#ffffff;--bingo-theme-result-other-winner-border:#ffffff;--bingo-theme-result-other-winner-indicator:#ffffff;--bingo-theme-motion-state:160ms;--bingo-theme-motion-daub:220ms;--bingo-theme-motion-celebration:700ms">
+  <header>
+    <p class="kicker">An age-neutral shared celebration with bright anticipation, generosity, and no spotlight pressure.</p>
+    <h2>Birthday</h2>
+    <p>Soft cream, indigo, turquoise, coral-orange, and violet feel energetic while remaining composed.</p>
+  </header>
+  <div class="theme-grid">
+    <section aria-labelledby="birthday-card">
+      <h3 id="birthday-card">Card states</h3>
+      <div class="bingo-preview card-token-panel" aria-label="Card state token preview">
+        <div class="specimen card-header"><span aria-hidden="true">●</span><strong>Card header</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-uncalled"><span aria-hidden="true">●</span><strong>Uncalled</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-called"><span aria-hidden="true">●</span><strong>Called</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-marked"><span aria-hidden="true">●</span><strong>Marked</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-free"><span aria-hidden="true">●</span><strong>Free</strong><small>Text + glyph + border</small></div>
+        <div class="specimen card-unavailable"><span aria-hidden="true">●</span><strong>Unavailable</strong><small>Text + glyph + border</small></div>
+      </div>
+    </section>
+    <section aria-labelledby="birthday-status">
+      <h3 id="birthday-status">Text, status, balls, and results</h3>
+      <div class="token-row">
+        <div class="specimen text-primary"><span aria-hidden="true">●</span><strong>Text primary</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-secondary"><span aria-hidden="true">●</span><strong>Text secondary</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-inverse"><span aria-hidden="true">●</span><strong>Text inverse</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-link"><span aria-hidden="true">●</span><strong>Text link</strong><small>Text + glyph + border</small></div>
+        <div class="specimen text-danger"><span aria-hidden="true">●</span><strong>Text danger</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-neutral"><span aria-hidden="true">●</span><strong>Neutral</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-info"><span aria-hidden="true">●</span><strong>Information</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-success"><span aria-hidden="true">●</span><strong>Connected</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-warning"><span aria-hidden="true">●</span><strong>Paused</strong><small>Text + glyph + border</small></div>
+        <div class="specimen state-danger"><span aria-hidden="true">●</span><strong>Offline</strong><small>Text + glyph + border</small></div>
+        <div class="specimen ball-current"><span aria-hidden="true">●</span><strong>Current ball</strong><small>Text + glyph + border</small></div>
+        <div class="specimen ball-history"><span aria-hidden="true">●</span><strong>History ball</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-checking"><span aria-hidden="true">●</span><strong>Checking</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-winner"><span aria-hidden="true">●</span><strong>You won</strong><small>Text + glyph + border</small></div>
+        <div class="specimen result-other"><span aria-hidden="true">●</span><strong>Another player won</strong><small>Text + glyph + border</small></div>
+      </div>
+    </section>
+  </div>
+  <details id="birthday-direction">
+    <summary>Moodboard direction</summary>
+    <dl>
+      <dt>Motifs</dt><dd>confetti geometry, streamer curves, gift and candle blocks</dd>
+      <dt>Shape language</dt><dd>Scattered small accents orbit strong panels, with rounded gift forms and tall candle-like dividers.</dd>
+      <dt>Texture</dt><dd>Paper confetti and ribbon strokes remain sparse, static-capable, and outside all essential reading surfaces.</dd>
+      <dt>Motion</dt><dd>One contained confetti release may decorate a result, with no looping and an immediate static fallback.</dd>
+      <dt>Original direction</dt><dd>Create original general celebration graphics that work across ages, families, and traditions.</dd>
+      <dt>Avoid</dt><dd>Recognizable characters, franchise costume language, or copied catchphrases; Brand logos, team marks, official seals, or protected trade dress; Cultural caricatures, gender stereotypes, gore, or hostile loser imagery; Age jokes, alcohol assumptions, branded party characters, or attention-demanding loss scenes</dd>
+    </dl>
+  </details>
+</article></div>
+  </main>
+</body>
+</html>

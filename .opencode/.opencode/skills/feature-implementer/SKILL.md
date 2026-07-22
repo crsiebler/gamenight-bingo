@@ -1,33 +1,42 @@
 ---
 name: feature-implementer
-description: Implements new features using TDD with dependency injection patterns
+description: Implements one dependency-ordered GameNight Bingo story with TDD and server-authoritative boundaries. Use when adding product behavior.
 ---
 
-## What I do
+# Feature Implementer
 
-- Plan new features before implementation
-- Write failing tests first (TDD approach)
-- Implement features using dependency injection
-- Follow Clean Architecture principles
-- Validate implementation with tests
+## Workflow
 
-## When to use me
+1. Read root `AGENTS.md`, the PRD story, its notes, and relevant existing code.
+   Keep the change limited to one dependency-ordered story.
+2. Identify the authoritative layer and boundary contracts before editing. The
+   server owns participant identity, cards, draw order, calls, marks, presence,
+   timers, winners, and round progression.
+3. Write the smallest failing Vitest test that demonstrates the requirement.
+   Use fake timers for timing behavior and integration coverage for database or
+   realtime guarantees.
+4. Implement only enough code to pass the test, then refactor while green.
+5. Validate inputs and outputs at HTTP or realtime boundaries, authorize the
+   actor, invoke application/domain behavior, and return committed results.
+6. For mutations, preserve command IDs, serializable idempotency,
+   persist-before-broadcast, and monotonic active-lobby event sequences.
+7. Run the focused suite with `bun run test -- <path>`, followed by all
+   available root quality commands.
+8. Inspect the diff for privacy leaks, future draw positions, other players'
+   cards, credentials, or unrelated changes.
 
-Use this when adding new functionality, implementing new calculator methods, or creating new parsers/exporters. This follows the Plan-Then-Execute workflow.
+## UI Features
 
-## Procedure
+Build mobile-first, keyboard-operable, screen-reader-compatible interfaces.
+Represent loading, offline, reconnecting, syncing, paused, grace, result, and
+expired states explicitly when relevant. Treat snapshots and committed
+sequenced events as UI inputs rather than inferring authoritative state in the
+browser. Use the required browser-verification workflow for frontend stories.
 
-1. Plan the feature: State intent and approach
-2. Write failing tests first (TDD)
-3. Implement feature using dependency injection
-4. Follow Clean Architecture layers from AGENTS.md
-5. Run tests to verify implementation
-6. Format and lint code
-7. Create branch and commit conventionally
+## Scope Rules
 
-## Related Guidelines
-
-- Follow architecture core from AGENTS.md
-- Use dependency injection for components
-- Practice TDD with high coverage
-- Apply design patterns (Strategy, CQRS, Factory)
+- Do not add placeholder packages, scripts, or configuration for later stories.
+- Do not install dependencies, change configuration, or run migrations without
+  the approval required by root `AGENTS.md`.
+- Prefer minimal code and established repository patterns over speculative
+  abstractions.

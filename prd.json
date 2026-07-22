@@ -17,7 +17,7 @@
         "No tests or typecheck are required because application code was intentionally removed."
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -33,7 +33,7 @@
         "Typecheck passes."
       ],
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @documentation-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -50,7 +50,7 @@
         "Typecheck passes."
       ],
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @devops-engineer, @database-administrator. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -64,7 +64,7 @@
         "Typecheck passes."
       ],
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @documentation-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -79,7 +79,7 @@
         "Typecheck passes."
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -94,7 +94,7 @@
         "Typecheck passes."
       ],
       "priority": 6,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @build-engineer, @typescript-pro. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -110,7 +110,7 @@
         "Typecheck passes."
       ],
       "priority": 7,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @build-engineer, @test-automator. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -126,7 +126,7 @@
         "Typecheck passes."
       ],
       "priority": 8,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @backend-developer, @security-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -142,7 +142,7 @@
         "Typecheck passes."
       ],
       "priority": 9,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @api-designer, @typescript-pro. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -158,7 +158,7 @@
         "Typecheck passes."
       ],
       "priority": 10,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -173,7 +173,7 @@
         "Typecheck passes."
       ],
       "priority": 11,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -188,7 +188,7 @@
         "Typecheck passes."
       ],
       "priority": 12,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @security-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -205,7 +205,7 @@
         "Typecheck passes."
       ],
       "priority": 13,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -220,7 +220,7 @@
         "Typecheck passes."
       ],
       "priority": 14,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -236,7 +236,7 @@
         "Verify in browser using dev-browser skill."
       ],
       "priority": 15,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @frontend-developer, @test-automator. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -252,7 +252,7 @@
         "Verify in browser using dev-browser skill."
       ],
       "priority": 16,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -268,7 +268,7 @@
         "Verify in browser using dev-browser skill."
       ],
       "priority": 17,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -284,7 +284,7 @@
         "Verify in browser using dev-browser skill."
       ],
       "priority": 18,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -300,7 +300,7 @@
         "Typecheck passes."
       ],
       "priority": 19,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -316,7 +316,7 @@
         "Typecheck passes."
       ],
       "priority": 20,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -331,7 +331,7 @@
         "Typecheck passes."
       ],
       "priority": 21,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @postgres-pro, @database-optimizer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -346,7 +346,7 @@
         "Typecheck passes."
       ],
       "priority": 22,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @postgres-pro, @backend-developer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -361,7 +361,7 @@
         "Typecheck passes."
       ],
       "priority": 23,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -377,7 +377,7 @@
         "Typecheck passes."
       ],
       "priority": 24,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -393,7 +393,7 @@
         "Typecheck passes."
       ],
       "priority": 25,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @security-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -408,7 +408,7 @@
         "Typecheck passes."
       ],
       "priority": 26,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -424,7 +424,7 @@
         "Typecheck passes."
       ],
       "priority": 27,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @api-designer, @security-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -440,7 +440,7 @@
         "Typecheck passes."
       ],
       "priority": 28,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @security-engineer, @websocket-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -455,7 +455,7 @@
         "Typecheck passes."
       ],
       "priority": 29,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -470,7 +470,7 @@
         "Typecheck passes."
       ],
       "priority": 30,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @websocket-engineer, @security-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -486,7 +486,7 @@
         "Typecheck passes."
       ],
       "priority": 31,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @websocket-engineer, @test-automator. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -501,7 +501,7 @@
         "Typecheck passes."
       ],
       "priority": 32,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -516,7 +516,7 @@
         "Typecheck passes."
       ],
       "priority": 33,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -531,7 +531,7 @@
         "Typecheck passes."
       ],
       "priority": 34,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -546,7 +546,7 @@
         "Typecheck passes."
       ],
       "priority": 35,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -561,7 +561,7 @@
         "Typecheck passes."
       ],
       "priority": 36,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -577,7 +577,7 @@
         "Typecheck passes."
       ],
       "priority": 37,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @backend-developer, @test-automator. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -592,7 +592,7 @@
         "Typecheck passes."
       ],
       "priority": 38,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -607,7 +607,7 @@
         "Typecheck passes."
       ],
       "priority": 39,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -623,7 +623,7 @@
         "Typecheck passes."
       ],
       "priority": 40,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -638,7 +638,7 @@
         "Typecheck passes."
       ],
       "priority": 41,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -653,7 +653,7 @@
         "Typecheck passes."
       ],
       "priority": 42,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -669,7 +669,7 @@
         "Typecheck passes."
       ],
       "priority": 43,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @postgres-pro, @security-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -687,7 +687,7 @@
         "Verify in browser using dev-browser skill."
       ],
       "priority": 44,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @react-specialist, @accessibility-tester. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -703,7 +703,7 @@
         "Verify in browser using dev-browser skill."
       ],
       "priority": 45,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @nextjs-developer, @accessibility-tester. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -720,7 +720,7 @@
         "Verify in browser using dev-browser skill."
       ],
       "priority": 46,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -737,7 +737,7 @@
         "Verify in browser using dev-browser skill."
       ],
       "priority": 47,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -753,7 +753,7 @@
         "Verify in browser using dev-browser skill."
       ],
       "priority": 48,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @react-specialist, @accessibility-tester. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -770,7 +770,7 @@
         "Verify in browser using dev-browser skill."
       ],
       "priority": 49,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -786,7 +786,7 @@
         "Verify in browser using dev-browser skill."
       ],
       "priority": 50,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @frontend-developer, @accessibility-tester. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -802,7 +802,7 @@
         "Verify in browser using dev-browser skill."
       ],
       "priority": 51,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -819,7 +819,7 @@
         "Verify in browser using dev-browser skill."
       ],
       "priority": 52,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @security-engineer, @accessibility-tester. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -835,7 +835,7 @@
         "Verify in browser using dev-browser skill."
       ],
       "priority": 53,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @ui-designer, @accessibility-tester. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -852,7 +852,7 @@
         "Verify in browser using dev-browser skill."
       ],
       "priority": 54,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -869,7 +869,7 @@
         "Verify in browser using dev-browser skill."
       ],
       "priority": 55,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -884,7 +884,7 @@
         "Typecheck passes."
       ],
       "priority": 56,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @performance-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -899,7 +899,7 @@
         "Typecheck passes."
       ],
       "priority": 57,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @test-automator, @websocket-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -915,7 +915,7 @@
         "Verify in browser using dev-browser skill."
       ],
       "priority": 58,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @accessibility-tester, @test-automator. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -932,7 +932,7 @@
         "Typecheck passes."
       ],
       "priority": 59,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @security-engineer, @security-auditor. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -947,7 +947,7 @@
         "Typecheck passes."
       ],
       "priority": 60,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @performance-engineer, @test-automator. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -962,7 +962,7 @@
         "Typecheck passes."
       ],
       "priority": 61,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @sre-engineer, @security-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -977,7 +977,7 @@
         "Typecheck passes."
       ],
       "priority": 62,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @test-automator, @websocket-engineer. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     },
     {
@@ -996,7 +996,7 @@
         "Verify in browser using dev-browser skill."
       ],
       "priority": 63,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @test-automator, @accessibility-tester. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
     }
   ]

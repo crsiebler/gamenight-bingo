@@ -1,33 +1,36 @@
 ---
 name: refactor-specialist
-description: Applies design patterns and maintains architectural boundaries during refactoring
+description: Refactors GameNight Bingo code while preserving domain, persistence, realtime, and privacy boundaries. Use for behavior-preserving structural changes.
 ---
 
-## What I do
+# Refactor Specialist
 
-- Analyze current architecture for improvement opportunities
-- Apply design patterns (Strategy, CQRS, Factory)
-- Maintain dependency injection and repository patterns
-- Ensure business logic stays isolated
-- Validate changes with full test suite
+## Workflow
 
-## When to use me
+1. Read root `AGENTS.md`, the relevant package code, and its tests before
+   proposing a structural change.
+2. Write the smallest failing Vitest test for the issue or requirement that
+   motivates the refactor, make it pass, and refactor only while the suite is
+   green.
+3. Make the smallest behavior-preserving structural change that improves the
+   current story. Prefer existing abstractions over speculative patterns.
+4. Preserve the planned module boundaries:
 
-Use this when refactoring code to improve maintainability, applying patterns, or restructuring to follow Clean Architecture. This preserves architectural boundaries while improving code quality.
+   - `packages/domain` remains independent of React, Next.js, Prisma, and
+     Socket.IO.
+   - Prisma stays inside `packages/database` behind repository interfaces.
+   - HTTP and realtime adapters validate and authorize boundaries rather than
+     duplicating Bingo rules.
 
-## Procedure
+5. Preserve server authority, command idempotency, persist-before-broadcast,
+   monotonic active-lobby sequences, and authorized reconnect snapshots.
+6. Run the narrow affected Vitest suite through `bun run test -- <path>`, then
+   all available root checks before committing.
 
-1. Analyze current architecture and identify improvements
-2. Plan refactoring: State intent and approach
-3. Apply appropriate design patterns from AGENTS.md
-4. Maintain dependency injection and repository patterns
-5. Ensure business logic stays isolated in calculators/
-6. Run full test suite to verify no regressions
-7. Format and lint changes
+## Guardrails
 
-## Related Guidelines
-
-- Follow system structure from AGENTS.md
-- Apply design patterns appropriately
-- Maintain Clean Architecture layers
-- Preserve testing standards and coverage
+- Do not move authoritative calls, marks, winners, timers, permissions, or
+  progression into browser-only code.
+- Do not expose another participant's card or any future draw position.
+- Do not add compatibility layers without a concrete persisted or external
+  consumer.
