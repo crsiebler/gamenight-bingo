@@ -14,6 +14,7 @@ import {
   EndedRoundStateSchema,
   MarkSchema,
   PresenceSchema,
+  PendingRoundSetupSchema,
   RoundStateSchema,
   SnapshotSchema,
 } from "./game-state.js";
@@ -31,6 +32,11 @@ const privateEventShape = {
 
 export const ActiveLobbyEventSchema = z.discriminatedUnion("type", [
   z.strictObject({ ...eventShape, type: z.literal("presence"), presence: PresenceSchema }),
+  z.strictObject({
+    ...eventShape,
+    type: z.literal("configuration"),
+    pendingSetup: PendingRoundSetupSchema,
+  }),
   z.strictObject({ ...eventShape, type: z.literal("call"), call: CallSchema }),
   z.strictObject({
     ...eventShape,

@@ -88,6 +88,7 @@ Next story: US-001
 - Keep `/healthz` independent of PostgreSQL and implement `/readyz` with a bounded, coalesced, briefly cached database probe that retains ownership of timed-out work until it settles; derive database-dependent API handlers lazily so readiness can observe startup rejection without creating an unhandled secondary promise, and cache the operational logger with the global database/readiness state so retry and command contexts remain aligned across module reevaluation. Structured operational diagnostics use typed allowlisted scalar records, hash all client-controlled identifiers plus lobby/participant correlations, propagate hashed command context to command-driven transaction retries, log only fresh sequenced deliveries rather than exact echoes, adapt committed acknowledgements at the wire boundary, record terminal disconnect-pause failures, permanently drop output after an asynchronous stream error, and never serialize requests, commands, events, errors, snapshots, cards, credentials, or future draw data.
 - Full-runtime restart tests spawn the production game-server entry point against a fresh, empty, migrated nonproduction database; sharing the normal serialized `TEST_DATABASE_URL` lets legitimate persisted leases from earlier tests become unrelated process-local startup work.
 - Final manual acceptance starts only after command-level prerequisite rows pass; implementation agents leave every acceptance item and decision unchecked, while the product owner records native browser/device/accessibility/security evidence and the final decision.
+- First-round setup is durable lobby state before a round exists: create-lobby persists immutable canonical setup intent, no-round configure updates it under the lobby fence with a sequenced configuration event, and actor-scoped no-round snapshots expose only pending setup and the authorized roster.
 
 Append-only iteration log
 -------------------------
@@ -6357,3 +6358,62 @@ Targeted re-review outcome for US-063 at 2026-07-21 20:35 MST:
 - Observable continuation/no-repeat checks, physical-or-native-device-service coverage, and the separate severity/disposition advisory record resolve all initial blocking findings.
 - Residual work is intentionally product-owner-owned manual/native-device acceptance plus product/security disposition of the current noncritical dependency advisories.
 - No in-scope critical, high, or medium findings remain; US-063 can be marked passing and committed after the final consistency check.
+
+## 2026-07-27 12:57:06 MST - US-064
+- What was implemented
+  - Extended strict create-lobby contracts and the public flow to send the selected canonical pattern and call configuration, validate both before persistence, and store immutable setup intent with the host entry transaction.
+  - Added nullable consumed-state Prisma fields plus append-only PostgreSQL migrations that backfill round-less lobbies and legacy create intent, enforce complete manual/automatic setup combinations, and preserve room for first-start consumption in the next story.
+  - Allowed authenticated host configure commands to update pending setup when no round exists, with one lobby-fenced sequenced configuration event, exact idempotent replay, and changed-intent rejection.
+  - Added strict actor-scoped no-round snapshots that expose pending setup and the roster while structurally excluding cards, marks, calls, winners, draw order, event history, command results, and credentials.
+- Files changed: `AGENTS.md`, `apps/game-server/src/socket-server.test.ts`, `apps/web/src/components/templates/private-lobby-page.test.tsx`, `apps/web/src/components/templates/private-lobby-page.tsx`, `apps/web/src/lib/create-lobby-flow.test.ts`, `apps/web/src/lib/create-lobby-flow.ts`, `apps/web/src/lib/private-lobby-realtime.test.ts`, `apps/web/src/lobby-entry-http.test.ts`, `apps/web/src/lobby-entry-http.ts`, `packages/contracts/src/v1/events.ts`, `packages/contracts/src/v1/game-state.ts`, `packages/contracts/src/v1/http.ts`, `packages/database/prisma/schema.prisma`, `packages/database/prisma/migrations/20260727124500_add_pending_lobby_setup/migration.sql`, `packages/database/prisma/migrations/20260727125000_require_complete_pending_lobby_setup/migration.sql`, `packages/database/src/database.integration.test.ts`, `packages/database/src/lobby-state-repository.ts`, `packages/database/src/round-command-executor.ts`, `scripts/run-single-instance-load.ts`, `tests/contracts-v1.test.ts`, `tests/lobby-entry-contracts-v1.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-064 - Persist setup before the first round`
+- Auto approval: `enabled`
+- Checks:
+  - Focused contract, HTTP, and PostgreSQL tests (expected red: setup fields were rejected/dropped, no-round configure returned `INVALID_COMMAND`, and snapshots rejected pending setup; pass after implementation)
+  - `DATABASE_URL=<approved local Compose database> bun run db:migrate:deploy` (pass; both append-only pending-setup migrations applied)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test:database` (pass before review; 135 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (pass after review remediation; typecheck, 42 files, 881 tests, and 1 gated skip)
+  - `bun run lint` (pass)
+  - `git ls-files -z | xargs -0 bunx prettier --check --ignore-unknown` (pass)
+  - `DATABASE_URL=<approved local Compose database> bunx prisma validate --config packages/database/prisma.config.ts` (pass)
+  - Transactional invalid partial-setup constraint probe (pass; PostgreSQL rejected the update and committed no change)
+  - `bun install --frozen-lockfile` (pass; 397 installs checked with no changes)
+  - `DATABASE_URL=<approved local Compose database> WEB_ORIGIN=http://localhost:3000 bun run --cwd apps/web build` (pass)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `postgres-pro`, `api-designer`
+  - Used: `postgres-pro`, `api-designer` for migration/backfill constraints, immutable replay intent, no-round command sequencing, strict snapshot shape, catalog validation, and focused test guidance
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and security-sensitive `security-engineer`; targeted re-review by `qa-expert` planned after migration-test remediation
+  - Findings: fixed the missing automated legacy migration/backfill test; deferred one non-blocking low configuration-event resync test to the invitation-first UI story
+- Decisions (why):
+  - Kept pending setup fields nullable only as one all-null consumed state because US-065 must atomically consume them when starting the first round; every no-round lobby is required by repository and snapshot validation to have complete setup.
+  - Persisted setup separately from the immutable create command result because later configure commands may change current pending setup without changing what an exact create replay originally committed.
+  - Added a configuration lobby event with no round scope rather than fabricating a round stage event, so every authorized consumer gets one valid sequence and uncertain browser projection requests authoritative resynchronization.
+  - Added a second migration to strengthen the already-applied initial constraint with `IS TRUE` rather than rewriting applied local history after identifying PostgreSQL three-valued `CHECK` behavior.
+  - Preserved the user-provided US-064 through US-066 PRD definitions and will change only US-064's passing status after the staged review succeeds.
+- **Learnings for future iterations:**
+  - PostgreSQL `CHECK` expressions over nullable enum fields must end in `IS TRUE`; otherwise an invalid partial-null configuration can evaluate to unknown and pass.
+  - Create-lobby replay must compare setup against immutable command-result intent rather than current lobby columns because a later no-round configure legitimately changes those columns.
+  - No-round snapshots require pending setup, while snapshots with a round must omit it; this keeps pending and authoritative round configuration mutually exclusive on the wire.
+- Known issues / follow-ups:
+  - The first round does not consume pending setup or freeze the invited roster yet; that atomic start behavior is US-065.
+  - The existing public flow still performs create-round and configure after lobby creation for current behavior compatibility; removing those hidden steps and rendering the invitation-first flow is US-066.
+- Next iteration start:
+  - Implement US-065 by atomically expiring due sessions, freezing the pre-start roster, consuming pending setup, generating cards/draw order, and starting the first round in one lobby-fenced command.
+---
+
+Initial review remediation for US-064 at 2026-07-27 13:06 MST:
+- `code-reviewer` and `security-engineer` returned empty actionable finding lists. `qa-expert` identified one medium migration-evidence gap and one low browser resynchronization test opportunity.
+- Added an isolated PostgreSQL upgrade regression that transactionally creates a legacy schema, executes both committed migrations, proves round-less and round-backed setup/replay-intent backfills, verifies strict manual/automatic JSON, and confirms partial-null setup remains rejected. The transaction rolls back every temporary object and row.
+- Testing decision:
+  - Change type: migration acceptance-coverage remediation; production migration behavior did not change.
+  - Test-first required: no, because the finding required executing existing declarative migrations rather than changing behavior.
+  - Validation: the focused upgrade test passed, lint/format/diff checks passed, and the final database-enabled root suite passed 42 files with 881 tests and 1 gated skip.
+- The low configuration-event browser-resync test is non-blocking and deferred because US-064 intentionally treats unknown local projection as authoritative resync, while US-066 owns the visible no-round save/retry/reconnect flow and its browser coverage.
+- Targeted re-review is limited to `qa-expert` because only its blocking migration-test finding received a substantive test change.
+
+Targeted re-review outcome for US-064 at 2026-07-27 13:07 MST:
+- `qa-expert` returned an empty actionable finding list and confirmed the automated legacy upgrade test resolves the medium migration-evidence finding.
+- `code-reviewer` and `security-engineer` had already returned empty finding lists; the one deferred low configuration-event resynchronization test remains assigned to US-066.
+- No in-scope critical, high, or medium findings remain. US-064 can be marked passing and committed after the final consistency check.

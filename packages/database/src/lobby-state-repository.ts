@@ -1,9 +1,11 @@
 import { PrismaPg } from "@prisma/adapter-pg";
 import {
   CONTRACT_SCHEMA_VERSION,
+  CallConfigurationSchema,
   LobbyEntryResponseSchema,
   SnapshotSchema,
   type Snapshot,
+  type CallConfiguration,
 } from "@gamenight-bingo/contracts";
 import {
   expireInactiveLobby,
@@ -61,6 +63,9 @@ export interface DurableLobby {
   readonly code: string;
   readonly status: LobbyStatus;
   readonly themeId: string;
+  readonly pendingPatternId: string | null;
+  readonly pendingCallMode: CallMode | null;
+  readonly pendingCallIntervalSeconds: number | null;
   readonly createdAt: Date;
   readonly lastActivityAt: Date;
   readonly endedAt?: Date | null;
@@ -373,6 +378,8 @@ interface NewLobbyEntrySession {
 export interface CreateLobbyWithHostInput extends NewLobbyEntrySession {
   readonly lobbyId: string;
   readonly themeId: string;
+  readonly patternId: string;
+  readonly callConfiguration: CallConfiguration;
   readonly maxActiveLobbies: number;
   readonly nextCode: () => string;
 }
@@ -624,6 +631,19 @@ function toJsonObject(value: Prisma.JsonValue): JsonObject {
     throw new TypeError("Persisted event and command payloads must be JSON objects.");
   }
   return value as JsonObject;
+}
+
+function persistedCallConfigurationMatches(
+  value: JsonValue | undefined,
+  expected: CallConfiguration,
+): boolean {
+  const parsed = CallConfigurationSchema.safeParse(value);
+  return (
+    parsed.success &&
+    parsed.data.mode === expected.mode &&
+    (parsed.data.mode === "manual" ||
+      (expected.mode === "automatic" && parsed.data.intervalSeconds === expected.intervalSeconds))
+  );
 }
 
 function toPersistedLobbyEntry(entry: LobbyEntryRecord): JsonObject {
@@ -897,6 +917,12 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
         code: state.lobby.code,
         status: lobbyStatuses.toDatabase(state.lobby.status),
         themeId: state.lobby.themeId,
+        pendingPatternId: state.lobby.pendingPatternId,
+        pendingCallMode:
+          state.lobby.pendingCallMode === null
+            ? null
+            : callModes.toDatabase(state.lobby.pendingCallMode),
+        pendingCallIntervalSeconds: state.lobby.pendingCallIntervalSeconds,
         createdAt: state.lobby.createdAt,
         lastActivityAt: state.lobby.lastActivityAt,
         endedAt: state.lobby.endedAt ?? null,
@@ -1096,7 +1122,12 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
                   const intent = toJsonObject(prior.result);
                   if (
                     intent["normalizedUsername"] !== normalized.normalizedUsername ||
-                    intent["themeId"] !== input.themeId
+                    intent["themeId"] !== input.themeId ||
+                    intent["patternId"] !== input.patternId ||
+                    !persistedCallConfigurationMatches(
+                      intent["callConfiguration"],
+                      input.callConfiguration,
+                    )
                   ) {
                     return {
                       ok: false,
@@ -1166,6 +1197,12 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
                     code,
                     status: "waiting",
                     themeId: input.themeId,
+                    pendingPatternId: input.patternId,
+                    pendingCallMode: input.callConfiguration.mode,
+                    pendingCallIntervalSeconds:
+                      input.callConfiguration.mode === "manual"
+                        ? null
+                        : input.callConfiguration.intervalSeconds,
                     createdAt: input.issuedAt,
                     lastActivityAt: input.issuedAt,
                     endedAt: null,
@@ -1221,6 +1258,8 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
                       result: {
                         normalizedUsername: normalized.normalizedUsername,
                         themeId: input.themeId,
+                        patternId: input.patternId,
+                        callConfiguration: input.callConfiguration,
                         entry: toPersistedLobbyEntry(entry),
                       },
                       createdAt: input.issuedAt,
@@ -2198,6 +2237,10 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
         code: lobby.code,
         status: lobbyStatuses.fromDatabase(lobby.status),
         themeId: lobby.themeId,
+        pendingPatternId: lobby.pendingPatternId,
+        pendingCallMode:
+          lobby.pendingCallMode === null ? null : callModes.fromDatabase(lobby.pendingCallMode),
+        pendingCallIntervalSeconds: lobby.pendingCallIntervalSeconds,
         createdAt: lobby.createdAt,
         lastActivityAt: lobby.lastActivityAt,
         endedAt: lobby.endedAt,
@@ -3139,6 +3182,9 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
                 code: true,
                 status: true,
                 themeId: true,
+                pendingPatternId: true,
+                pendingCallMode: true,
+                pendingCallIntervalSeconds: true,
                 createdAt: true,
                 lastEventSequence: true,
                 participants: {
@@ -3317,6 +3363,29 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
             }
 
             const round = lobby.currentRound;
+            const pendingSetup =
+              round === null
+                ? {
+                    patternId:
+                      lobby.pendingPatternId ??
+                      (() => {
+                        throw new Error("A lobby without a round requires pending pattern setup.");
+                      })(),
+                    callConfiguration:
+                      lobby.pendingCallMode === "AUTOMATIC"
+                        ? {
+                            mode: "automatic" as const,
+                            intervalSeconds: lobby.pendingCallIntervalSeconds,
+                          }
+                        : lobby.pendingCallMode === "MANUAL"
+                          ? { mode: "manual" as const }
+                          : (() => {
+                              throw new Error(
+                                "A lobby without a round requires pending call setup.",
+                              );
+                            })(),
+                  }
+                : undefined;
             const requireDate = (value: Date | null, name: string): Date => {
               if (value === null)
                 throw new Error(`${name} is required by the persisted round stage.`);
@@ -3537,6 +3606,7 @@ class PrismaLobbyStateRepository implements LobbyStateRepository {
               },
               self,
               participants,
+              pendingSetup,
               round: roundState,
               ownCard: card,
               ownMarks: marks,

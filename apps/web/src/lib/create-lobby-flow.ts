@@ -134,6 +134,8 @@ export class CreateLobbyFlowSession {
         commandId: this.#commandIds.create,
         username: this.#selection.username,
         themeId: this.#selection.themeId,
+        patternId: this.#selection.patternId,
+        callConfiguration: this.#selection.callConfiguration,
       });
       const parsed = LobbyEntryResponseSchema.safeParse(
         await this.#post("/api/v1/lobbies", command, this.#commandIds.create),

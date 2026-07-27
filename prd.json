@@ -998,6 +998,59 @@
       "priority": 63,
       "passes": true,
       "notes": "Recommended agents: @test-automator, @accessibility-tester. Implementation notes: Follow the source acceptance criteria exactly, preserve critical constraints, and complete only this dependency-ordered story in one Ralph iteration."
+    },
+    {
+      "id": "US-064",
+      "title": "Persist setup before the first round",
+      "description": "As a host, I want my selected pattern and call settings stored before a round exists so that I can invite players without losing setup across reloads or restarts.",
+      "acceptanceCriteria": [
+        "Write failing contract and PostgreSQL integration tests before implementation for lobby creation, pending setup updates, replay behavior, and actor-scoped snapshots with no current round.",
+        "After explicit migration confirmation, append a migration and Prisma model fields that durably store the pending first-round pattern ID, call mode, and automatic interval on the lobby until the first round starts.",
+        "Extend the strict create-lobby request contract and HTTP flow to accept the selected pattern and call configuration and persist them atomically with the lobby, host participant, session, and idempotent create result.",
+        "Allow the existing authenticated configure command to update pending setup under the lobby fence when no current round exists, with canonical intent validation and idempotent replay mismatch rejection.",
+        "Represent an authorized active lobby with no current round in the strict snapshot contract, including only the pending setup and participant roster while exposing no cards, marks, calls, winners, or private draw order.",
+        "Contract, HTTP boundary, repository integration, and snapshot privacy tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 64,
+      "passes": true,
+      "notes": "Recommended agents: @postgres-pro, @api-designer. Implementation notes: Setup must be durable before the first round exists. Preserve strict contracts, lobby-fenced idempotency, private snapshot allowlists, and the requirement for explicit confirmation before creating or running a migration."
+    },
+    {
+      "id": "US-065",
+      "title": "Freeze the first roster when the host starts",
+      "description": "As a host, I want the first round dealt to everyone who joined before I select Start so that invited players participate immediately instead of waiting for a replacement round.",
+      "acceptanceCriteria": [
+        "Write failing domain/repository tests before implementation proving that participants joining before Start enter the first roster and a participant joining after Start remains waiting with no current-round card.",
+        "When start-round is committed with no current round, atomically expire due participant sessions, select the eligible roster, apply the persisted pending setup, generate the private draw order and unique cards, and transition the new round to its authoritative started stage under the lobby fence.",
+        "Freeze roster membership and cards at the start-round transaction boundary so a concurrent join is serialized as either included before the commit or waiting after the commit, never partially admitted to the round.",
+        "Persist the command result and corresponding active-lobby event before broadcast, preserve command replay semantics, and prevent a repeated start command from regenerating cards or draw order.",
+        "Keep active-round late joins waiting and preserve replacement-round create-round behavior for later rounds.",
+        "Repository integration, concurrency, idempotency, event privacy, and realtime adapter tests pass.",
+        "Typecheck passes."
+      ],
+      "priority": 65,
+      "passes": false,
+      "notes": "Recommended agents: @backend-developer, @test-automator. Implementation notes: The first start must be one authoritative transaction; do not expose a race between dealing and starting, move card assignment into the browser, or weaken waiting-participant privacy."
+    },
+    {
+      "id": "US-066",
+      "title": "Invite players before starting the first round",
+      "description": "As a host, I want the lobby code and invite controls available before the first round is dealt so that friends can join and receive first-round cards when I start.",
+      "acceptanceCriteria": [
+        "Write failing flow, component, and browser journey tests before implementation for create, invite, multi-player join, first Start, and an after-start late join.",
+        "Change the public create-lobby flow to persist the selected setup and return the lobby code without issuing hidden create-round or configure requests after lobby creation.",
+        "Render the private lobby and share controls from an authoritative no-round snapshot, show joined participants as ready for the first round, and let the host save pending setup before Start.",
+        "Have the Start control issue one retained start-round command, prevent duplicate submission, and reconcile its acknowledgement against an authoritative snapshot that contains the committed first round.",
+        "An end-to-end journey proves the host and every player joined before Start receive distinct first-round cards, while a player joining after Start is waiting with no card.",
+        "Loading, retry, reconnect, focus recovery, live-region, mobile reflow, and no-round player guidance remain accessible and truthful.",
+        "Focused Vitest, production Next build, and Playwright tests pass.",
+        "Typecheck passes.",
+        "Verify in browser using dev-browser skill."
+      ],
+      "priority": 66,
+      "passes": false,
+      "notes": "Recommended agents: @react-specialist, @accessibility-tester. Implementation notes: Preserve stable command IDs and authoritative reconciliation. The invite must remain credential-free, and no client may infer roster, cards, or round state optimistically."
     }
   ]
 }

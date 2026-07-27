@@ -43,12 +43,16 @@ describe("v1 lobby entry HTTP contracts", () => {
         commandId: "command-create",
         username: "Host Player",
         themeId: "classic",
+        patternId: "standard-one-line",
+        callConfiguration: { mode: "automatic", intervalSeconds: 30 },
       }),
     ).toEqual({
       schemaVersion: CONTRACT_SCHEMA_VERSION,
       commandId: "command-create",
       username: "Host Player",
       themeId: "classic",
+      patternId: "standard-one-line",
+      callConfiguration: { mode: "automatic", intervalSeconds: 30 },
     });
     expect(
       JoinLobbyRequestSchema.parse({
@@ -80,12 +84,36 @@ describe("v1 lobby entry HTTP contracts", () => {
     };
     const payload =
       schema === CreateLobbyRequestSchema
-        ? { ...base, username: "Host", themeId: "classic", ...extra }
+        ? {
+            ...base,
+            username: "Host",
+            themeId: "classic",
+            patternId: "standard-one-line",
+            callConfiguration: { mode: "manual" },
+            ...extra,
+          }
         : schema === JoinLobbyRequestSchema
           ? { ...base, username: "Player", ...extra }
           : { ...base, ...extra };
 
     expect(schema.safeParse(payload).success).toBe(false);
+  });
+
+  test.each([
+    { mode: "manual", intervalSeconds: 5 },
+    { mode: "automatic" },
+    { mode: "automatic", intervalSeconds: 15 },
+  ])("rejects invalid create-lobby call configuration", (callConfiguration) => {
+    expect(
+      CreateLobbyRequestSchema.safeParse({
+        schemaVersion: CONTRACT_SCHEMA_VERSION,
+        commandId: "command-create-invalid",
+        username: "Host Player",
+        themeId: "classic",
+        patternId: "standard-one-line",
+        callConfiguration,
+      }).success,
+    ).toBe(false);
   });
 
   test("returns an entry projection without a credential", () => {

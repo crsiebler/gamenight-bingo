@@ -120,7 +120,8 @@ type PendingCommand =
       readonly roundId: string | null;
       readonly scope: "active-lobby";
       readonly event: {
-        readonly type: "presence" | "stage" | "call" | "co-winner-window" | "round-end";
+        readonly type:
+          "presence" | "configuration" | "stage" | "call" | "co-winner-window" | "round-end";
         readonly payload: Prisma.InputJsonObject;
       };
       readonly progress?: ParticipantPrivateProgress;
@@ -909,20 +910,36 @@ async function executeMutation(
     };
   }
 
-  if (current === null) return null;
-
-  if (
-    command.type === "start-round" ||
-    command.type === "resume-round" ||
-    command.type === "call-next" ||
-    command.type === "continue-round"
-  ) {
-    if (await hasBlockingPresence(transaction, lobbyId, now)) return null;
-  }
-
   if (command.type === "configure") {
     const patternMode = resolveRoundPatternMode(options.patterns, command.patternId);
-    if (current.stage !== "WAITING" || patternMode === null) return null;
+    if (patternMode === null) return null;
+    if (current === null) {
+      await transaction.lobby.update({
+        where: { id: lobbyId },
+        data: {
+          pendingPatternId: command.patternId,
+          pendingCallMode: command.callConfiguration.mode === "manual" ? "MANUAL" : "AUTOMATIC",
+          pendingCallIntervalSeconds:
+            command.callConfiguration.mode === "manual"
+              ? null
+              : command.callConfiguration.intervalSeconds,
+        },
+      });
+      return {
+        roundId: null,
+        scope: "active-lobby",
+        event: {
+          type: "configuration",
+          payload: {
+            pendingSetup: {
+              patternId: command.patternId,
+              callConfiguration: command.callConfiguration,
+            },
+          },
+        },
+      };
+    }
+    if (current.stage !== "WAITING") return null;
     await transaction.round.update({
       where: { id: current.id },
       data: {
@@ -945,6 +962,17 @@ async function executeMutation(
         payload: { round: await publicRoundState(transaction, lobbyId, round) },
       },
     };
+  }
+
+  if (current === null) return null;
+
+  if (
+    command.type === "start-round" ||
+    command.type === "resume-round" ||
+    command.type === "call-next" ||
+    command.type === "continue-round"
+  ) {
+    if (await hasBlockingPresence(transaction, lobbyId, now)) return null;
   }
 
   if (command.type === "start-round") {

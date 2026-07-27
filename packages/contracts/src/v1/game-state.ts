@@ -35,6 +35,11 @@ export const CallConfigurationSchema = z.discriminatedUnion("mode", [
   }),
 ]);
 
+export const PendingRoundSetupSchema = z.strictObject({
+  patternId: PatternIdSchema,
+  callConfiguration: CallConfigurationSchema,
+});
+
 const cardCellSchema = z.union([BallNumberSchema, z.literal("FREE")]);
 
 export const CardCellsSchema = z
@@ -309,6 +314,7 @@ export const SnapshotSchema = z
     session: ParticipantSessionSchema,
     self: ParticipantSummarySchema,
     participants: z.array(ParticipantSummarySchema).max(26),
+    pendingSetup: PendingRoundSetupSchema.optional(),
     round: RoundStateSchema.nullable(),
     ownCard: CardSchema.nullable(),
     ownMarks: z.array(MarkSchema).max(24),
@@ -462,6 +468,13 @@ export const SnapshotSchema = z
     }
 
     if (snapshot.round === null) {
+      if (snapshot.pendingSetup === undefined) {
+        context.addIssue({
+          code: "custom",
+          message: "A lobby without a current round requires pending setup.",
+          path: ["pendingSetup"],
+        });
+      }
       if (snapshot.ownCard !== null || snapshot.ownMarks.length > 0 || snapshot.calls.length > 0) {
         context.addIssue({
           code: "custom",
@@ -470,6 +483,14 @@ export const SnapshotSchema = z
         });
       }
       return;
+    }
+
+    if (snapshot.pendingSetup !== undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "Pending setup cannot be projected after a round exists.",
+        path: ["pendingSetup"],
+      });
     }
 
     if (
@@ -619,6 +640,7 @@ export const SnapshotSchema = z
 
 export type AutomaticCallInterval = z.infer<typeof AutomaticCallIntervalSchema>;
 export type CallConfiguration = z.infer<typeof CallConfigurationSchema>;
+export type PendingRoundSetup = z.infer<typeof PendingRoundSetupSchema>;
 export type CardCells = z.infer<typeof CardCellsSchema>;
 export type Card = z.infer<typeof CardSchema>;
 export type Mark = z.infer<typeof MarkSchema>;

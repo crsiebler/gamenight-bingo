@@ -362,6 +362,43 @@ describe("v1 snapshot privacy", () => {
     expect(SnapshotSchema.parse(snapshot)).toEqual(snapshot);
   });
 
+  it("represents pending setup without round-private state before the first round", () => {
+    const waitingSnapshot = {
+      ...snapshot,
+      lastEventSequence: null,
+      lobby: {
+        id: activeLobby.id,
+        code: activeLobby.code,
+        hostParticipantId: activeLobby.hostParticipantId,
+        themeId: activeLobby.themeId,
+        status: "waiting",
+        createdAt: activeLobby.createdAt,
+      },
+      pendingSetup: {
+        patternId: "pattern_one_line",
+        callConfiguration: { mode: "automatic", intervalSeconds: 30 },
+      },
+      round: null,
+      ownCard: null,
+      ownMarks: [],
+      calls: [],
+    };
+
+    expect(SnapshotSchema.parse(waitingSnapshot)).toEqual(waitingSnapshot);
+    expect(SnapshotSchema.safeParse({ ...waitingSnapshot, pendingSetup: undefined }).success).toBe(
+      false,
+    );
+    expect(SnapshotSchema.safeParse({ ...waitingSnapshot, ownCard: card }).success).toBe(false);
+    expect(
+      SnapshotSchema.safeParse({ ...snapshot, pendingSetup: waitingSnapshot.pendingSetup }).success,
+    ).toBe(false);
+    for (const privateField of ["drawOrder", "events", "commandResults", "winners"] as const) {
+      expect(SnapshotSchema.safeParse({ ...waitingSnapshot, [privateField]: [] }).success).toBe(
+        false,
+      );
+    }
+  });
+
   it.each([
     ["future draw order", { ...snapshot, drawOrder: [1, 2, 3] }],
     ["active event history", { ...snapshot, events: [] }],

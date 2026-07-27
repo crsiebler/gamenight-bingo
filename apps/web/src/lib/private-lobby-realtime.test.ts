@@ -78,6 +78,10 @@ const snapshotMessage = SnapshotMessageSchema.parse({
         },
       },
     ],
+    pendingSetup: {
+      patternId: "standard-one-line",
+      callConfiguration: { mode: "manual" },
+    },
     round: null,
     ownCard: null,
     ownMarks: [],

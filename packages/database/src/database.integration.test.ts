@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 
 import { Pool } from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
@@ -147,6 +148,9 @@ function createLobbyState(
       code: overrides.code ?? randomLobbyCode(),
       status: "active",
       themeId: "theme-nature",
+      pendingPatternId: null,
+      pendingCallMode: null,
+      pendingCallIntervalSeconds: null,
       createdAt,
       lastActivityAt: settledAt,
       endedAt: null,
@@ -353,6 +357,9 @@ function omitLobbyCode(state: DurableLobbyState): NewActiveLobbyState {
       id: state.lobby.id,
       status,
       themeId: state.lobby.themeId,
+      pendingPatternId: state.lobby.pendingPatternId,
+      pendingCallMode: state.lobby.pendingCallMode,
+      pendingCallIntervalSeconds: state.lobby.pendingCallIntervalSeconds,
       createdAt: state.lobby.createdAt,
       lastActivityAt: state.lobby.lastActivityAt,
       ...(state.lobby.endedAt === undefined ? {} : { endedAt: state.lobby.endedAt }),
@@ -444,6 +451,130 @@ describeDatabase("PostgreSQL durable game state", () => {
     const connection = await connect();
 
     await expect(connection.checkReadiness()).resolves.toBe(true);
+  });
+
+  test("upgrades legacy lobby setup and create replay intent", async () => {
+    const client = await pool.connect();
+    const schema = `pending_setup_upgrade_${randomUUID().replaceAll("-", "_")}`;
+    const initialMigration = await readFile(
+      new URL(
+        "../prisma/migrations/20260727124500_add_pending_lobby_setup/migration.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const constraintMigration = await readFile(
+      new URL(
+        "../prisma/migrations/20260727125000_require_complete_pending_lobby_setup/migration.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+
+    try {
+      await client.query("BEGIN");
+      await client.query(`CREATE SCHEMA "${schema}"`);
+      await client.query(`SET LOCAL search_path TO "${schema}"`);
+      await client.query(`CREATE TYPE "call_mode" AS ENUM ('MANUAL', 'AUTOMATIC')`);
+      await client.query(`CREATE TABLE "lobbies" ("id" VARCHAR(128) PRIMARY KEY)`);
+      await client.query(`
+        CREATE TABLE "rounds" (
+          "lobby_id" VARCHAR(128) PRIMARY KEY,
+          "initial_pattern_id" VARCHAR(128) NOT NULL,
+          "call_mode" "call_mode" NOT NULL,
+          "call_interval_seconds" SMALLINT
+        )
+      `);
+      await client.query(`
+        CREATE TABLE "command_results" (
+          "lobby_id" VARCHAR(128) NOT NULL,
+          "command_type" VARCHAR(64) NOT NULL,
+          "result" JSONB NOT NULL
+        )
+      `);
+      await client.query(`
+        INSERT INTO "lobbies" ("id") VALUES ('legacy-roundless'), ('legacy-round')
+      `);
+      await client.query(`
+        INSERT INTO "rounds" (
+          "lobby_id", "initial_pattern_id", "call_mode", "call_interval_seconds"
+        ) VALUES ('legacy-round', 'shape-x', 'AUTOMATIC', 30)
+      `);
+      await client.query(`
+        INSERT INTO "command_results" ("lobby_id", "command_type", "result") VALUES
+          ('legacy-roundless', 'create-lobby', '{"normalizedUsername":"host","themeId":"classic"}'),
+          ('legacy-round', 'create-lobby', '{"normalizedUsername":"host","themeId":"classic"}')
+      `);
+
+      await client.query(initialMigration);
+      await client.query(constraintMigration);
+
+      const lobbies = await client.query<{
+        id: string;
+        pendingPatternId: string | null;
+        pendingCallMode: "MANUAL" | "AUTOMATIC" | null;
+        pendingCallIntervalSeconds: number | null;
+      }>(`
+        SELECT
+          "id",
+          "pending_pattern_id" AS "pendingPatternId",
+          "pending_call_mode" AS "pendingCallMode",
+          "pending_call_interval_seconds" AS "pendingCallIntervalSeconds"
+        FROM "lobbies"
+        ORDER BY "id"
+      `);
+      expect(lobbies.rows).toEqual([
+        {
+          id: "legacy-round",
+          pendingPatternId: null,
+          pendingCallMode: null,
+          pendingCallIntervalSeconds: null,
+        },
+        {
+          id: "legacy-roundless",
+          pendingPatternId: "standard-one-line",
+          pendingCallMode: "MANUAL",
+          pendingCallIntervalSeconds: null,
+        },
+      ]);
+      const intents = await client.query<{ lobbyId: string; result: Record<string, unknown> }>(`
+        SELECT "lobby_id" AS "lobbyId", "result"
+        FROM "command_results"
+        ORDER BY "lobby_id"
+      `);
+      expect(intents.rows).toEqual([
+        {
+          lobbyId: "legacy-round",
+          result: {
+            normalizedUsername: "host",
+            themeId: "classic",
+            patternId: "shape-x",
+            callConfiguration: { mode: "automatic", intervalSeconds: 30 },
+          },
+        },
+        {
+          lobbyId: "legacy-roundless",
+          result: {
+            normalizedUsername: "host",
+            themeId: "classic",
+            patternId: "standard-one-line",
+            callConfiguration: { mode: "manual" },
+          },
+        },
+      ]);
+      await expect(
+        client.query(`
+          UPDATE "lobbies"
+          SET "pending_pattern_id" = NULL,
+              "pending_call_mode" = 'MANUAL',
+              "pending_call_interval_seconds" = NULL
+          WHERE "id" = 'legacy-roundless'
+        `),
+      ).rejects.toMatchObject({ code: "23514" });
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
   });
 
   async function createPersistedLobby(
@@ -1054,18 +1185,21 @@ describeDatabase("PostgreSQL durable game state", () => {
     const issuedAt = new Date("2026-07-17T12:00:00.000Z");
     const tokenHash = new Uint8Array(randomBytes(32));
     const code = randomLobbyCode();
-    const result = await connection.lobbyStates.createLobbyWithHost({
+    const createInput = {
       lobbyId: `lobby-${suffix}`,
       participantId: `participant-${suffix}`,
       sessionId: `session-${suffix}`,
       commandId: `command-${suffix}`,
       username: "  Host   Player  ",
       themeId: "classic",
+      patternId: "standard-one-line",
+      callConfiguration: { mode: "automatic", intervalSeconds: 30 },
       tokenHash,
       issuedAt,
       maxActiveLobbies: Number.MAX_SAFE_INTEGER,
       nextCode: () => code,
-    });
+    } as const;
+    const result = await connection.lobbyStates.createLobbyWithHost(createInput);
 
     expect(result).toEqual({
       ok: true,
@@ -1084,7 +1218,14 @@ describeDatabase("PostgreSQL durable game state", () => {
       },
     });
     await expect(connection.lobbyStates.findById(`lobby-${suffix}`)).resolves.toMatchObject({
-      lobby: { code, status: "waiting", themeId: "classic" },
+      lobby: {
+        code,
+        status: "waiting",
+        themeId: "classic",
+        pendingPatternId: "standard-one-line",
+        pendingCallMode: "automatic",
+        pendingCallIntervalSeconds: 30,
+      },
       participants: [
         {
           id: `participant-${suffix}`,
@@ -1115,6 +1256,167 @@ describeDatabase("PostgreSQL durable game state", () => {
     });
   });
 
+  test("updates and replays pending setup before the first round", async () => {
+    const occurredAt = new Date("2026-07-17T12:05:00.000Z");
+    const connection = await connectWithRoundCommands(() => occurredAt);
+    const suffix = randomUUID();
+    const lobbyId = `lobby-pending-setup-${suffix}`;
+    const participantId = `participant-pending-setup-${suffix}`;
+    const participantSessionId = `session-pending-setup-${suffix}`;
+    const tokenHash = new Uint8Array(randomBytes(32));
+    const playerTokenHash = new Uint8Array(randomBytes(32));
+    const baseCreate = {
+      lobbyId,
+      participantId,
+      sessionId: participantSessionId,
+      commandId: `create-pending-setup-${suffix}`,
+      username: "Pending Setup Host",
+      themeId: "classic",
+      patternId: "standard-one-line",
+      callConfiguration: { intervalSeconds: 30, mode: "automatic" } as const,
+      tokenHash,
+      issuedAt: new Date("2026-07-17T12:00:00.000Z"),
+      maxActiveLobbies: Number.MAX_SAFE_INTEGER,
+      nextCode: randomLobbyCode,
+    };
+    const created = await connection.lobbyStates.createLobbyWithHost(baseCreate);
+    expect(created.ok).toBe(true);
+    const joined = await connection.lobbyStates.joinLobbyWithSession({
+      lobbyId,
+      lobbyCode: created.ok ? created.entry.lobbyCode : "",
+      participantId: `player-pending-setup-${suffix}`,
+      sessionId: `player-session-pending-setup-${suffix}`,
+      commandId: `join-pending-setup-${suffix}`,
+      username: "Pending Setup Player",
+      tokenHash: playerTokenHash,
+      issuedAt: baseCreate.issuedAt,
+      maxPlayersPerLobby: 25,
+    });
+    expect(joined.ok).toBe(true);
+
+    const command = ConfigureCommandSchema.parse({
+      schemaVersion: 1,
+      type: "configure",
+      commandId: `configure-pending-setup-${suffix}`,
+      patternId: "standard-two-lines",
+      callConfiguration: { mode: "automatic", intervalSeconds: 60 },
+    });
+    const execute = () =>
+      connection.roundCommands.executeAuthenticated({
+        lobbyId,
+        participantId,
+        participantSessionId,
+        command,
+      });
+
+    const committed = await execute();
+    const replayed = await execute();
+    expect(committed).toMatchObject({
+      ok: true,
+      acknowledgement: {
+        commandId: command.commandId,
+        scope: "active-lobby",
+        eventSequence: 1,
+        idempotentReplay: false,
+      },
+      activeLobbyEvent: {
+        type: "configuration",
+        pendingSetup: {
+          patternId: command.patternId,
+          callConfiguration: command.callConfiguration,
+        },
+      },
+    });
+    expect(replayed).toMatchObject({
+      ok: true,
+      acknowledgement: { eventSequence: 1, idempotentReplay: true },
+      activeLobbyEvent: null,
+    });
+    await expect(
+      connection.roundCommands.executeAuthenticated({
+        lobbyId,
+        participantId,
+        participantSessionId,
+        command: ConfigureCommandSchema.parse({
+          ...command,
+          patternId: "standard-one-line",
+        }),
+      }),
+    ).resolves.toMatchObject({ ok: false, error: { code: "INVALID_COMMAND" } });
+
+    const state = await connection.lobbyStates.findById(lobbyId);
+    expect(state).toMatchObject({
+      lobby: {
+        pendingPatternId: command.patternId,
+        pendingCallMode: "automatic",
+        pendingCallIntervalSeconds: 60,
+        lastEventSequence: 1n,
+      },
+      round: null,
+      events: [{ roundId: null, eventType: "configuration" }],
+      commandResults: expect.arrayContaining([
+        expect.objectContaining({ commandType: "create-lobby", roundId: null }),
+        expect.objectContaining({ commandType: "configure", roundId: null, eventSequence: 1n }),
+      ]),
+    });
+    const snapshot = await connection.lobbyStates.findAuthorizedSnapshot({ lobbyId, tokenHash });
+    expect(snapshot).toMatchObject({
+      lobby: { status: "waiting" },
+      pendingSetup: {
+        patternId: command.patternId,
+        callConfiguration: command.callConfiguration,
+      },
+      participants: expect.arrayContaining([
+        expect.objectContaining({ id: participantId }),
+        expect.objectContaining({ username: "Pending Setup Player" }),
+      ]),
+      round: null,
+      ownCard: null,
+      ownMarks: [],
+      calls: [],
+    });
+    expect(SnapshotSchema.safeParse(snapshot).success).toBe(true);
+    expect(JSON.stringify(snapshot)).not.toMatch(
+      /drawOrder|commandResults|events|tokenHash|winners/,
+    );
+    await expect(
+      connection.lobbyStates.findAuthorizedSnapshot({ lobbyId, tokenHash: playerTokenHash }),
+    ).resolves.toMatchObject({
+      pendingSetup: {
+        patternId: command.patternId,
+        callConfiguration: command.callConfiguration,
+      },
+      self: { username: "Pending Setup Player" },
+      round: null,
+      ownCard: null,
+      ownMarks: [],
+      calls: [],
+    });
+
+    const createReplay = await connection.lobbyStates.createLobbyWithHost({
+      ...baseCreate,
+      lobbyId: `ignored-lobby-${suffix}`,
+      participantId: `ignored-participant-${suffix}`,
+      sessionId: `ignored-session-${suffix}`,
+      tokenHash: new Uint8Array(randomBytes(32)),
+    });
+    expect(createReplay).toMatchObject({
+      ok: true,
+      entry: { lobbyId, participantId, sessionId: participantSessionId, idempotentReplay: true },
+    });
+    for (const changedIntent of [
+      { patternId: "standard-two-lines" },
+      { callConfiguration: { mode: "manual" } as const },
+    ]) {
+      await expect(
+        connection.lobbyStates.createLobbyWithHost({ ...baseCreate, ...changedIntent }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "COMMAND_REPLAY_MISMATCH" },
+      });
+    }
+  });
+
   test("aggregates realtime tabs and sequences only visible presence transitions", async () => {
     let now = new Date("2026-07-17T12:30:00.000Z");
     const connection = await connectWithLifecycleClock(() => now);
@@ -1129,6 +1431,8 @@ describeDatabase("PostgreSQL durable game state", () => {
       commandId: `command-presence-${suffix}`,
       username: `Presence Host ${suffix}`,
       themeId: "classic",
+      patternId: "standard-one-line",
+      callConfiguration: { mode: "manual" },
       tokenHash: new Uint8Array(randomBytes(32)),
       issuedAt: new Date("2026-07-17T12:29:00.000Z"),
       maxActiveLobbies: Number.MAX_SAFE_INTEGER,
@@ -2105,6 +2409,8 @@ describeDatabase("PostgreSQL durable game state", () => {
       commandId: `command-stale-presence-${suffix}`,
       username: `Stale Presence ${suffix}`,
       themeId: "classic",
+      patternId: "standard-one-line",
+      callConfiguration: { mode: "manual" },
       tokenHash: new Uint8Array(randomBytes(32)),
       issuedAt: new Date("2026-07-17T12:49:00.000Z"),
       maxActiveLobbies: Number.MAX_SAFE_INTEGER,
@@ -2165,6 +2471,8 @@ describeDatabase("PostgreSQL durable game state", () => {
         commandId: `command-presence-handoff-${suffix}`,
         username: `Presence Handoff ${suffix}`,
         themeId: "classic",
+        patternId: "standard-one-line",
+        callConfiguration: { mode: "manual" },
         tokenHash: sessionTokenHash,
         issuedAt: new Date("2026-07-17T12:54:00.000Z"),
         maxActiveLobbies: Number.MAX_SAFE_INTEGER,
@@ -2267,6 +2575,8 @@ describeDatabase("PostgreSQL durable game state", () => {
         commandId: `command-sibling-presence-${suffix}`,
         username: `Sibling Presence ${suffix}`,
         themeId: "classic",
+        patternId: "standard-one-line",
+        callConfiguration: { mode: "manual" },
         tokenHash: new Uint8Array(randomBytes(32)),
         issuedAt: new Date("2026-07-17T12:59:00.000Z"),
         maxActiveLobbies: Number.MAX_SAFE_INTEGER,
@@ -2402,6 +2712,8 @@ describeDatabase("PostgreSQL durable game state", () => {
       commandId: `command-${suffix}`,
       username: "Replay Host",
       themeId: "classic",
+      patternId: "standard-one-line",
+      callConfiguration: { mode: "manual" } as const,
       tokenHash: new Uint8Array(randomBytes(32)),
       issuedAt: new Date("2026-07-17T12:00:00.000Z"),
       maxActiveLobbies: Number.MAX_SAFE_INTEGER,

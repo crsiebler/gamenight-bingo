@@ -182,6 +182,14 @@ function snapshotFor(
     },
     self,
     participants,
+    ...(options.round === null
+      ? {
+          pendingSetup: {
+            patternId: options.patternId ?? "standard-one-line",
+            callConfiguration: options.callConfiguration ?? { mode: "manual" as const },
+          },
+        }
+      : {}),
     round: (() => {
       if (options.round === null) return null;
       const base = {

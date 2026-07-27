@@ -26,6 +26,7 @@ import {
   SnapshotMessageSchema,
   StartRoundCommandSchema,
   type ContractError,
+  type CallConfiguration,
   type ErrorCode,
   type LobbyEntryResponse,
   type MutationCommand,
@@ -84,6 +85,8 @@ interface NewEntrySession {
 export interface CreateLobbyWithHostInput extends NewEntrySession {
   readonly lobbyId: string;
   readonly themeId: string;
+  readonly patternId: string;
+  readonly callConfiguration: CallConfiguration;
   readonly maxActiveLobbies: number;
   readonly nextCode: () => string;
 }
@@ -496,6 +499,12 @@ export function requesterKeyFromTrustedProxy(
 }
 
 export function createLobbyEntryHttpHandler(dependencies: LobbyEntryHttpDependencies) {
+  const validatedPatterns = PatternCatalogResponseSchema.parse({
+    schemaVersion: CONTRACT_SCHEMA_VERSION,
+    type: "pattern-catalog",
+    patterns: dependencies.patterns,
+  }).patterns;
+  const allowedPatternIds = new Set(validatedPatterns.map(({ id }) => id));
   const executeObservedCommand = async <Result>(
     commandId: string,
     commandType: string,
@@ -528,7 +537,7 @@ export function createLobbyEntryHttpHandler(dependencies: LobbyEntryHttpDependen
       const body = PatternCatalogResponseSchema.parse({
         schemaVersion: CONTRACT_SCHEMA_VERSION,
         type: "pattern-catalog",
-        patterns: dependencies.patterns,
+        patterns: validatedPatterns,
       });
       return Response.json(body, {
         headers: { "cache-control": "public, max-age=300" },
@@ -553,6 +562,9 @@ export function createLobbyEntryHttpHandler(dependencies: LobbyEntryHttpDependen
       if (!dependencies.allowedThemeIds.has(parsed.data.themeId)) {
         return errorResponse("INVALID_PAYLOAD", 400, now, parsed.data.commandId);
       }
+      if (!allowedPatternIds.has(parsed.data.patternId)) {
+        return errorResponse("INVALID_PAYLOAD", 400, now, parsed.data.commandId);
+      }
       for (let attempt = 0; attempt < MAX_CREDENTIAL_ATTEMPTS; attempt += 1) {
         const credential = createCredential(dependencies.randomBytes);
         const result = await executeObservedCommand(
@@ -566,6 +578,8 @@ export function createLobbyEntryHttpHandler(dependencies: LobbyEntryHttpDependen
               commandId: parsed.data.commandId,
               username: parsed.data.username,
               themeId: parsed.data.themeId,
+              patternId: parsed.data.patternId,
+              callConfiguration: parsed.data.callConfiguration,
               tokenHash: credential.tokenHash,
               issuedAt: now,
               maxActiveLobbies: dependencies.maxActiveLobbies,

@@ -129,6 +129,11 @@ invalid counts, timestamps, or durations.
   before broadcasting. Broadcast only after the transaction commits.
 - A repeated command ID returns its original committed result without repeating
   effects.
+- Persist the host's selected first-round pattern and call configuration on the
+  lobby before a round exists. Create-lobby replay compares immutable setup
+  intent, no-round configure commits under the lobby fence, and actor-scoped
+  no-round snapshots project pending setup plus the roster without card, mark,
+  call, winner, draw-order, event-history, or credential data.
 - Persist canonical command intent with idempotent results so reusing a command
   ID with changed configuration, pattern, ball, or action is rejected. Resolve
   the active session, actor role, current round, and own card inside the same

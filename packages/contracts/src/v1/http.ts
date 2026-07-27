@@ -12,6 +12,7 @@ import {
   SchemaVersionSchema,
   ThemeIdSchema,
 } from "./primitives.js";
+import { CallConfigurationSchema } from "./game-state.js";
 
 const usernameSchema = z.string().min(1).max(128);
 
@@ -20,6 +21,8 @@ export const CreateLobbyRequestSchema = z.strictObject({
   commandId: CommandIdSchema,
   username: usernameSchema,
   themeId: ThemeIdSchema,
+  patternId: PatternIdSchema,
+  callConfiguration: CallConfigurationSchema,
 });
 
 export const JoinLobbyRequestSchema = z.strictObject({

@@ -84,6 +84,8 @@ describe("public create-lobby flow", () => {
           commandId: "command-create",
           username: "River",
           themeId: "nature",
+          patternId: "standard-one-line",
+          callConfiguration: { mode: "manual" },
         },
       },
       {

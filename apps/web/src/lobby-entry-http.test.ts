@@ -160,6 +160,10 @@ const snapshot = SnapshotSchema.parse({
       },
     },
   ],
+  pendingSetup: {
+    patternId: "standard-one-line",
+    callConfiguration: { mode: "manual" },
+  },
   round: null,
   ownCard: null,
   ownMarks: [],
@@ -311,6 +315,8 @@ describe("lobby entry HTTP API", () => {
           commandId: "command-create",
           username: "Host Player",
           themeId: "classic",
+          patternId: "standard-one-line",
+          callConfiguration: { mode: "automatic", intervalSeconds: 30 },
         }),
       }),
     );
@@ -328,9 +334,79 @@ describe("lobby entry HTTP API", () => {
       commandId: "command-create",
       username: "Host Player",
       themeId: "classic",
+      patternId: "standard-one-line",
+      callConfiguration: { mode: "automatic", intervalSeconds: 30 },
       maxActiveLobbies: 100,
     });
     expect(writes[0]?.tokenHash).toHaveLength(32);
+  });
+
+  test("rejects an unknown create-lobby pattern before persistence", async () => {
+    let writes = 0;
+    const handle = createLobbyEntryHttpHandler(
+      createDependencies(
+        createStore({
+          createLobbyWithHost: async () => {
+            writes += 1;
+            return { ok: true, entry };
+          },
+        }),
+      ),
+    );
+
+    const response = await handle(
+      request("/api/v1/lobbies", {
+        method: "POST",
+        body: JSON.stringify({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          commandId: "command-create-unknown-pattern",
+          username: "Host Player",
+          themeId: "classic",
+          patternId: "unknown-pattern",
+          callConfiguration: { mode: "manual" },
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await responseJson(response)).toMatchObject({
+      code: "INVALID_PAYLOAD",
+      commandId: "command-create-unknown-pattern",
+    });
+    expect(writes).toBe(0);
+  });
+
+  test("rejects invalid create-lobby call setup before persistence", async () => {
+    let writes = 0;
+    const handle = createLobbyEntryHttpHandler(
+      createDependencies(
+        createStore({
+          createLobbyWithHost: async () => {
+            writes += 1;
+            return { ok: true, entry };
+          },
+        }),
+      ),
+    );
+
+    const response = await handle(
+      request("/api/v1/lobbies", {
+        method: "POST",
+        body: JSON.stringify({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          commandId: "command-create-invalid-setup",
+          username: "Host Player",
+          themeId: "classic",
+          patternId: "standard-one-line",
+          callConfiguration: { mode: "manual", intervalSeconds: 30 },
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(writes).toBe(0);
   });
 
   test("does not mint a credential when a create command is replayed", async () => {
@@ -350,6 +426,8 @@ describe("lobby entry HTTP API", () => {
           commandId: "command-create",
           username: "Host Player",
           themeId: "classic",
+          patternId: "standard-one-line",
+          callConfiguration: { mode: "manual" },
         }),
       }),
     );
@@ -580,6 +658,8 @@ describe("lobby entry HTTP API", () => {
       commandId: "command-create",
       username: "Host",
       themeId: "classic",
+      patternId: "standard-one-line",
+      callConfiguration: { mode: "manual" },
     });
 
     expect(
@@ -1041,6 +1121,8 @@ describe("lobby entry HTTP API", () => {
           commandId: "command-theme",
           username: "Host",
           themeId: "unknown-theme",
+          patternId: "standard-one-line",
+          callConfiguration: { mode: "manual" },
         }),
       }),
     );
@@ -1086,6 +1168,8 @@ describe("lobby entry HTTP API", () => {
           commandId: "command-query",
           username: "Host",
           themeId: "classic",
+          patternId: "standard-one-line",
+          callConfiguration: { mode: "manual" },
         }),
       }),
     );
@@ -1150,6 +1234,8 @@ describe("lobby entry HTTP API", () => {
           commandId: "command-error",
           username: "Host",
           themeId: "classic",
+          patternId: "standard-one-line",
+          callConfiguration: { mode: "manual" },
         }),
       }),
     );
@@ -1495,6 +1581,8 @@ describe("round-control HTTP API", () => {
             commandId: "command-create-failure",
             username: "Host Player",
             themeId: "classic",
+            patternId: "standard-one-line",
+            callConfiguration: { mode: "manual" },
           }),
         }),
       },

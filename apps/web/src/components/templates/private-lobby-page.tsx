@@ -395,6 +395,8 @@ function applyLobbyEvent(snapshot: Snapshot, event: ActiveLobbyEvent): Snapshot 
     });
   }
 
+  if (event.type === "configuration") return null;
+
   if (snapshot.round === null) return null;
   if (event.type === "stage" || event.type === "round-end") {
     if (event.round.id !== snapshot.round.id) return null;

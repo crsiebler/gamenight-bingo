@@ -85,6 +85,9 @@ model Lobby {
   code                String               @db.Char(6)
   status              LobbyStatus
   themeId             String               @map("theme_id") @db.VarChar(128)
+  pendingPatternId    String?              @map("pending_pattern_id") @db.VarChar(128)
+  pendingCallMode     CallMode?            @map("pending_call_mode")
+  pendingCallIntervalSeconds Int?          @map("pending_call_interval_seconds") @db.SmallInt
   createdAt           DateTime             @map("created_at") @db.Timestamptz(3)
   lastActivityAt      DateTime             @map("last_activity_at") @db.Timestamptz(3)
   endedAt             DateTime?            @map("ended_at") @db.Timestamptz(3)
