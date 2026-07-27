@@ -466,6 +466,10 @@ function callConfigurationMatches(actual: CallConfiguration, expected: CallConfi
   );
 }
 
+function setupForSnapshot(snapshot: Snapshot) {
+  return snapshot.round ?? snapshot.pendingSetup;
+}
+
 function snapshotConfirmsCommand(
   snapshot: Snapshot,
   pending: PendingCommandReconciliation,
@@ -474,36 +478,42 @@ function snapshotConfirmsCommand(
     return false;
   }
   if (snapshot.lastEventSequence > pending.eventSequence) return true;
-  if (
-    pending.command.type !== "override-absence" &&
-    (pending.roundId === null || snapshot.round?.id !== pending.roundId)
-  ) {
-    return false;
-  }
   switch (pending.command.type) {
-    case "configure":
+    case "configure": {
+      if (
+        (pending.roundId === null && snapshot.round !== null) ||
+        (pending.roundId !== null && snapshot.round?.id !== pending.roundId)
+      ) {
+        return false;
+      }
+      const setup = setupForSnapshot(snapshot);
       return (
-        snapshot.round?.patternId === pending.command.patternId &&
-        callConfigurationMatches(
-          snapshot.round.callConfiguration,
-          pending.command.callConfiguration,
-        )
+        setup?.patternId === pending.command.patternId &&
+        callConfigurationMatches(setup.callConfiguration, pending.command.callConfiguration)
       );
+    }
     case "start-round":
-      return snapshot.round !== null && snapshot.round.stage !== "waiting";
+      return (
+        snapshot.round !== null &&
+        snapshot.round.stage !== "waiting" &&
+        (pending.roundId === null || snapshot.round.id === pending.roundId)
+      );
     case "pause-round":
-      return snapshot.round?.stage === "paused";
+      return snapshot.round?.id === pending.roundId && snapshot.round.stage === "paused";
     case "resume-round":
-      return snapshot.round?.stage === "active";
+      return snapshot.round?.id === pending.roundId && snapshot.round.stage === "active";
     case "call-next":
-      return snapshot.calls.length > pending.startingCallCount;
+      return (
+        snapshot.round?.id === pending.roundId && snapshot.calls.length > pending.startingCallCount
+      );
     case "continue-round":
       return (
+        snapshot.round?.id === pending.roundId &&
         (snapshot.round?.stage === "active" || snapshot.round?.stage === "result") &&
         snapshot.round.patternId === pending.command.patternId
       );
     case "end-round":
-      return snapshot.round?.stage === "ended";
+      return snapshot.round?.id === pending.roundId && snapshot.round.stage === "ended";
     case "override-absence": {
       const command = pending.command as Extract<WaitingLobbyCommand, { type: "override-absence" }>;
       const participant = snapshot.participants.find(({ id }) => id === command.participantId);
@@ -678,6 +688,7 @@ export function PrivateLobbyPage({
   const liveGameHeadingRef = useRef<HTMLHeadingElement>(null);
   const outcomeHeadingRef = useRef<HTMLHeadingElement>(null);
   const setupHeadingRef = useRef<HTMLHeadingElement>(null);
+  const setupPanelRef = useRef<HTMLElement>(null);
   const hostControlsRef = useRef<HTMLElement>(null);
   const cardPanelRef = useRef<HTMLElement>(null);
   const hostControlsHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -711,6 +722,7 @@ export function PrivateLobbyPage({
   const [connectionState, setConnectionState] =
     useState<PrivateLobbyConnectionState>("snapshot-syncing");
   const [callAnnouncement, setCallAnnouncement] = useState("");
+  const [roundAnnouncement, setRoundAnnouncement] = useState("");
   const [outcomeAnnouncement, setOutcomeAnnouncement] = useState("");
   const [endConfirmationOpen, setEndConfirmationOpen] = useState(false);
   const [restoreEndRoundFocus, setRestoreEndRoundFocus] = useState(false);
@@ -736,6 +748,10 @@ export function PrivateLobbyPage({
       connectionStateRef.current === "connected" || connectionStateRef.current === "recovered";
     const isReady = state === "connected" || state === "recovered";
     const activeElement = document.activeElement;
+    const setupHadFocus =
+      setupPanelRef.current !== null &&
+      activeElement !== null &&
+      setupPanelRef.current.contains(activeElement);
     if (
       wasReady &&
       !isReady &&
@@ -744,6 +760,8 @@ export function PrivateLobbyPage({
       hostControlsRef.current.contains(activeElement)
     ) {
       setCommandFocusTarget("host-controls");
+    } else if (wasReady && !isReady && setupHadFocus) {
+      setCommandFocusTarget("setup");
     }
     connectionStateRef.current = state;
     setConnectionState(state);
@@ -864,7 +882,10 @@ export function PrivateLobbyPage({
       setCommandFocusTarget(
         next.round?.stage === "result" || next.round?.stage === "ended" ? "outcome" : "live-game",
       );
-    } else if (hostControlsHadFocus && (roundStageChanged || focusedHostActionUnavailable)) {
+    } else if (
+      (hostControlsHadFocus && (roundStageChanged || focusedHostActionUnavailable)) ||
+      (focusedHostAction === "start-round" && roundStageChanged)
+    ) {
       setCommandFocusTarget(
         (focusedHostAction === "continue-round" && next.round?.stage === "result") ||
           next.round?.stage === "co-winner-window" ||
@@ -1039,11 +1060,12 @@ export function PrivateLobbyPage({
           !setupDirtyRef.current ||
           confirmedCommand?.command.type === "configure"
         ) {
-          setPatternId(next.round?.patternId ?? "");
-          setCallMode(next.round?.callConfiguration.mode ?? "manual");
+          const setup = setupForSnapshot(next);
+          setPatternId(setup?.patternId ?? "");
+          setCallMode(setup?.callConfiguration.mode ?? "manual");
           setInterval(
-            next.round?.callConfiguration.mode === "automatic"
-              ? String(next.round.callConfiguration.intervalSeconds)
+            setup?.callConfiguration.mode === "automatic"
+              ? String(setup.callConfiguration.intervalSeconds)
               : "30",
           );
           setSetupDraftDirty(false);
@@ -1286,22 +1308,39 @@ export function PrivateLobbyPage({
         }
         const recovering = recoveringRef.current;
         const roundChanged = current?.round?.id !== accepted.round?.id;
+        const firstRoundStarted =
+          !recovering &&
+          current?.round === null &&
+          accepted.round !== null &&
+          accepted.round.stage !== "waiting";
         snapshotRef.current = accepted;
         resultAudioIdentityRef.current = resultAudioIdentityFor(accepted);
         resyncRequestedRef.current = false;
         setSnapshot(accepted);
         const confirmedCommand = reconcilePendingState(accepted, current);
-        if (confirmedCommand?.command.type === "configure") {
-          setPatternId(accepted.round?.patternId ?? "");
-          setCallMode(accepted.round?.callConfiguration.mode ?? "manual");
+        if (!setupDirtyRef.current || confirmedCommand?.command.type === "configure") {
+          const setup = setupForSnapshot(accepted);
+          setPatternId(setup?.patternId ?? "");
+          setCallMode(setup?.callConfiguration.mode ?? "manual");
           setInterval(
-            accepted.round?.callConfiguration.mode === "automatic"
-              ? String(accepted.round.callConfiguration.intervalSeconds)
+            setup?.callConfiguration.mode === "automatic"
+              ? String(setup.callConfiguration.intervalSeconds)
               : "30",
           );
           setSetupDraftDirty(false);
         }
         if (recovering || roundChanged) setCallAnnouncement("");
+        if (recovering) {
+          setRoundAnnouncement("");
+        } else if (firstRoundStarted) {
+          setRoundAnnouncement(
+            accepted.ownCard === null
+              ? "First round started."
+              : "First round started. Your card is ready.",
+          );
+        } else if (roundChanged) {
+          setRoundAnnouncement("");
+        }
         reconcileOutcomeAnnouncement(accepted, recovering || roundChanged);
         if (roundChanged) followCallHistoryRef.current = true;
         const readyState = recovering ? "recovered" : "connected";
@@ -1443,9 +1482,13 @@ export function PrivateLobbyPage({
     pendingMessage = commandPendingMessage(command),
   ) {
     if (commandPendingRef.current) return;
-    const commandRetryHadFocus =
-      document.activeElement instanceof HTMLElement &&
-      document.activeElement.dataset["hostAction"] === "retry-command";
+    const focusedHostAction =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement.dataset["hostAction"]
+        : undefined;
+    const commandRetryHadFocus = focusedHostAction === "retry-command";
+    const initialStartHadFocus =
+      command.type === "start-round" && focusedHostAction === "start-round";
     const key = JSON.stringify(command);
     const retainedCommand = commandSessionRef.current;
     if (
@@ -1497,7 +1540,8 @@ export function PrivateLobbyPage({
       if (commandRetryHadFocus) {
         const currentStage = snapshotRef.current?.round?.stage;
         setCommandFocusTarget(
-          command.type === "start-round" && currentStage === "waiting"
+          command.type === "start-round" &&
+            (currentStage === undefined || currentStage === "waiting")
             ? "setup"
             : currentStage === "co-winner-window" ||
                 currentStage === "result" ||
@@ -1545,10 +1589,13 @@ export function PrivateLobbyPage({
         commandSessionRef.current = null;
         setUnresolvedCommand(null);
       }
-      if (commandRetryHadFocus && commandSessionRef.current === null) {
+      if (initialStartHadFocus && commandSessionRef.current !== null) {
+        setCommandFocusTarget("setup");
+      } else if (commandRetryHadFocus && commandSessionRef.current === null) {
         const currentStage = snapshotRef.current?.round?.stage;
         setCommandFocusTarget(
-          command.type === "start-round" && currentStage === "waiting"
+          command.type === "start-round" &&
+            (currentStage === undefined || currentStage === "waiting")
             ? "setup"
             : currentStage === "co-winner-window" ||
                 currentStage === "result" ||
@@ -1573,6 +1620,24 @@ export function PrivateLobbyPage({
     };
     pendingCommandRef.current = pending;
     setPendingCommand(pending);
+    const authoritativeSnapshot = snapshotRef.current;
+    if (authoritativeSnapshot !== null && snapshotConfirmsCommand(authoritativeSnapshot, pending)) {
+      reconcilePendingState(authoritativeSnapshot, authoritativeSnapshot);
+      if (command.type === "configure") {
+        const setup = setupForSnapshot(authoritativeSnapshot);
+        setPatternId(setup?.patternId ?? "");
+        setCallMode(setup?.callConfiguration.mode ?? "manual");
+        setInterval(
+          setup?.callConfiguration.mode === "automatic"
+            ? String(setup.callConfiguration.intervalSeconds)
+            : "30",
+        );
+        setSetupDraftDirty(false);
+      }
+      commandPendingRef.current = false;
+      setCommandPending(false);
+      return;
+    }
     setCommandMessage("Command committed. Refreshing the lobby...");
     try {
       const next = await refreshSnapshot("Refreshing the lobby...", { mandatory: true });
@@ -1581,11 +1646,12 @@ export function PrivateLobbyPage({
       }
 
       if (command.type === "configure") {
-        setPatternId(next.round?.patternId ?? "");
-        setCallMode(next.round?.callConfiguration.mode ?? "manual");
+        const setup = setupForSnapshot(next);
+        setPatternId(setup?.patternId ?? "");
+        setCallMode(setup?.callConfiguration.mode ?? "manual");
         setInterval(
-          next.round?.callConfiguration.mode === "automatic"
-            ? String(next.round.callConfiguration.intervalSeconds)
+          setup?.callConfiguration.mode === "automatic"
+            ? String(setup.callConfiguration.intervalSeconds)
             : "30",
         );
         setSetupDraftDirty(false);
@@ -1775,7 +1841,10 @@ export function PrivateLobbyPage({
   const themeStyle =
     activeTheme === undefined ? undefined : (themeCssVariables(activeTheme) as CSSProperties);
   const themeSpriteLoaded = loadedThemeSpriteUrl === activeTheme?.visuals.spriteUrl;
-  const hostCanConfigure = snapshot.self.role === "host" && snapshot.round?.stage === "waiting";
+  const setup = setupForSnapshot(snapshot);
+  const hostCanConfigure =
+    snapshot.self.role === "host" &&
+    (snapshot.round === null || snapshot.round.stage === "waiting");
   const selfConnected = snapshot.self.presence.status === "connected";
   const realtimeAuthorityUncertain =
     enableRealtime && connectionState !== "connected" && connectionState !== "recovered";
@@ -1797,21 +1866,22 @@ export function PrivateLobbyPage({
     commandPending ||
     pendingCommand !== null ||
     (unresolvedCommand !== null && unresolvedCommand.type !== "configure");
-  const startUnavailable = waitingControlsUnavailable || setupDirty || blockingAbsentPlayer;
+  const startUnavailable =
+    waitingControlsUnavailable || setupDirty || (snapshot.round !== null && blockingAbsentPlayer);
   const duplicatePatternNames = new Set(
     patterns.map(({ name }) => name).filter((name, index, names) => names.indexOf(name) !== index),
   );
-  const selectedPattern = patterns.find((pattern) => pattern.id === snapshot.round?.patternId);
+  const selectedPattern = patterns.find((pattern) => pattern.id === setup?.patternId);
   const selectedPatternDefinition = patternCatalog.find(
-    (pattern) => pattern.id === snapshot.round?.patternId,
+    (pattern) => pattern.id === setup?.patternId,
   );
   const patternName =
     selectedPattern === undefined
       ? undefined
       : patternLabel(selectedPattern, duplicatePatternNames);
   const callDescription =
-    snapshot.round?.callConfiguration.mode === "automatic"
-      ? `Automatic every ${snapshot.round.callConfiguration.intervalSeconds} seconds`
+    setup?.callConfiguration.mode === "automatic"
+      ? `Automatic every ${setup.callConfiguration.intervalSeconds} seconds`
       : "Manual calling";
   const latestCall = snapshot.calls.at(-1);
   const automaticCountdown =
@@ -1927,13 +1997,15 @@ export function PrivateLobbyPage({
 
   const waitingMessage =
     snapshot.round === null
-      ? "The host is preparing the first round."
+      ? "You're ready for the first round. Your card will be dealt after the host starts."
       : snapshot.round.stage === "ended"
         ? "The round has ended."
         : snapshot.self.roundEligibility === "waiting"
           ? snapshot.round.stage === "result"
             ? "This round is complete. Wait for the host to end it before the next round."
-            : "You are queued for the next round and will not play in the pending round."
+            : snapshot.round.stage === "waiting"
+              ? "You are queued for the next round and will not play in the pending round."
+              : "You are queued for the next round and will not play in the current round."
           : snapshot.round.stage === "waiting"
             ? "Waiting for the host to start the round."
             : "The round has started.";
@@ -1952,9 +2024,11 @@ export function PrivateLobbyPage({
     snapshot.round?.stage === "paused" ||
     snapshot.round?.stage === "co-winner-window";
   const missingCardMessage =
-    snapshot.round?.stage === "result" || snapshot.round?.stage === "ended"
-      ? "You did not have a card in this round."
-      : "Your card is unavailable while you wait for the next round.";
+    snapshot.round === null
+      ? "No card yet. The first-round card is dealt when the host starts."
+      : snapshot.round.stage === "result" || snapshot.round.stage === "ended"
+        ? "You did not have a card in this round."
+        : "Your card is unavailable while you wait for the next round.";
   const calledBalls = new Set(snapshot.calls.map((call) => call.ball));
   const markedBalls = new Set(snapshot.ownMarks.map((mark) => mark.ball));
   const cardCells: BingoCardCell[] =
@@ -2034,11 +2108,17 @@ export function PrivateLobbyPage({
           />
           <div className="theme-art-content">
             <span>Current call</span>
-            <strong>{latestCall === undefined ? "Waiting" : ballLabel(latestCall.ball)}</strong>
+            <strong>
+              {snapshot.round === null
+                ? "First round not started"
+                : latestCall === undefined
+                  ? "Waiting"
+                  : ballLabel(latestCall.ball)}
+            </strong>
           </div>
         </div>
         <div className="call-mode-status">
-          <strong>{snapshot.round === null ? "Round not configured" : callDescription}</strong>
+          <strong>{callDescription}</strong>
           {automaticCountdown === null ? null : (
             <span>
               {automaticCountdown === 0
@@ -2069,6 +2149,15 @@ export function PrivateLobbyPage({
   );
   const statusAnnouncements = (
     <div className="status-announcements">
+      <p
+        aria-atomic="true"
+        aria-label="Round announcement"
+        aria-live="polite"
+        className="call-announcement"
+        role="status"
+      >
+        {roundAnnouncement}
+      </p>
       <p
         aria-atomic="true"
         aria-label="Game status announcement"
@@ -2548,7 +2637,11 @@ export function PrivateLobbyPage({
           </p>
         </section>
 
-        <section aria-labelledby="setup-heading" className="lobby-panel setup-panel">
+        <section
+          aria-labelledby="setup-heading"
+          className="lobby-panel setup-panel"
+          ref={setupPanelRef}
+        >
           <p className="eyebrow">Round setup</p>
           <h2
             className="section-focus-target"
@@ -2565,11 +2658,11 @@ export function PrivateLobbyPage({
             </div>
             <div>
               <dt>Pattern</dt>
-              <dd>{patternName ?? snapshot.round?.patternId ?? "Not configured"}</dd>
+              <dd>{patternName ?? setup?.patternId ?? "Not configured"}</dd>
             </div>
             <div>
               <dt>Call mode</dt>
-              <dd>{snapshot.round === null ? "Not configured" : callDescription}</dd>
+              <dd>{callDescription}</dd>
             </div>
           </dl>
 
@@ -2629,12 +2722,12 @@ export function PrivateLobbyPage({
                   ))}
                 </Select>
               ) : null}
-              <p className="setup-guidance">
+              <p className="setup-guidance" id="setup-guidance">
                 {realtimeAuthorityUncertain
                   ? "Host actions become available after the realtime snapshot is synchronized."
                   : !selfConnected
                     ? "Start becomes available when your authoritative presence is connected."
-                    : blockingAbsentPlayer
+                    : snapshot.round !== null && blockingAbsentPlayer
                       ? "A current player is absent. Reconnect or apply the current absence override before starting."
                       : pendingCommand !== null
                         ? pendingCommand.command.type === "configure"
@@ -2642,14 +2735,23 @@ export function PrivateLobbyPage({
                           : "Start committed. Waiting for the authoritative lobby state."
                         : setupDirty
                           ? "Save setup before starting the round."
-                          : "Setup is saved and the host is connected."}
+                          : snapshot.round === null
+                            ? "Invite players now. Everyone who joins before Start is committed receives a first-round card; later arrivals wait."
+                            : "Setup is saved and the host is connected."}
               </p>
               <div className="host-actions">
-                <Button aria-disabled={setupCommandUnavailable} type="submit" variant="outline">
+                <Button
+                  aria-describedby="setup-guidance"
+                  aria-disabled={setupCommandUnavailable}
+                  type="submit"
+                  variant="outline"
+                >
                   Save setup
                 </Button>
                 <Button
+                  aria-describedby="setup-guidance"
                   aria-disabled={startUnavailable}
+                  data-host-action="start-round"
                   onClick={() => {
                     if (!startUnavailable) {
                       void runCommand({ type: "start-round", code }, "Starting the first round...");

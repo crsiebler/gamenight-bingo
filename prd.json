@@ -1049,7 +1049,7 @@
         "Verify in browser using dev-browser skill."
       ],
       "priority": 66,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @react-specialist, @accessibility-tester. Implementation notes: Preserve stable command IDs and authoritative reconciliation. The invite must remain credential-free, and no client may infer roster, cards, or round state optimistically."
     }
   ]

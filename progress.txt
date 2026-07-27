@@ -90,6 +90,7 @@ Next story: US-001
 - Final manual acceptance starts only after command-level prerequisite rows pass; implementation agents leave every acceptance item and decision unchecked, while the product owner records native browser/device/accessibility/security evidence and the final decision.
 - First-round setup is durable lobby state before a round exists: create-lobby persists immutable canonical setup intent, no-round configure updates it under the lobby fence with a sequenced configuration event, and actor-scoped no-round snapshots expose only pending setup and the authorized roster.
 - First `start-round` uses the same lobby fence as joins: expire due sessions, freeze all nondeparted pre-start `PLAYING` participants, consume pending setup, generate private cards/draw order, and create the active round in one transaction. A fresh join's initial absent presence must not block this freeze; transaction order determines playing-with-card versus waiting-without-card.
+- Public lobby creation is one retained create mutation that already persists first-round setup; the browser renders every roundless setup/preview/control from authoritative `pendingSetup`, resynchronizes configuration events, and confirms one retained Start only from an actor-scoped snapshot containing the committed round and private card projection.
 
 Append-only iteration log
 -------------------------
@@ -6466,3 +6467,91 @@ Initial review outcome for US-065 at 2026-07-27 13:21 MST:
 - The low parameterization suggestion is deferred because the new branch validates the same strict persisted interval set and canonical pattern resolver already covered by configuration/contract tests; this story directly proves non-default automatic setup, while exhaustive duplicate combinations would not change the transaction, roster, privacy, or replay evidence.
 - Residual risks are limited to the mocked realtime adapter boundary rather than one combined repository/Socket.IO first-start test, no forced Serializable abort after random generation, and one unrelated gated full-runtime restart test. Existing root, PostgreSQL, deterministic concurrency, rollback, replay, and adapter suites passed.
 - No in-scope critical, high, or medium findings remain; no targeted specialist re-review is required.
+
+## 2026-07-27 13:54:29 MST - US-066
+- What was implemented
+  - Reduced public lobby creation to one retained create mutation that atomically persists the selected setup and returns the lobby code without hidden create-round or configure requests.
+  - Rendered the authoritative roundless lobby from `pendingSetup`, including share controls, truthful first-round readiness/card guidance, host setup editing, configuration-event resynchronization, and a single retained Start command that remains latched until a committed round snapshot arrives.
+  - Extended the production browser journey to prove two invited players and the host receive distinct first-round cards while an after-start participant remains waiting without a card; updated cross-theme coverage for the new cardless pre-start state.
+  - Preserved focus after no-round Start retry failures, associated setup actions with their availability guidance, and verified the invitation lobby at desktop and 390px mobile viewports.
+- Files changed: `apps/web/src/components/organisms/create-lobby-form.test.tsx`, `apps/web/src/components/organisms/create-lobby-form.tsx`, `apps/web/src/components/templates/private-lobby-page.test.tsx`, `apps/web/src/components/templates/private-lobby-page.tsx`, `apps/web/src/lib/create-lobby-flow.test.ts`, `apps/web/src/lib/create-lobby-flow.ts`, `tests/e2e/accessibility-theme.spec.ts`, `tests/e2e/gameplay.journey.spec.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-066 - Invite players before starting the first round`
+- Auto approval: `enabled`
+- Checks:
+  - Focused create-flow/private-lobby Vitest tests (expected red: hidden mutations remained, roundless controls/setup were absent, Start could not reconcile from a null round, realtime setup resync left stale controls, and a definitive no-round Start retry moved focus to live status; final pass with 148 tests)
+  - `bun run test` (pass; typecheck, 41 files, 742 tests, 1 file and 145 environment-gated tests skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `bun run format:check` (pass)
+  - `bun install --frozen-lockfile` (pass; 397 installs checked with no changes)
+  - `DATABASE_URL=<fresh isolated local database> bun run db:migrate:deploy` (pass; nine existing migrations)
+  - Focused production Chrome gameplay journey (initial selector-only failure from a late-player name substring; pass after exact roster matching)
+  - `E2E_DATABASE_CONFIRMED_NONPRODUCTION=true TEST_DATABASE_URL=<fresh isolated local database> PLAYWRIGHT_BROWSER_CHANNEL=chrome bun run test:e2e` (initial expected legacy theme-test failures because it assumed a hidden pre-start card; final pass with all 10 tests)
+  - Dev-browser desktop and 390x844 mobile verification (pass; one create mutation, persisted setup, credential-free invite, first-round guidance, no horizontal overflow, no visible control below 44px, and no current-page console warnings/errors)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `react-specialist`, `accessibility-tester`
+  - Used: `react-specialist`, `accessibility-tester` for minimal state/reconciliation seams, no-round copy, focus behavior, semantics, mobile checks, and the browser test matrix
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and frontend-triggered `ui-designer`
+  - Findings: pending complete staged-diff review
+- Decisions (why):
+  - Reused the existing create request's persisted setup instead of retaining compatibility mutations because US-064 made those hidden requests redundant and US-065 made first Start authoritative.
+  - Kept configuration events as resync triggers rather than locally projecting them because the existing strict event path already treats unknown or incomplete projection as requiring an authoritative snapshot.
+  - Derived both pending and active setup through one snapshot selector so summaries, previews, clean drafts, and command confirmation cannot disagree across the first-round boundary.
+  - Did not block first Start on pre-round player absence because HTTP join initially has no realtime presence and the lobby-fenced Start transaction, not browser presence, freezes eligibility.
+- **Learnings for future iterations:**
+  - Tests and UI that previously assumed a waiting round and dealt card immediately after create must now explicitly cover the cardless no-round invitation state, then activate Start before asserting card semantics.
+  - Realtime snapshots should refresh a clean setup draft from either `pendingSetup` or round setup, while preserving a dirty local draft until the user saves or authority confirms it.
+  - Production Next builds rewrite `apps/web/next-env.d.ts`; restore that generated side effect before staging when it is not part of the story.
+- Known issues / follow-ups:
+  - The isolated local browser-test databases are retained because destructive cleanup was unnecessary.
+  - Native Safari/iOS Safari authenticated coverage remains the documented HTTPS release-owner check; local Chrome covered the complete credentialed journey.
+- Next iteration start:
+  - All PRD stories will be complete after the staged review passes and US-066 is marked passing.
+---
+
+Initial review remediation for US-066 at 2026-07-27 14:11 MST:
+- The complete staged review identified four medium findings: a Start acknowledgement could request an unnecessary refresh when its committed snapshot arrived first, the first-round transition lacked a live announcement, authoritative no-round resynchronization lacked dirty-draft regression coverage, and successful or terminal creation could remove the focused submit action without moving focus.
+- Reconciled an acknowledgement immediately against the latest accepted authoritative snapshot, added a fresh-only first-round/card-ready announcement, preserved and tested dirty no-round drafts during resynchronization, and moved focus to the surviving Open lobby action or terminal status after creation removes its submit action.
+- Added focused regressions for the snapshot-before-ack race, announcement recovery behavior, dirty-draft preservation, and creation focus outcomes. Updated the existing ambiguous Call Next expectation to reflect that an already-confirming authoritative snapshot avoids a redundant load, and made an asynchronous focus assertion await the existing focus effect.
+- Validation after remediation:
+  - Focused create-flow/private-lobby Vitest suite (pass; 151 tests)
+  - `bun run test` (pass; typecheck, 41 files and 745 tests passed, 1 file and 145 environment-gated tests skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run test:workspace-boundaries` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (pass after formatting the two remediated components)
+- Targeted re-review used `code-reviewer`, `qa-expert`, and `ui-designer`. It confirmed the original findings were addressed and identified four deduplicated medium follow-ups: pre-ack configure confirmation retained a dirty draft, the aggregate status region could replay the first-round notice, editable terminal creation lacked direct focus coverage, and pre-ack Start snapshots waited for the acknowledgement before restoring focus.
+
+Targeted review remediation for US-066 at 2026-07-27 14:20 MST:
+- Added failing regressions for pre-ack configure draft clearing, immediate Start focus recovery, and reconnect announcement isolation; the editable terminal-creation focus regression passed immediately because the production focus path was already correct.
+- Synchronized a confirmed configure draft in the authoritative pre-ack shortcut, isolated the one-shot first-round notice in its own mounted live region, and identified the focused Start action so the incoming active-round snapshot immediately moves focus to Host controls.
+- Testing decision:
+  - Change type: bug fix
+  - Test-first required: yes
+  - Red test command/result: focused four-test Vitest run failed for announcement replay, delayed Start focus, and dirty configure state; after correcting the configure test's realtime baseline, the isolated test failed with Start still disabled as intended
+  - Green test command/result: focused four-test Vitest run passed; complete create-flow/private-lobby suite passed 152 tests
+- Final validation after the targeted fixes:
+  - `bun run test` (pass; typecheck, 41 files and 746 tests passed, 1 file and 145 environment-gated tests skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `bun run format:check` (pass)
+  - `git diff --check` (pass)
+- A final complete staged-diff review is pending because the targeted fixes changed command reconciliation and accessibility behavior after the first reviewed candidate.
+
+Final staged review remediation for US-066 at 2026-07-27 14:27 MST:
+- `code-reviewer` and `qa-expert` returned empty critical/high/medium finding lists. `accessibility-tester` identified three medium issues: setup controls could lose focus when realtime synchronization disabled them, an ambiguous initial Start retained focus on the unavailable original action, and active-round late-player guidance incorrectly called the round pending.
+- Added failing regressions for all three behaviors, tracked focus within the setup panel before authority transitions, moved ambiguous initial Start focus to the setup heading, and made waiting-player copy distinguish pending waiting rounds from the current active round.
+- Testing decision:
+  - Change type: bug fix
+  - Test-first required: yes
+  - Red test command/result: focused three-test Vitest run failed with focus retained on Start, focus retained on the disabled pattern control, and pending-round copy during an active round
+  - Green test command/result: focused three-test run passed; complete create-flow/private-lobby suite passed 154 tests
+- Validation after final review remediation:
+  - `bun run test` (pass; typecheck, 41 files and 748 tests passed, 1 file and 145 environment-gated tests skipped)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `bun run format:check` (pass)
+  - `git diff --check` (pass)
+- Focused accessibility confirmation returned no actionable critical/high/medium findings and confirmed all three remediations plus their regressions. US-066 is ready to be marked passing and committed.

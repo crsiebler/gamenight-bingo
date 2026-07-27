@@ -96,7 +96,9 @@ describe("CreateLobbyForm", () => {
     fireEvent.change(screen.getByRole("combobox", { name: /call interval/i }), {
       target: { value: "60" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create lobby" }));
+    const submit = screen.getByRole("button", { name: "Create lobby" });
+    submit.focus();
+    fireEvent.click(submit);
 
     await waitFor(() => expect(run).toHaveBeenCalledOnce());
     expect(createSession).toHaveBeenCalledWith({
@@ -110,6 +112,7 @@ describe("CreateLobbyForm", () => {
       "href",
       "/lobbies/ABC234",
     );
+    expect(screen.getByRole("link", { name: "Open lobby" })).toHaveFocus();
   });
 
   it("focuses and announces an empty host-name error", async () => {
@@ -138,7 +141,7 @@ describe("CreateLobbyForm", () => {
       .fn<() => Promise<never>>()
       .mockRejectedValue(
         new CreateLobbyFlowError(
-          "We could not confirm the server response. Retry setup to safely check the same command.",
+          "We could not confirm the server response. Retry creation to safely check the same command.",
           { ambiguous: true, retryable: true },
         ),
       );
@@ -157,15 +160,15 @@ describe("CreateLobbyForm", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Create lobby" }));
-    await screen.findByRole("button", { name: "Retry setup" });
+    await screen.findByRole("button", { name: "Retry creation" });
 
     expect(screen.getByRole("textbox", { name: /host name/i })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "Retry setup" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry creation" }));
     await waitFor(() => expect(run).toHaveBeenCalledTimes(2));
     expect(createSession).toHaveBeenCalledOnce();
   });
 
-  it("does not offer retries for terminal partial failures", async () => {
+  it("does not offer retries for terminal retained creation failures", async () => {
     const run = vi.fn(async () => {
       throw new CreateLobbyFlowError("Authentication is required.", {
         ambiguous: false,
@@ -186,10 +189,13 @@ describe("CreateLobbyForm", () => {
       target: { value: "nature" },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create lobby" }));
+    const submit = screen.getByRole("button", { name: "Create lobby" });
+    submit.focus();
+    fireEvent.click(submit);
 
-    await screen.findByText(/setup cannot continue/i);
+    const status = await screen.findByText(/lobby creation cannot continue/i);
     expect(screen.queryByRole("button", { name: /retry/i })).toBeNull();
+    expect(status).toHaveFocus();
   });
 
   it("restores create after editing a terminal failure before lobby creation", async () => {
@@ -222,9 +228,12 @@ describe("CreateLobbyForm", () => {
       target: { value: "nature" },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create lobby" }));
+    const submit = screen.getByRole("button", { name: "Create lobby" });
+    submit.focus();
+    fireEvent.click(submit);
     await screen.findByText(/edit your setup and try again/i);
     expect(screen.queryByRole("button", { name: /create lobby/i })).toBeNull();
+    expect(hostName).toHaveFocus();
 
     fireEvent.change(hostName, { target: { value: "River Two" } });
     fireEvent.click(screen.getByRole("button", { name: "Create lobby" }));

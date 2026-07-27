@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type FormEvent } from "react";
+import { useLayoutEffect, useRef, useState, type FormEvent } from "react";
 
 import type { AutomaticCallInterval, CallConfiguration } from "@gamenight-bingo/contracts";
 import { themeCatalog } from "@gamenight-bingo/themes";
@@ -61,6 +61,8 @@ export function CreateLobbyForm({
 }: CreateLobbyFormProps) {
   const hostNameRef = useRef<HTMLInputElement>(null);
   const themeRef = useRef<HTMLSelectElement>(null);
+  const submitButtonRef = useRef<HTMLButtonElement>(null);
+  const statusRef = useRef<HTMLDivElement>(null);
   const activeSessionRef = useRef<CreateLobbyRunner | null>(null);
   const [username, setUsername] = useState("");
   const [themeId, setThemeId] = useState("");
@@ -79,6 +81,20 @@ export function CreateLobbyForm({
   const duplicatePatternNames = new Set(
     patterns.map(({ name }) => name).filter((name, index, names) => names.indexOf(name) !== index),
   );
+
+  useLayoutEffect(() => {
+    if (
+      submitting ||
+      (document.activeElement !== document.body && document.activeElement !== null)
+    ) {
+      return;
+    }
+    if (result !== null) {
+      document.getElementById("open-created-lobby")?.focus();
+    } else if (!retryAvailable) {
+      (locked ? statusRef.current : hostNameRef.current)?.focus();
+    }
+  }, [locked, result, retryAvailable, submitting]);
 
   function resetUnstartedSession() {
     if (activeSessionRef.current?.hasCreatedLobby === true) return;
@@ -136,10 +152,10 @@ export function CreateLobbyForm({
       setMessage(
         flowError.retryable
           ? retainSession
-            ? `${activeSessionRef.current?.hasCreatedLobby === true ? "Your lobby exists, but setup did not finish." : "We could not confirm whether the lobby was created."} ${flowError.message}`
+            ? `We could not confirm whether the lobby was created. ${flowError.message}`
             : flowError.message
           : retainSession
-            ? `Setup cannot continue in this browser session. ${flowError.message} Reload to create a new lobby.`
+            ? `Lobby creation cannot continue in this browser session. ${flowError.message} Reload to create a new lobby.`
             : `${flowError.message} Edit your setup and try again.`,
       );
     } finally {
@@ -270,12 +286,12 @@ export function CreateLobbyForm({
       ) : null}
 
       {result === null && retryAvailable ? (
-        <Button disabled={submitting} type="submit">
-          {submitting ? "Creating lobby..." : locked ? "Retry setup" : "Create lobby"}
+        <Button disabled={submitting} ref={submitButtonRef} type="submit">
+          {submitting ? "Creating lobby..." : locked ? "Retry creation" : "Create lobby"}
         </Button>
       ) : null}
 
-      <div aria-live="polite" className="form-status" role="status">
+      <div aria-live="polite" className="form-status" ref={statusRef} role="status" tabIndex={-1}>
         {message}
       </div>
 
@@ -284,7 +300,9 @@ export function CreateLobbyForm({
           <span>Your lobby code</span>
           <strong>{result.code}</strong>
           <p>Open the private lobby to invite players and start the round.</p>
-          <LinkButton href={`/lobbies/${result.code}`}>Open lobby</LinkButton>
+          <LinkButton href={`/lobbies/${result.code}`} id="open-created-lobby">
+            Open lobby
+          </LinkButton>
         </section>
       ) : null}
     </form>

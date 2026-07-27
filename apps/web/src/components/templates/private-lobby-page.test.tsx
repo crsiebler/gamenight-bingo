@@ -2800,7 +2800,7 @@ describe("PrivateLobbyPage", () => {
     await waitFor(() => expect(loadSnapshot).toHaveBeenCalledTimes(2));
     fireEvent.click(screen.getByRole("button", { name: "Retry Call Next" }));
 
-    await waitFor(() => expect(loadSnapshot).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(loadSnapshot).toHaveBeenCalledTimes(2));
     expect(createCommandSession).toHaveBeenCalledOnce();
     expect(screen.getByRole("status", { name: "Host command status" })).toHaveTextContent(
       "Next ball called.",
@@ -3165,7 +3165,9 @@ describe("PrivateLobbyPage", () => {
 
     await screen.findByText("Next ball called.");
     expect(screen.queryByRole("button", { name: "Call Next" })).toBeNull();
-    expect(screen.getByRole("heading", { name: "Host controls" })).toHaveFocus();
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Host controls" })).toHaveFocus(),
+    );
   });
 
   it("keeps outcome focus when an acknowledged Call Next opens the co-winner window", async () => {
@@ -4245,15 +4247,20 @@ describe("PrivateLobbyPage", () => {
       <PrivateLobbyPage
         code="ABC234"
         createCommandSession={createCommandSession}
-        loadSnapshot={async () => snapshotFor("host", { absentPlayerOverridden: true })}
+        loadSnapshot={async () =>
+          snapshotFor("host", { absentPlayerOverridden: true, round: null })
+        }
         origin="https://play.example"
         patterns={patterns}
         shareInvite={null}
       />,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Start round" }));
+    const start = await screen.findByRole("button", { name: "Start round" });
+    start.focus();
+    fireEvent.click(start);
     const retry = await screen.findByRole("button", { name: "Retry Start round" });
+    expect(screen.getByRole("heading", { name: "Lobby setup" })).toHaveFocus();
     expect(screen.getByRole("button", { name: "Start round" })).toHaveAttribute(
       "aria-disabled",
       "true",
@@ -4356,7 +4363,9 @@ describe("PrivateLobbyPage", () => {
       <PrivateLobbyPage
         code="ABC234"
         createCommandSession={() => ({ run })}
-        loadSnapshot={async () => snapshotFor("host", { absentPlayerOverridden: true })}
+        loadSnapshot={async () =>
+          snapshotFor("host", { absentPlayerOverridden: true, round: null })
+        }
         origin="https://play.example"
         patterns={patterns}
         shareInvite={null}
@@ -4649,14 +4658,31 @@ describe("PrivateLobbyPage", () => {
     const { rerender } = render(
       <PrivateLobbyPage
         code="ABC234"
-        loadSnapshot={async () => snapshotFor("host", { round: null })}
+        loadSnapshot={async () =>
+          snapshotFor("host", {
+            absentPlayerOverridden: true,
+            callConfiguration: { mode: "automatic", intervalSeconds: 10 },
+            patternId: "shape-x",
+            round: null,
+          })
+        }
         origin="https://play.example"
         patterns={patterns}
         shareInvite={null}
       />,
     );
-    expect(await screen.findByText(/host is preparing the first round/i)).toBeVisible();
+    expect(await screen.findByText(/invite players now/i)).toBeVisible();
     expect(screen.queryByText(/round has started/i)).toBeNull();
+    expect(screen.getByText("X (Shape)", { selector: "dd" })).toBeVisible();
+    expect(screen.getByText("Automatic every 10 seconds", { selector: "dd" })).toBeVisible();
+    expect(screen.getByRole("combobox", { name: /winning pattern/i })).toHaveValue("shape-x");
+    expect(screen.getByRole("button", { name: "Start round" })).not.toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByRole("region", { name: "Your card" })).toHaveTextContent(
+      /first-round card is dealt when the host starts/i,
+    );
     const roster = screen.getByRole("list", { name: /participants/i });
     expect(
       within(within(roster).getByText("Casey").closest("li")!).getByText(/ready for first round/i),
@@ -4665,13 +4691,261 @@ describe("PrivateLobbyPage", () => {
     rerender(
       <PrivateLobbyPage
         code="ABC234"
-        loadSnapshot={async () => snapshotFor("waiting")}
+        loadSnapshot={async () => snapshotFor("player", { round: null })}
         origin="https://play.example"
         patterns={patterns}
         shareInvite={null}
       />,
     );
-    expect(await screen.findByText(/you are queued for the next round/i)).toBeVisible();
+    expect(await screen.findByText(/you.re ready for the first round/i)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Start round" })).toBeNull();
+  });
+
+  it("saves and reconciles authoritative pending setup before the first round", async () => {
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(
+        snapshotFor("host", { absentPlayerOverridden: true, eventSequence: 1, round: null }),
+      )
+      .mockResolvedValueOnce(
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          callConfiguration: { mode: "automatic", intervalSeconds: 10 },
+          eventSequence: 2,
+          patternId: "shape-x",
+          round: null,
+        }),
+      );
+    const commands: unknown[] = [];
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createCommandSession={(command) => {
+          commands.push(command);
+          return { run: async () => activeLobbyAck(2) };
+        }}
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    fireEvent.change(await screen.findByRole("combobox", { name: /winning pattern/i }), {
+      target: { value: "shape-x" },
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: "Call mode" }), {
+      target: { value: "automatic" },
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: "Call interval" }), {
+      target: { value: "10" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save setup" }));
+
+    expect(await screen.findByText("Lobby setup saved.")).toBeVisible();
+    expect(commands).toEqual([
+      {
+        type: "configure",
+        code: "ABC234",
+        patternId: "shape-x",
+        callConfiguration: { mode: "automatic", intervalSeconds: 10 },
+      },
+    ]);
+    expect(screen.getByText("X (Shape)", { selector: "dd" })).toBeVisible();
+  });
+
+  it("resynchronizes clean setup controls after another host updates pending setup", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const requestResync = vi.fn();
+    const baseline = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      eventSequence: 1,
+      round: null,
+    });
+    const updated = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      callConfiguration: { mode: "automatic", intervalSeconds: 10 },
+      eventSequence: 2,
+      patternId: "shape-x",
+      round: null,
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync };
+        }}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    await screen.findByRole("combobox", { name: /winning pattern/i });
+    act(() => handlers?.onSnapshot(baseline));
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "configuration",
+          eventSequence: 2,
+          occurredAt: NOW,
+          pendingSetup: {
+            patternId: "shape-x",
+            callConfiguration: { mode: "automatic", intervalSeconds: 10 },
+          },
+        }),
+      ),
+    );
+    expect(requestResync).toHaveBeenCalledWith(1);
+
+    act(() => handlers?.onSnapshot(updated));
+    expect(screen.getByRole("combobox", { name: /winning pattern/i })).toHaveValue("shape-x");
+    expect(screen.getByRole("combobox", { name: "Call mode" })).toHaveValue("automatic");
+    expect(screen.getByRole("combobox", { name: "Call interval" })).toHaveValue("10");
+  });
+
+  it("preserves a dirty no-round setup draft during authoritative resynchronization", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const baseline = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      eventSequence: 1,
+      round: null,
+    });
+    const updated = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      callConfiguration: { mode: "automatic", intervalSeconds: 10 },
+      eventSequence: 2,
+      round: null,
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const pattern = await screen.findByRole("combobox", { name: /winning pattern/i });
+    act(() => handlers?.onSnapshot(baseline));
+    fireEvent.change(pattern, { target: { value: "shape-x" } });
+    act(() => handlers?.onSnapshot(updated));
+
+    expect(pattern).toHaveValue("shape-x");
+    expect(screen.getByRole("combobox", { name: "Call mode" })).toHaveValue("manual");
+    expect(screen.getByText("Automatic every 10 seconds", { selector: "dd" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Start round" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  it("announces a fresh first-round card without replaying it after recovery", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const requestResync = vi.fn();
+    const baseline = snapshotFor("player", { eventSequence: 1, round: null });
+    const active = snapshotFor("player", { eventSequence: 2, round: "active" });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync };
+        }}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    await screen.findByText(/you.re ready for the first round/i);
+    act(() => handlers?.onSnapshot(baseline));
+    expect(screen.getByRole("status", { name: "Game status announcement" })).not.toHaveTextContent(
+      /first round started/i,
+    );
+    act(() =>
+      handlers?.onLobbyEvent(
+        ActiveLobbyEventSchema.parse({
+          schemaVersion: CONTRACT_SCHEMA_VERSION,
+          type: "stage",
+          eventSequence: 2,
+          occurredAt: NOW,
+          round: active.round,
+        }),
+      ),
+    );
+    expect(requestResync).toHaveBeenCalledWith(1);
+    act(() => handlers?.onSnapshot(active));
+    expect(screen.getByRole("status", { name: "Round announcement" })).toHaveTextContent(
+      /first round started.*your card is ready/i,
+    );
+
+    act(() => handlers?.onConnectionState("reconnecting"));
+    expect(screen.getByRole("status", { name: "Game status announcement" })).not.toHaveTextContent(
+      /first round started/i,
+    );
+    act(() => handlers?.onSnapshot(active));
+    expect(screen.getByRole("status", { name: "Round announcement" })).not.toHaveTextContent(
+      /first round started/i,
+    );
+  });
+
+  it("moves setup focus before realtime synchronization disables its controls", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const baseline = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      eventSequence: 1,
+      round: null,
+    });
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        enableRealtime
+        loadSnapshot={async () => baseline}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const pattern = await screen.findByRole("combobox", { name: /winning pattern/i });
+    act(() => handlers?.onSnapshot(baseline));
+    pattern.focus();
+    act(() => handlers?.onConnectionState("reconnecting"));
+
+    expect(screen.getByRole("heading", { name: "Lobby setup" })).toHaveFocus();
+  });
+
+  it("describes an active round as current for a late waiting player", async () => {
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        loadSnapshot={async () => snapshotFor("waiting", { round: "active" })}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const setup = await screen.findByRole("region", { name: "Lobby setup" });
+    expect(within(setup).getByText(/queued for the next round.*current round/i)).toBeVisible();
+    expect(within(setup).queryByText(/pending round/i)).toBeNull();
   });
 
   it("blocks start for a current absent player but not waiting or overridden absences", async () => {
@@ -4748,7 +5022,11 @@ describe("PrivateLobbyPage", () => {
     const loadSnapshot = vi
       .fn<(code: string) => Promise<Snapshot>>()
       .mockResolvedValueOnce(
-        snapshotFor("host", { absentPlayerOverridden: true, eventSequence: 1 }),
+        snapshotFor("host", {
+          absentPlayerOverridden: true,
+          eventSequence: 1,
+          round: null,
+        }),
       )
       .mockReturnValueOnce(manualRefresh.promise)
       .mockReturnValueOnce(reconciliation.promise);
@@ -4773,7 +5051,9 @@ describe("PrivateLobbyPage", () => {
       "true",
     );
 
-    manualRefresh.resolve(snapshotFor("host", { absentPlayerOverridden: true, eventSequence: 1 }));
+    manualRefresh.resolve(
+      snapshotFor("host", { absentPlayerOverridden: true, eventSequence: 1, round: null }),
+    );
     await waitFor(() => expect(loadSnapshot).toHaveBeenCalledTimes(3));
     expect(screen.queryByText("Round started.")).toBeNull();
     expect(screen.getByRole("button", { name: "Start round" })).toHaveAttribute(
@@ -4790,6 +5070,107 @@ describe("PrivateLobbyPage", () => {
     );
     await waitFor(() => expect(screen.queryByRole("button", { name: "Start round" })).toBeNull());
     expect(screen.getByText(/round has started/i)).toBeVisible();
+  });
+
+  it("reconciles a first-round snapshot that arrives before the Start acknowledgement", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const acknowledgement = deferred<Extract<CommandAck, { scope: "active-lobby" }>>();
+    const baseline = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      eventSequence: 1,
+      round: null,
+    });
+    const active = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      eventSequence: 2,
+      round: "active",
+    });
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(baseline)
+      .mockRejectedValueOnce(new Error("Refresh should not be required."));
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        createCommandSession={() => ({ run: () => acknowledgement.promise })}
+        enableRealtime
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const start = await screen.findByRole("button", { name: "Start round" });
+    act(() => handlers?.onSnapshot(baseline));
+    start.focus();
+    fireEvent.click(start);
+    act(() => handlers?.onSnapshot(active));
+    expect(screen.getByRole("heading", { name: "Host controls" })).toHaveFocus();
+    acknowledgement.resolve(activeLobbyAck(2));
+
+    await screen.findByText("Round started.");
+    expect(screen.getByRole("heading", { name: "Host controls" })).toHaveFocus();
+    expect(loadSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it("clears a configured draft when its authoritative snapshot arrives before acknowledgement", async () => {
+    let handlers: PrivateLobbyRealtimeHandlers | undefined;
+    const acknowledgement = deferred<Extract<CommandAck, { scope: "active-lobby" }>>();
+    const baseline = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      eventSequence: 1,
+      round: null,
+    });
+    const configured = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      callConfiguration: { mode: "automatic", intervalSeconds: 10 },
+      eventSequence: 2,
+      patternId: "shape-x",
+      round: null,
+    });
+    const loadSnapshot = vi.fn<(code: string) => Promise<Snapshot>>().mockResolvedValue(baseline);
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        connectRealtime={(nextHandlers) => {
+          handlers = nextHandlers;
+          return { close: vi.fn(), requestResync: vi.fn() };
+        }}
+        createCommandSession={() => ({ run: () => acknowledgement.promise })}
+        enableRealtime
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    const pattern = await screen.findByRole("combobox", { name: /winning pattern/i });
+    act(() => handlers?.onSnapshot(baseline));
+    fireEvent.change(pattern, {
+      target: { value: "shape-x" },
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: "Call mode" }), {
+      target: { value: "automatic" },
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: "Call interval" }), {
+      target: { value: "10" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save setup" }));
+    act(() => handlers?.onSnapshot(configured));
+    acknowledgement.resolve(activeLobbyAck(2));
+
+    await screen.findByText("Lobby setup saved.");
+    expect(screen.getByRole("button", { name: "Start round" })).not.toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(loadSnapshot).toHaveBeenCalledOnce();
   });
 
   it("does not report a committed start as reconciled after refresh failure", async () => {

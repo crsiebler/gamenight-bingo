@@ -1,9 +1,6 @@
 import {
-  CommandAckSchema,
-  ConfigureCommandSchema,
   CONTRACT_SCHEMA_VERSION,
   CreateLobbyRequestSchema,
-  CreateRoundCommandSchema,
   ErrorSchema,
   LobbyEntryResponseSchema,
   type CallConfiguration,
@@ -53,7 +50,7 @@ function defaultCommandId(): string {
 
 function ambiguousResponseError(): CreateLobbyFlowError {
   return new CreateLobbyFlowError(
-    "We could not confirm the server response. Retry setup to safely check the same command.",
+    "We could not confirm the server response. Retry creation to safely check the same command.",
     { ambiguous: true, retryable: true },
   );
 }
@@ -72,25 +69,15 @@ function contractError(value: unknown, expectedCommandId: string): CreateLobbyFl
 export class CreateLobbyFlowSession {
   readonly #selection: CreateLobbySelection;
   readonly #request: Requester;
-  readonly #commandIds: {
-    create: string;
-    round: string;
-    configure: string;
-  };
+  readonly #commandId: string;
   #entry: LobbyEntryResponse | null = null;
-  #roundCreated = false;
-  #configured = false;
   #running: Promise<CreateLobbyFlowResult> | null = null;
 
   constructor(selection: CreateLobbySelection, dependencies: CreateLobbyFlowDependencies = {}) {
     const nextCommandId = dependencies.nextCommandId ?? defaultCommandId;
     this.#selection = selection;
     this.#request = dependencies.request ?? defaultRequest;
-    this.#commandIds = {
-      create: nextCommandId(),
-      round: nextCommandId(),
-      configure: nextCommandId(),
-    };
+    this.#commandId = nextCommandId();
   }
 
   get hasCreatedLobby(): boolean {
@@ -98,7 +85,7 @@ export class CreateLobbyFlowSession {
   }
 
   run(): Promise<CreateLobbyFlowResult> {
-    this.#running ??= this.#runSteps().finally(() => {
+    this.#running ??= this.#run().finally(() => {
       this.#running = null;
     });
     return this.#running;
@@ -127,70 +114,26 @@ export class CreateLobbyFlowSession {
     return value;
   }
 
-  async #runSteps(): Promise<CreateLobbyFlowResult> {
+  async #run(): Promise<CreateLobbyFlowResult> {
     if (this.#entry === null) {
       const command = CreateLobbyRequestSchema.parse({
         schemaVersion: CONTRACT_SCHEMA_VERSION,
-        commandId: this.#commandIds.create,
+        commandId: this.#commandId,
         username: this.#selection.username,
         themeId: this.#selection.themeId,
         patternId: this.#selection.patternId,
         callConfiguration: this.#selection.callConfiguration,
       });
       const parsed = LobbyEntryResponseSchema.safeParse(
-        await this.#post("/api/v1/lobbies", command, this.#commandIds.create),
+        await this.#post("/api/v1/lobbies", command, this.#commandId),
       );
-      if (!parsed.success || parsed.data.commandId !== this.#commandIds.create) {
+      if (!parsed.success || parsed.data.commandId !== this.#commandId) {
         throw ambiguousResponseError();
       }
       this.#entry = parsed.data;
     }
 
     const code = this.#entry.lobby.code;
-    if (!this.#roundCreated) {
-      const command = CreateRoundCommandSchema.parse({
-        schemaVersion: CONTRACT_SCHEMA_VERSION,
-        type: "create-round",
-        commandId: this.#commandIds.round,
-      });
-      const parsed = CommandAckSchema.safeParse(
-        await this.#post(`/api/v1/lobbies/${code}/rounds`, command, this.#commandIds.round),
-      );
-      if (
-        !parsed.success ||
-        parsed.data.commandId !== this.#commandIds.round ||
-        parsed.data.scope !== "active-lobby"
-      ) {
-        throw ambiguousResponseError();
-      }
-      this.#roundCreated = true;
-    }
-
-    if (!this.#configured) {
-      const command = ConfigureCommandSchema.parse({
-        schemaVersion: CONTRACT_SCHEMA_VERSION,
-        type: "configure",
-        commandId: this.#commandIds.configure,
-        patternId: this.#selection.patternId,
-        callConfiguration: this.#selection.callConfiguration,
-      });
-      const parsed = CommandAckSchema.safeParse(
-        await this.#post(
-          `/api/v1/lobbies/${code}/configuration`,
-          command,
-          this.#commandIds.configure,
-        ),
-      );
-      if (
-        !parsed.success ||
-        parsed.data.commandId !== this.#commandIds.configure ||
-        parsed.data.scope !== "active-lobby"
-      ) {
-        throw ambiguousResponseError();
-      }
-      this.#configured = true;
-    }
-
     return {
       ...this.#selection,
       code,

@@ -100,7 +100,6 @@ async function settleOneLine(page: Page, code: string) {
   let observedCalledState = false;
   let observedMarkedState = false;
 
-  await activate(page, page.getByRole("button", { name: "Start round" }));
   await expect(page.getByRole("button", { name: "Call Next" })).toBeVisible();
 
   for (let callCount = 0; callCount < 75; callCount += 1) {
@@ -217,14 +216,8 @@ test.describe("rendered application theme regressions", () => {
       const shell = page.locator("main.private-lobby-shell");
       await expect(shell).toHaveAttribute("data-theme-id", theme.id);
       const card = page.getByRole("region", { name: "Your card" });
-      await expect(
-        card
-          .getByRole("button", { name: /unavailable because the round has not started/i })
-          .first(),
-      ).toBeVisible();
-      await expect(
-        card.getByRole("button", { name: /free.*automatically satisfied/i }),
-      ).toBeVisible();
+      await expect(card).toContainText(/first-round card is dealt when the host starts/i);
+      await expect(card.locator(".bingo-card-cell")).toHaveCount(0);
       await expect(shell.locator('[data-theme-asset="dauber"] use')).toHaveAttribute(
         "href",
         `${theme.visuals.spriteUrl}#dauber`,
@@ -280,6 +273,13 @@ test.describe("rendered application theme regressions", () => {
       );
       await page.unroute(`**${failedSpriteUrl}`);
 
+      await activate(page, startRound);
+      await expect(
+        card.getByRole("button", { name: /not called cannot be marked yet/i }).first(),
+      ).toBeVisible();
+      await expect(
+        card.getByRole("button", { name: /free.*automatically satisfied/i }),
+      ).toBeVisible();
       await settleOneLine(page, code);
       const result = page.getByRole("region", { name: /bingo.*you won/i });
       await expect(result.locator('[data-theme-asset="winner"]')).toBeVisible();

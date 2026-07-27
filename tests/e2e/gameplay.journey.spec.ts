@@ -101,6 +101,24 @@ async function reloadAndRecover(page: Page, code: string, username: string) {
   ).toHaveText(/^(Connected|Recovered)$/);
 }
 
+async function joinLobby(page: Page, code: string, username: string) {
+  await page.goto(`/?code=${code}#join-lobby`);
+  await page.getByRole("button", { name: "Find lobby" }).click();
+  await page.getByLabel("Player name").fill(username);
+  await page.getByRole("button", { name: "Join lobby" }).click();
+  await page.getByRole("link", { name: "Open lobby" }).click();
+  await expect(page.getByRole("heading", { name: `Lobby ${code}` })).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "Live game status" }).locator(".connection-state"),
+  ).toHaveText("Connected");
+}
+
+async function cardSignature(page: Page): Promise<string> {
+  const cells = page.getByRole("region", { name: "Your card" }).locator(".bingo-card-cell");
+  await expect(cells).toHaveCount(25);
+  return JSON.stringify(await cells.locator(".bingo-card-value").allTextContents());
+}
+
 test.describe("host and player gameplay journey", () => {
   test.skip(
     process.env["TEST_DATABASE_URL"] === undefined,
@@ -112,15 +130,26 @@ test.describe("host and player gameplay journey", () => {
       testInfo.project.name === "webkit" || testInfo.project.name === "ios-webkit",
       "The HTTP harness cannot carry the required Secure participant cookie in WebKit; run the documented native Safari journey over HTTPS.",
     );
-    test.setTimeout(120_000);
+    test.setTimeout(180_000);
     const suffix = `${testInfo.project.name}-${testInfo.workerIndex}-${Date.now()}`;
     const hostName = `Host ${suffix}`;
     const playerName = `Player ${suffix}`;
+    const secondPlayerName = `Player Two ${suffix}`;
+    const latePlayerName = `Late Player ${suffix}`;
     const hostContext = await browser.newContext();
     const playerContext = await browser.newContext();
+    const secondPlayerContext = await browser.newContext();
+    const latePlayerContext = await browser.newContext();
 
     try {
       const hostPage = await hostContext.newPage();
+      const createMutationPaths: string[] = [];
+      hostPage.on("request", (request) => {
+        const path = new URL(request.url()).pathname;
+        if (request.method() === "POST" && path.startsWith("/api/v1/lobbies")) {
+          createMutationPaths.push(path);
+        }
+      });
       await hostPage.goto("/");
       const hostNameInput = hostPage.getByLabel("Host name");
       await tabTo(hostPage, hostNameInput);
@@ -148,6 +177,7 @@ test.describe("host and player gameplay journey", () => {
       const code = (await created.locator("strong").textContent())?.trim();
       if (code === undefined) throw new Error("The created lobby code was unavailable.");
       expect(code).toMatch(/^[A-HJ-NP-Z2-9]{6}$/);
+      expect(createMutationPaths).toEqual(["/api/v1/lobbies"]);
       await activate(hostPage, created.getByRole("link", { name: "Open lobby" }));
       await expect(hostPage.getByRole("heading", { name: `Lobby ${code}` })).toBeVisible();
       await expect(
@@ -168,18 +198,43 @@ test.describe("host and player gameplay journey", () => {
         playerPage.getByRole("region", { name: "Live game status" }).locator(".connection-state"),
       ).toHaveText("Connected");
 
+      const secondPlayerPage = await secondPlayerContext.newPage();
+      await joinLobby(secondPlayerPage, code, secondPlayerName);
+
       const hostRoster = hostPage.getByRole("list", { name: "Participants" });
       const playerRoster = playerPage.getByRole("list", { name: "Participants" });
-      await expect(hostRoster.getByRole("listitem")).toHaveCount(2);
+      await expect(hostRoster.getByRole("listitem")).toHaveCount(3);
       await expect(hostRoster.getByRole("listitem").filter({ hasText: playerName })).toHaveCount(1);
-      await expect(playerRoster.getByRole("listitem")).toHaveCount(2);
+      await expect(
+        hostRoster.getByRole("listitem").filter({ hasText: secondPlayerName }),
+      ).toHaveCount(1);
+      await expect(playerRoster.getByRole("listitem")).toHaveCount(3);
+      await expect(hostRoster.getByText("Ready for first round")).toHaveCount(3);
+      await expect(playerPage.getByText(/you.re ready for the first round/i)).toBeVisible();
+      await expect(secondPlayerPage.getByText(/you.re ready for the first round/i)).toBeVisible();
+      await expect(hostPage.getByRole("region", { name: "Your card" })).toContainText(
+        /first-round card is dealt when the host starts/i,
+      );
       await expect(playerPage.getByRole("button", { name: "Start round" })).toHaveCount(0);
       const startRound = hostPage.getByRole("button", { name: "Start round" });
       await activate(hostPage, startRound);
       await expect(hostPage.getByRole("button", { name: "Call Next" })).toBeVisible();
-      await activate(playerPage, playerPage.getByRole("button", { name: "Refresh lobby" }));
-      await expect(playerPage.getByText(/queued for the next round/i)).toBeVisible();
+      const preStartCardSignatures = await Promise.all([
+        cardSignature(hostPage),
+        cardSignature(playerPage),
+        cardSignature(secondPlayerPage),
+      ]);
+      expect(new Set(preStartCardSignatures).size).toBe(3);
       await expect(playerPage.getByRole("button", { name: "Call Next" })).toHaveCount(0);
+
+      const latePlayerPage = await latePlayerContext.newPage();
+      await joinLobby(latePlayerPage, code, latePlayerName);
+      await expect(hostRoster.getByRole("listitem")).toHaveCount(4);
+      await expect(latePlayerPage.getByText(/queued for the next round/i)).toBeVisible();
+      await expect(latePlayerPage.getByRole("region", { name: "Your card" })).toContainText(
+        /unavailable while you wait/i,
+      );
+      await expect(latePlayerPage.locator(".bingo-card-cell")).toHaveCount(0);
 
       const availableMark = hostPage.getByRole("button", {
         name: /called - mark available to mark/i,
@@ -216,23 +271,23 @@ test.describe("host and player gameplay journey", () => {
       ).toHaveCount(1);
       const restoredHostRoster = hostPage.getByRole("list", { name: "Participants" });
       const restoredHost = restoredHostRoster.getByRole("listitem").filter({ hasText: hostName });
-      await expect(restoredHostRoster.getByRole("listitem")).toHaveCount(2);
+      await expect(restoredHostRoster.getByRole("listitem")).toHaveCount(4);
       await expect(restoredHost.getByText("Host", { exact: true })).toBeVisible();
       await expect(restoredHost.getByText("Connected", { exact: true })).toBeVisible();
       await expect(hostPage.getByRole("button", { name: "Call Next" })).toBeVisible();
       await reloadAndRecover(playerPage, code, playerName);
       const restoredRoster = playerPage.getByRole("list", { name: "Participants" });
-      await expect(restoredRoster.getByRole("listitem")).toHaveCount(2);
+      await expect(restoredRoster.getByRole("listitem")).toHaveCount(4);
       await expect(restoredRoster.getByRole("listitem").filter({ hasText: hostName })).toHaveCount(
         1,
       );
       await expect(
-        restoredRoster.getByRole("listitem").filter({ hasText: playerName }),
+        restoredRoster
+          .getByRole("listitem")
+          .filter({ has: playerPage.getByText(playerName, { exact: true }) }),
       ).toHaveCount(1);
       await expect(playerPage.getByRole("button", { name: "Call Next" })).toHaveCount(0);
-      await expect(playerPage.getByRole("region", { name: "Your card" })).toContainText(
-        /unavailable while you wait/i,
-      );
+      await expect(playerPage.locator(".bingo-card-cell")).toHaveCount(25);
       await expect(playerPage.locator('.bingo-card-cell[data-state="marked"]')).toHaveCount(0);
 
       const callHistory = hostPage.locator(".call-history li");
@@ -291,7 +346,12 @@ test.describe("host and player gameplay journey", () => {
         /round ended.*confirmed result remains visible/i,
       );
     } finally {
-      await Promise.allSettled([hostContext.close(), playerContext.close()]);
+      await Promise.allSettled([
+        hostContext.close(),
+        playerContext.close(),
+        secondPlayerContext.close(),
+        latePlayerContext.close(),
+      ]);
     }
   });
 });
