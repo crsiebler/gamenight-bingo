@@ -964,6 +964,93 @@ async function executeMutation(
     };
   }
 
+  if (command.type === "start-round" && current === null) {
+    await expireDueParticipantSessions(transaction, lobbyId, now);
+    const lobby = await transaction.lobby.findUnique({
+      where: { id: lobbyId },
+      select: {
+        pendingPatternId: true,
+        pendingCallMode: true,
+        pendingCallIntervalSeconds: true,
+      },
+    });
+    if (
+      lobby === null ||
+      lobby.pendingPatternId === null ||
+      lobby.pendingCallMode === null ||
+      (lobby.pendingCallMode === "AUTOMATIC" &&
+        ![5, 10, 30, 60, 120].includes(lobby.pendingCallIntervalSeconds ?? -1)) ||
+      (lobby.pendingCallMode === "MANUAL" && lobby.pendingCallIntervalSeconds !== null)
+    ) {
+      throw new Error("A roundless lobby requires complete pending setup.");
+    }
+    const patternMode = patternModeOrThrow(options.patterns, lobby.pendingPatternId);
+    const waitingRound = createWaitingRound(patternMode, now.getTime());
+    const transition = transitionRound(waitingRound, { type: "start", at: now.getTime() });
+    if (!transition.ok) throw new Error("Pending first-round setup could not start.");
+    const participants = await transaction.participant.findMany({
+      where: { lobbyId, departedAt: null, roundEligibility: "PLAYING" },
+      select: { id: true },
+      orderBy: [{ joinedAt: "asc" }, { id: "asc" }],
+    });
+    if (participants.length < 1 || participants.length > 25) return null;
+    const roundId = options.nextId("round");
+    const cards = generateBingoCards(participants.length, options.randomBytes);
+    const drawOrder = generateDrawOrder(options.randomBytes);
+    const nextCallAt =
+      lobby.pendingCallMode === "AUTOMATIC"
+        ? new Date(now.getTime() + lobby.pendingCallIntervalSeconds! * 1_000)
+        : null;
+
+    await transaction.round.create({
+      data: {
+        id: roundId,
+        lobbyId,
+        initialPatternId: lobby.pendingPatternId,
+        currentPatternId: lobby.pendingPatternId,
+        stage: "ACTIVE",
+        callMode: lobby.pendingCallMode,
+        callIntervalSeconds: lobby.pendingCallIntervalSeconds,
+        createdAt: now,
+        startedAt: now,
+        activeAt: now,
+        nextCallAt,
+      },
+    });
+    await transaction.drawPosition.createMany({
+      data: drawOrder.map((ball, index) => ({ roundId, position: index + 1, ball })),
+    });
+    await transaction.card.createMany({
+      data: cards.map((cells, index) => ({
+        id: options.nextId("card"),
+        lobbyId,
+        roundId,
+        participantId: participants[index]!.id,
+        cells: cells.map((cell) => (cell === FREE_BINGO_CELL ? 0 : cell)),
+        createdAt: now,
+      })),
+    });
+    await transaction.lobby.update({
+      where: { id: lobbyId },
+      data: {
+        status: "ACTIVE",
+        pendingPatternId: null,
+        pendingCallMode: null,
+        pendingCallIntervalSeconds: null,
+      },
+    });
+    const round = await loadCurrentRound(transaction, lobbyId);
+    if (round === null) throw new Error("Started first round could not be reloaded.");
+    return {
+      roundId,
+      scope: "active-lobby",
+      event: {
+        type: "stage",
+        payload: { round: await publicRoundState(transaction, lobbyId, round) },
+      },
+    };
+  }
+
   if (current === null) return null;
 
   if (

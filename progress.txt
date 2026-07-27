@@ -89,6 +89,7 @@ Next story: US-001
 - Full-runtime restart tests spawn the production game-server entry point against a fresh, empty, migrated nonproduction database; sharing the normal serialized `TEST_DATABASE_URL` lets legitimate persisted leases from earlier tests become unrelated process-local startup work.
 - Final manual acceptance starts only after command-level prerequisite rows pass; implementation agents leave every acceptance item and decision unchecked, while the product owner records native browser/device/accessibility/security evidence and the final decision.
 - First-round setup is durable lobby state before a round exists: create-lobby persists immutable canonical setup intent, no-round configure updates it under the lobby fence with a sequenced configuration event, and actor-scoped no-round snapshots expose only pending setup and the authorized roster.
+- First `start-round` uses the same lobby fence as joins: expire due sessions, freeze all nondeparted pre-start `PLAYING` participants, consume pending setup, generate private cards/draw order, and create the active round in one transaction. A fresh join's initial absent presence must not block this freeze; transaction order determines playing-with-card versus waiting-without-card.
 
 Append-only iteration log
 -------------------------
@@ -6417,3 +6418,51 @@ Targeted re-review outcome for US-064 at 2026-07-27 13:07 MST:
 - `qa-expert` returned an empty actionable finding list and confirmed the automated legacy upgrade test resolves the medium migration-evidence finding.
 - `code-reviewer` and `security-engineer` had already returned empty finding lists; the one deferred low configuration-event resynchronization test remains assigned to US-066.
 - No in-scope critical, high, or medium findings remain. US-064 can be marked passing and committed after the final consistency check.
+
+## 2026-07-27 13:21:25 MST - US-065
+- What was implemented
+  - Extended `start-round` for a lobby with no current round so one Serializable lobby-fenced transaction expires due sessions, validates and consumes pending setup, freezes the eligible roster, generates unique cards and the private draw order, creates the authoritative active round, and persists the stage event plus command result before broadcast.
+  - Preserved exact command replay without rerunning randomization, existing replacement `create-round` behavior, and active-round late joins as waiting participants with no card.
+  - Added deterministic PostgreSQL coverage for direct first start, non-default automatic setup, both concurrent join/start lock orderings, due-session exclusion, rollback, event/snapshot privacy, replay, and post-start waiting behavior; existing realtime adapter coverage verifies fresh broadcast-before-ack and replay without rebroadcast.
+- Files changed: `AGENTS.md`, `packages/database/src/round-command-executor.ts`, `packages/database/src/database.integration.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-065 - Freeze the first roster when the host starts`
+- Auto approval: `enabled`
+- Checks:
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t 'freezes every pre-start participant'` (expected fail before implementation with `INVALID_COMMAND`; pass after implementation)
+  - `TEST_DATABASE_URL=<approved local Compose database> bunx vitest run packages/database/src/database.integration.test.ts -t 'serializes a concurrent first-round start'` (expected join-first failure before remediation because initial absence blocked Start; pass for both lock orderings after remediation)
+  - Focused first-start, concurrency, rollback, expiry, and privacy matrix (pass; 6 tests)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test:database` (pass; 141 tests)
+  - `bunx vitest run apps/game-server/src/socket-server.test.ts` (pass; 109 tests and 4 PostgreSQL-gated tests skipped in the isolated run; the database-enabled root suite exercised all but the unrelated gated restart case)
+  - `TEST_DATABASE_URL=<approved local Compose database> bun run test` (initial run hit one unrelated existing UI timing failure that passed immediately in isolation; final rerun pass with typecheck, 42 files, 886 tests, and 1 gated skip)
+  - `bun run test` (the first pre-commit hook run hit a different unrelated existing UI timing failure; that exact test and the complete no-database hook command passed immediately on retry with 41 files passing, 1 database file skipped, 742 tests passing, and 145 database-gated skips)
+  - `bun run typecheck` (pass; workspace boundaries and all nine workspaces)
+  - `bun run lint` (pass)
+  - `bun run format:check` (pass after formatting the edited integration test)
+  - `git diff --check` (pass)
+- Implementation agents:
+  - Recommended: `backend-developer`, `test-automator`
+  - Used: `backend-developer`, `test-automator` for transaction design, existing persistence seams, deterministic lock-order barriers, replay/privacy assertions, and regression risks
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and persistence/concurrency-triggered `security-engineer`
+  - Findings: no blocking findings; one low request for exhaustive first-start interval/pattern parameterization was deferred as duplicate branch coverage
+- Decisions (why):
+  - Extended `start-round` directly rather than chaining `create-round` and `start-round` because the roster, pending setup, deal, active stage, event, and idempotent result must share one authoritative commit.
+  - Left replacement `create-round` unchanged because later-round replacement intentionally creates a waiting round and promotes waiting participants through its established path.
+  - Did not apply the existing-round absence guard before the first deal because a successful HTTP join starts with absent presence until realtime registration; the lobby fence and due-session expiry are the authoritative first-roster boundary.
+  - Reused the existing domain waiting-to-active transition and generators rather than introducing a second first-round planner or browser-visible deal representation.
+- **Learnings for future iterations:**
+  - First-round admission and dealing are serialized by the shared lobby fence, not by timestamps or browser presence timing.
+  - Replay lookup occurs before first-round generation, so exact replays return the committed sequence without consuming random bytes or generating new identifiers.
+  - Public stage events remain deal-free; actor-scoped snapshots are the only client projection that may contain the requester’s own card.
+- Known issues / follow-ups:
+  - US-066 still owns removal of the public flow's hidden create/configure requests and the visible invitation-first lobby/start journey.
+- Next iteration start:
+  - Implement US-066 by rendering the authoritative no-round lobby, issuing one retained Start command, and proving pre-start players receive cards while post-start players wait.
+---
+
+Initial review outcome for US-065 at 2026-07-27 13:21 MST:
+- `code-reviewer` and `security-engineer` returned empty actionable finding lists.
+- `qa-expert` returned no blocking findings and one low suggestion to parameterize the first-start integration test across every supported automatic interval and exact pattern mode.
+- The low parameterization suggestion is deferred because the new branch validates the same strict persisted interval set and canonical pattern resolver already covered by configuration/contract tests; this story directly proves non-default automatic setup, while exhaustive duplicate combinations would not change the transaction, roster, privacy, or replay evidence.
+- Residual risks are limited to the mocked realtime adapter boundary rather than one combined repository/Socket.IO first-start test, no forced Serializable abort after random generation, and one unrelated gated full-runtime restart test. Existing root, PostgreSQL, deterministic concurrency, rollback, replay, and adapter suites passed.
+- No in-scope critical, high, or medium findings remain; no targeted specialist re-review is required.

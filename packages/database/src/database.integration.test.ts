@@ -427,6 +427,7 @@ describeDatabase("PostgreSQL durable game state", () => {
     clock: () => Date,
     overrides: {
       readonly nextId?: (prefix: "round" | "card" | "call" | "mark") => string;
+      readonly randomBytes?: (length: number) => Uint8Array;
       readonly nearWinFeedbackEnabled?: boolean;
       readonly patterns?: readonly PatternDefinition[];
       readonly coWinnerWindowMs?: number;
@@ -439,7 +440,7 @@ describeDatabase("PostgreSQL durable game state", () => {
         nearWinFeedbackEnabled: overrides.nearWinFeedbackEnabled ?? true,
         coWinnerWindowMs: overrides.coWinnerWindowMs ?? 2_000,
         clock,
-        randomBytes: (length) => new Uint8Array(randomBytes(length)),
+        randomBytes: overrides.randomBytes ?? ((length) => new Uint8Array(randomBytes(length))),
         nextId: overrides.nextId ?? ((prefix) => `${prefix}-${randomUUID()}`),
       },
     });
@@ -5502,6 +5503,266 @@ describeDatabase("PostgreSQL durable game state", () => {
     expect(restored?.commandResults).toHaveLength(6);
   });
 
+  test("freezes every pre-start participant into one replay-safe first-round deal", async () => {
+    const occurredAt = new Date("2026-07-27T20:00:00.000Z");
+    let randomizationAllowed = true;
+    const connection = await connectWithRoundCommands(() => occurredAt, {
+      randomBytes: (length) => {
+        if (!randomizationAllowed) throw new Error("First-round replay regenerated private state.");
+        return new Uint8Array(randomBytes(length));
+      },
+    });
+    const initial = createLobbyState();
+    const state: DurableLobbyState = {
+      ...initial,
+      lobby: {
+        ...initial.lobby,
+        status: "waiting",
+        pendingPatternId: "standard-two-lines",
+        pendingCallMode: "automatic",
+        pendingCallIntervalSeconds: 30,
+        lastEventSequence: 0n,
+      },
+      round: null,
+      events: [],
+      commandResults: [],
+    };
+    await createPersistedLobby(connection, state);
+    const command = StartRoundCommandSchema.parse({
+      schemaVersion: 1,
+      type: "start-round",
+      commandId: `first-start-${randomUUID()}`,
+    });
+    const execute = () =>
+      connection.roundCommands.execute({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: state.sessions[0]!.tokenHash,
+        command,
+      });
+
+    const committed = await execute();
+    const afterCommit = await connection.lobbyStates.findById(state.lobby.id);
+    randomizationAllowed = false;
+    const replayed = await execute();
+    const afterReplay = await connection.lobbyStates.findById(state.lobby.id);
+
+    expect(committed).toMatchObject({
+      ok: true,
+      acknowledgement: {
+        commandId: command.commandId,
+        scope: "active-lobby",
+        eventSequence: 1,
+        occurredAt,
+        idempotentReplay: false,
+      },
+      activeLobbyEvent: {
+        type: "stage",
+        eventSequence: 1,
+        round: {
+          stage: "active",
+          patternId: "standard-two-lines",
+          callConfiguration: { mode: "automatic", intervalSeconds: 30 },
+          startedAt: occurredAt.toISOString(),
+        },
+      },
+      participantPrivateEvents: [],
+    });
+    expect(replayed).toMatchObject({
+      ok: true,
+      acknowledgement: { eventSequence: 1, occurredAt, idempotentReplay: true },
+      activeLobbyEvent: null,
+      participantPrivateEvents: [],
+    });
+    expect(afterCommit).toEqual(afterReplay);
+    expect(afterCommit).toMatchObject({
+      lobby: {
+        status: "active",
+        pendingPatternId: null,
+        pendingCallMode: null,
+        pendingCallIntervalSeconds: null,
+        lastEventSequence: 1n,
+      },
+      round: {
+        stage: "active",
+        initialPatternId: "standard-two-lines",
+        currentPatternId: "standard-two-lines",
+        callMode: "automatic",
+        callIntervalSeconds: 30,
+        createdAt: occurredAt,
+        startedAt: occurredAt,
+        activeAt: occurredAt,
+        nextCallAt: new Date("2026-07-27T20:00:30.000Z"),
+        calls: [],
+        coWinners: [],
+      },
+      events: [expect.objectContaining({ sequence: 1n, eventType: "stage" })],
+      commandResults: [
+        expect.objectContaining({
+          commandId: command.commandId,
+          roundId: afterCommit?.round?.id,
+          commandType: "start-round",
+          eventSequence: 1n,
+        }),
+      ],
+    });
+    expect(afterCommit?.round?.drawOrder).toHaveLength(75);
+    expect(new Set(afterCommit?.round?.drawOrder.map(({ ball }) => ball))).toEqual(
+      new Set(Array.from({ length: 75 }, (_, index) => index + 1)),
+    );
+    expect(afterCommit?.round?.cards.map(({ participantId }) => participantId).sort()).toEqual(
+      state.participants.map(({ id }) => id).sort(),
+    );
+    expect(new Set(afterCommit?.round?.cards.map(({ cells }) => cells.join(","))).size).toBe(2);
+
+    const serializedEvent = JSON.stringify(committed.ok ? committed.activeLobbyEvent : null);
+    expect(serializedEvent).not.toMatch(
+      /"(?:cards|cells|drawOrder|drawPositions|sessions|tokenHash|commandResults)"/,
+    );
+    for (const card of afterCommit?.round?.cards ?? []) {
+      expect(serializedEvent).not.toContain(card.id);
+    }
+    for (const [index, session] of state.sessions.entries()) {
+      const snapshot = await connection.lobbyStates.findAuthorizedSnapshot({
+        lobbyId: state.lobby.id,
+        tokenHash: session.tokenHash,
+      });
+      expect(snapshot).toMatchObject({
+        self: { id: state.participants[index]!.id, roundEligibility: "playing" },
+        ownCard: { participantId: state.participants[index]!.id },
+        ownMarks: [],
+      });
+      const serializedSnapshot = JSON.stringify(snapshot);
+      for (const foreignCard of afterCommit?.round?.cards.filter(
+        ({ participantId }) => participantId !== state.participants[index]!.id,
+      ) ?? []) {
+        expect(serializedSnapshot).not.toContain(foreignCard.id);
+      }
+      expect(serializedSnapshot).not.toMatch(/drawOrder|drawPositions|commandResults|tokenHash/);
+    }
+
+    const lateSuffix = randomUUID();
+    const lateTokenHash = new Uint8Array(randomBytes(32));
+    const lateJoin = await connection.lobbyStates.joinLobbyWithSession({
+      lobbyId: state.lobby.id,
+      lobbyCode: state.lobby.code,
+      participantId: `participant-after-start-${lateSuffix}`,
+      sessionId: `session-after-start-${lateSuffix}`,
+      commandId: `join-after-start-${lateSuffix}`,
+      username: "After Start Player",
+      tokenHash: lateTokenHash,
+      issuedAt: new Date(occurredAt.getTime() + 1),
+      maxPlayersPerLobby: 3,
+    });
+    if (!lateJoin.ok) throw new Error(lateJoin.error.message);
+    expect(lateJoin.entry.roundEligibility).toBe("waiting");
+    await expect(
+      connection.lobbyStates.findAuthorizedSnapshot({
+        lobbyId: state.lobby.id,
+        tokenHash: lateTokenHash,
+      }),
+    ).resolves.toMatchObject({
+      self: { id: lateJoin.entry.participantId, roundEligibility: "waiting" },
+      ownCard: null,
+      ownMarks: [],
+    });
+    const afterLateJoin = await connection.lobbyStates.findById(state.lobby.id);
+    expect(afterLateJoin?.round?.cards.map(({ participantId }) => participantId)).not.toContain(
+      lateJoin.entry.participantId,
+    );
+  });
+
+  test.each(["join-first", "start-first"] as const)(
+    "serializes a concurrent first-round start with a %s participant admission",
+    async (order) => {
+      const occurredAt = new Date("2026-07-27T20:05:00.000Z");
+      const setupConnection = await connectWithRoundCommands(() => occurredAt);
+      const commandConnection = await connectWithRoundCommands(() => occurredAt);
+      const joinConnection = await connectWithRoundCommands(() => occurredAt);
+      const initial = createLobbyState();
+      const state: DurableLobbyState = {
+        ...initial,
+        lobby: {
+          ...initial.lobby,
+          status: "waiting",
+          pendingPatternId: "standard-one-line",
+          pendingCallMode: "manual",
+          pendingCallIntervalSeconds: null,
+          lastEventSequence: 0n,
+        },
+        round: null,
+        events: [],
+        commandResults: [],
+      };
+      await createPersistedLobby(setupConnection, state);
+      const suffix = randomUUID();
+      const joiningParticipantId = `participant-concurrent-start-${suffix}`;
+      const start = () =>
+        commandConnection.roundCommands.execute({
+          lobbyId: state.lobby.id,
+          sessionTokenHash: state.sessions[0]!.tokenHash,
+          command: StartRoundCommandSchema.parse({
+            schemaVersion: 1,
+            type: "start-round",
+            commandId: `concurrent-first-start-${suffix}`,
+          }),
+        });
+      const join = () =>
+        joinConnection.lobbyStates.joinLobbyWithSession({
+          lobbyId: state.lobby.id,
+          lobbyCode: state.lobby.code,
+          participantId: joiningParticipantId,
+          sessionId: `session-concurrent-start-${suffix}`,
+          commandId: `join-concurrent-start-${suffix}`,
+          username: "Concurrent Start Player",
+          tokenHash: new Uint8Array(randomBytes(32)),
+          issuedAt: occurredAt,
+          maxPlayersPerLobby: 3,
+        });
+      const blocker = await pool.connect();
+      let transactionOpen = false;
+      const operations: Promise<unknown>[] = [];
+
+      try {
+        await blocker.query("BEGIN");
+        transactionOpen = true;
+        await blocker.query(`SELECT id FROM lobbies WHERE id = $1 FOR UPDATE`, [state.lobby.id]);
+        operations.push(order === "join-first" ? join() : start());
+        await waitForBlockedCommandFences(1);
+        operations.push(order === "join-first" ? start() : join());
+        await waitForBlockedCommandFences(2);
+        await blocker.query("ROLLBACK");
+        transactionOpen = false;
+        const results = await Promise.all(operations);
+        expect(results).toEqual([
+          expect.objectContaining({ ok: true }),
+          expect.objectContaining({ ok: true }),
+        ]);
+      } finally {
+        if (transactionOpen) await blocker.query("ROLLBACK").catch(() => undefined);
+        blocker.release();
+        await Promise.allSettled(operations);
+      }
+
+      const restored = await setupConnection.lobbyStates.findById(state.lobby.id);
+      const participant = restored?.participants.find(({ id }) => id === joiningParticipantId);
+      const hasCard = restored?.round?.cards.some(
+        ({ participantId }) => participantId === joiningParticipantId,
+      );
+      expect(restored?.round?.stage).toBe("active");
+      expect(participant?.roundEligibility).toBe(order === "join-first" ? "playing" : "waiting");
+      expect(hasCard).toBe(order === "join-first");
+      expect(
+        restored?.round?.cards.every((card) =>
+          restored.participants.some(
+            (candidate) =>
+              candidate.id === card.participantId && candidate.roundEligibility === "playing",
+          ),
+        ),
+      ).toBe(true);
+    },
+    15_000,
+  );
+
   test("recovers and commits automatic call leases exactly once", async () => {
     let now = new Date("2026-07-17T09:15:00.000Z");
     const connection = await connectWithRoundCommands(() => now);
@@ -5920,40 +6181,64 @@ describeDatabase("PostgreSQL durable game state", () => {
     },
   );
 
-  test("rolls back round state when unique card persistence fails", async () => {
-    const occurredAt = new Date("2026-07-17T09:15:45.000Z");
-    const connection = await connectWithRoundCommands(() => occurredAt, {
-      nextId: (prefix) => (prefix === "card" ? "duplicate-card-id" : `${prefix}-${randomUUID()}`),
-    });
-    const initial = createLobbyState();
-    const state: DurableLobbyState = {
-      ...initial,
-      lobby: { ...initial.lobby, status: "waiting", lastEventSequence: 0n },
-      round: null,
-      events: [],
-      commandResults: [],
-    };
-    await createPersistedLobby(connection, state);
+  test.each(["create-round", "start-round"] as const)(
+    "rolls back %s state when unique card persistence fails",
+    async (commandType) => {
+      const occurredAt = new Date("2026-07-17T09:15:45.000Z");
+      const connection = await connectWithRoundCommands(() => occurredAt, {
+        nextId: (prefix) => (prefix === "card" ? "duplicate-card-id" : `${prefix}-${randomUUID()}`),
+      });
+      const initial = createLobbyState();
+      const state: DurableLobbyState = {
+        ...initial,
+        lobby: {
+          ...initial.lobby,
+          status: "waiting",
+          pendingPatternId: "standard-one-line",
+          pendingCallMode: "manual",
+          pendingCallIntervalSeconds: null,
+          lastEventSequence: 0n,
+        },
+        round: null,
+        events: [],
+        commandResults: [],
+      };
+      await createPersistedLobby(connection, state);
+      const command =
+        commandType === "create-round"
+          ? CreateRoundCommandSchema.parse({
+              schemaVersion: 1,
+              type: commandType,
+              commandId: `create-rollback-${randomUUID()}`,
+            })
+          : StartRoundCommandSchema.parse({
+              schemaVersion: 1,
+              type: commandType,
+              commandId: `start-rollback-${randomUUID()}`,
+            });
 
-    await expect(
-      connection.roundCommands.execute({
-        lobbyId: state.lobby.id,
-        sessionTokenHash: state.sessions[0]!.tokenHash,
-        command: CreateRoundCommandSchema.parse({
-          schemaVersion: 1,
-          type: "create-round",
-          commandId: `create-rollback-${randomUUID()}`,
+      await expect(
+        connection.roundCommands.execute({
+          lobbyId: state.lobby.id,
+          sessionTokenHash: state.sessions[0]!.tokenHash,
+          command,
         }),
-      }),
-    ).rejects.toThrow();
+      ).rejects.toThrow();
 
-    await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toMatchObject({
-      lobby: { status: "waiting", lastEventSequence: 0n },
-      round: null,
-      events: [],
-      commandResults: [],
-    });
-  });
+      await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toMatchObject({
+        lobby: {
+          status: "waiting",
+          pendingPatternId: "standard-one-line",
+          pendingCallMode: "manual",
+          pendingCallIntervalSeconds: null,
+          lastEventSequence: 0n,
+        },
+        round: null,
+        events: [],
+        commandResults: [],
+      });
+    },
+  );
 
   test("queues an active-round join without letting their absence block current play", async () => {
     let now = new Date("2026-07-17T09:16:00.000Z");
@@ -6729,6 +7014,64 @@ describeDatabase("PostgreSQL durable game state", () => {
           schemaVersion: 1,
           type: "create-round",
           commandId: `replacement-after-expiry-${randomUUID()}`,
+        }),
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    const restored = await connection.lobbyStates.findById(state.lobby.id);
+
+    expect(restored?.participants.find(({ id }) => id === player.id)).toMatchObject({
+      departedAt: rejoinUntil,
+    });
+    expect(restored?.sessions.find(({ id }) => id === playerSession.id)).toMatchObject({
+      status: "departed",
+      departedAt: rejoinUntil,
+    });
+    expect(restored?.round?.cards.map(({ participantId }) => participantId)).toEqual([
+      initial.participants[0]!.id,
+    ]);
+  });
+
+  test("expires due participant sessions before freezing the first-round roster", async () => {
+    const occurredAt = new Date("2026-07-27T20:10:00.000Z");
+    const rejoinUntil = new Date("2026-07-27T20:09:00.000Z");
+    const connection = await connectWithRoundCommands(() => occurredAt);
+    const initial = createLobbyState();
+    const player = initial.participants[1]!;
+    const playerSession = initial.sessions[1]!;
+    const state: DurableLobbyState = {
+      ...initial,
+      lobby: {
+        ...initial.lobby,
+        status: "waiting",
+        pendingPatternId: "standard-one-line",
+        pendingCallMode: "manual",
+        pendingCallIntervalSeconds: null,
+        lastEventSequence: 0n,
+      },
+      sessions: initial.sessions.map((session) =>
+        session.id === playerSession.id
+          ? {
+              ...session,
+              status: "disconnected",
+              disconnectedAt: new Date("2026-07-27T20:07:00.000Z"),
+              rejoinUntil,
+            }
+          : session,
+      ),
+      round: null,
+      events: [],
+      commandResults: [],
+    };
+    await createPersistedLobby(connection, state);
+
+    await expect(
+      connection.roundCommands.execute({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: state.sessions[0]!.tokenHash,
+        command: StartRoundCommandSchema.parse({
+          schemaVersion: 1,
+          type: "start-round",
+          commandId: `first-start-after-expiry-${randomUUID()}`,
         }),
       }),
     ).resolves.toMatchObject({ ok: true });

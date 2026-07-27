@@ -1030,7 +1030,7 @@
         "Typecheck passes."
       ],
       "priority": 65,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @backend-developer, @test-automator. Implementation notes: The first start must be one authoritative transaction; do not expose a race between dealing and starting, move card assignment into the browser, or weaken waiting-participant privacy."
     },
     {

@@ -133,7 +133,12 @@ invalid counts, timestamps, or durations.
   lobby before a round exists. Create-lobby replay compares immutable setup
   intent, no-round configure commits under the lobby fence, and actor-scoped
   no-round snapshots project pending setup plus the roster without card, mark,
-  call, winner, draw-order, event-history, or credential data.
+  call, winner, draw-order, event-history, or credential data. First start
+  expires due sessions, freezes every eligible participant visible under that
+  fence, consumes pending setup, deals private state, and creates the active
+  round in one commit. A concurrent join is therefore either playing with a
+  card or waiting without one; its initial pre-realtime absence does not block
+  the first roster freeze.
 - Persist canonical command intent with idempotent results so reusing a command
   ID with changed configuration, pattern, ball, or action is rejected. Resolve
   the active session, actor role, current round, and own card inside the same
