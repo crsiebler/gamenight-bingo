@@ -1,0 +1,24 @@
+{
+  "name": "@gamenight-bingo/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@gamenight-bingo/contracts": "workspace:*",
+    "@gamenight-bingo/database": "workspace:*",
+    "@gamenight-bingo/domain": "workspace:*",
+    "@gamenight-bingo/patterns": "workspace:*",
+    "@gamenight-bingo/themes": "workspace:*",
+    "@gamenight-bingo/ui": "workspace:*",
+    "next": "16.2.9",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "socket.io-client": "4.8.3"
+  },
+  "scripts": {
+    "build": "next build --webpack",
+    "dev": "next dev --webpack",
+    "start": "next start",
+    "typecheck": "tsc --project tsconfig.json --pretty false"
+  }
+}

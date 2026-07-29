@@ -1,0 +1,360 @@
+<!doctype html>
+<!-- prettier-ignore -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GameNight Bingo shape pattern previews</title>
+<style>
+:root { color-scheme: light; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #f3eddf; color: #17233b; }
+* { box-sizing: border-box; }
+body { margin: 0; background: linear-gradient(135deg, #f3eddf 0%, #f3eddf 55%, #d9e7e3 100%); }
+.page-header { padding: clamp(2rem, 7vw, 5rem) clamp(1rem, 4vw, 4rem); border-bottom: 4px solid #17233b; }
+.page-header p { max-width: 68ch; line-height: 1.6; }
+h1, h2, p { margin-top: 0; }
+h1 { max-width: 13ch; font-family: Georgia, serif; font-size: clamp(2.5rem, 8vw, 6rem); line-height: .9; letter-spacing: -.04em; }
+.gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); gap: 1.25rem; padding: clamp(1rem, 4vw, 4rem); }
+.pattern-card { min-width: 0; padding: 1.25rem; border: 2px solid #17233b; border-radius: .35rem; background: #fffdf7; box-shadow: .4rem .4rem 0 #17233b; }
+.pattern-card header { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; border-bottom: 1px solid #17233b; }
+.pattern-card h2 { font-family: Georgia, serif; font-size: 1.65rem; }
+.eyebrow { color: #9c3d2f; font-size: .75rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+dl { margin: 1rem 0; }
+dl div { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: .5rem; margin: .35rem 0; }
+dt { font-weight: 800; }
+dd { margin: 0; overflow-wrap: anywhere; }
+.thumbnails { display: grid; gap: 1rem; }
+figure { margin: 0; padding: 1rem; border: 1px solid #17233b; background: #f8f2e6; }
+figcaption { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem; margin-bottom: .75rem; }
+figcaption span { color: #9c3d2f; font-size: .75rem; font-weight: 800; text-transform: uppercase; }
+.example-note { font-size: .8rem; line-height: 1.4; }
+.mask-grid { width: max-content; max-width: 100%; margin: 0 auto .75rem; padding: .65rem .8rem; border: 2px solid #17233b; background: #ef6f55; color: #17233b; font-size: clamp(1.5rem, 8vw, 2.25rem); font-weight: 900; line-height: 1.05; letter-spacing: .18em; text-align: center; }
+.mask-code { display: block; overflow-wrap: anywhere; text-align: center; }
+@media (forced-colors: active) { .mask-grid { outline: 3px solid CanvasText; outline-offset: -6px; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }
+</style>
+</head>
+<body>
+<header class="page-header"><p class="eyebrow">Canonical review sheet</p><h1>Shape pattern previews</h1><p>Generated from the versioned runtime catalog. Each thumbnail preserves its source orientation; # marks a required cell and . marks another cell. The free center is always satisfied during play.</p></header>
+<main class="gallery"><article class="pattern-card" data-pattern-preview data-pattern-id="standard-two-lines" data-mode="two-lines">
+<header><p class="eyebrow" data-pattern-mode>two-lines</p><h2>Two Lines</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>standard-two-lines</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d02">
+<figcaption><strong>p1/d02</strong><span>flexible-rule-example</span></figcaption>
+<p class="example-note">Flexible-rule example, not the complete Two Lines rule.</p><pre class="mask-grid" role="img" data-mask="#####/#..../#..../#..../#...." aria-label="Two Lines, flexible-rule-example, p1/d02. Required cells use # and other cells use period.">#####
+#....
+#....
+#....
+#....</pre>
+<code class="mask-code">#####/#..../#..../#..../#....</code>
+</figure>
+<figure data-thumbnail data-reference="p1/d25">
+<figcaption><strong>p1/d25</strong><span>flexible-rule-example</span></figcaption>
+<p class="example-note">Flexible-rule example, not the complete Two Lines rule.</p><pre class="mask-grid" role="img" data-mask=".#.#./.#.#./.#.#./.#.#./.#.#." aria-label="Two Lines, flexible-rule-example, p1/d25. Required cells use # and other cells use period.">.#.#.
+.#.#.
+.#.#.
+.#.#.
+.#.#.</pre>
+<code class="mask-code">.#.#./.#.#./.#.#./.#.#./.#.#.</code>
+</figure></div>
+</article>
+<article class="pattern-card" data-pattern-preview data-pattern-id="standard-blackout" data-mode="blackout">
+<header><p class="eyebrow" data-pattern-mode>blackout</p><h2>Blackout</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>standard-blackout</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div><div><dt>Source alias</dt><dd>Full House</dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d06">
+<figcaption><strong>p1/d06</strong><span>source-alias</span></figcaption>
+<pre class="mask-grid" role="img" data-mask="#####/#####/#####/#####/#####" aria-label="Blackout, source-alias, p1/d06. Required cells use # and other cells use period.">#####
+#####
+#####
+#####
+#####</pre>
+<code class="mask-code">#####/#####/#####/#####/#####</code>
+</figure></div>
+</article>
+<article class="pattern-card" data-pattern-preview data-pattern-id="shape-bunny-ears" data-mode="exact">
+<header><p class="eyebrow" data-pattern-mode>exact</p><h2>Bunny Ears</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>shape-bunny-ears</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d01">
+<figcaption><strong>p1/d01</strong><span>exact</span></figcaption>
+<pre class="mask-grid" role="img" data-mask=".###./#.#.#/#.#.#/#.#.#/#.#.#" aria-label="Bunny Ears, exact, p1/d01. Required cells use # and other cells use period.">.###.
+#.#.#
+#.#.#
+#.#.#
+#.#.#</pre>
+<code class="mask-code">.###./#.#.#/#.#.#/#.#.#/#.#.#</code>
+</figure></div>
+</article>
+<article class="pattern-card" data-pattern-preview data-pattern-id="shape-four-corners" data-mode="exact">
+<header><p class="eyebrow" data-pattern-mode>exact</p><h2>Four Corners</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>shape-four-corners</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d03">
+<figcaption><strong>p1/d03</strong><span>exact</span></figcaption>
+<pre class="mask-grid" role="img" data-mask="#...#/...../...../...../#...#" aria-label="Four Corners, exact, p1/d03. Required cells use # and other cells use period.">#...#
+.....
+.....
+.....
+#...#</pre>
+<code class="mask-code">#...#/...../...../...../#...#</code>
+</figure></div>
+</article>
+<article class="pattern-card" data-pattern-preview data-pattern-id="shape-windmill" data-mode="exact">
+<header><p class="eyebrow" data-pattern-mode>exact</p><h2>Windmill</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>shape-windmill</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d04">
+<figcaption><strong>p1/d04</strong><span>exact</span></figcaption>
+<pre class="mask-grid" role="img" data-mask="##.##/##.##/..#../##.##/##.##" aria-label="Windmill, exact, p1/d04. Required cells use # and other cells use period.">##.##
+##.##
+..#..
+##.##
+##.##</pre>
+<code class="mask-code">##.##/##.##/..#../##.##/##.##</code>
+</figure></div>
+</article>
+<article class="pattern-card" data-pattern-preview data-pattern-id="shape-outside-edge" data-mode="exact">
+<header><p class="eyebrow" data-pattern-mode>exact</p><h2>Outside Edge</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>shape-outside-edge</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d05">
+<figcaption><strong>p1/d05</strong><span>exact</span></figcaption>
+<pre class="mask-grid" role="img" data-mask="#####/#...#/#...#/#...#/#####" aria-label="Outside Edge, exact, p1/d05. Required cells use # and other cells use period.">#####
+#...#
+#...#
+#...#
+#####</pre>
+<code class="mask-code">#####/#...#/#...#/#...#/#####</code>
+</figure></div>
+</article>
+<article class="pattern-card" data-pattern-preview data-pattern-id="shape-airplane" data-mode="exact">
+<header><p class="eyebrow" data-pattern-mode>exact</p><h2>Airplane</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>shape-airplane</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d07">
+<figcaption><strong>p1/d07</strong><span>exact</span></figcaption>
+<pre class="mask-grid" role="img" data-mask="...#./#..#./#####/#..#./...#." aria-label="Airplane, exact, p1/d07. Required cells use # and other cells use period.">...#.
+#..#.
+#####
+#..#.
+...#.</pre>
+<code class="mask-code">...#./#..#./#####/#..#./...#.</code>
+</figure></div>
+</article>
+<article class="pattern-card" data-pattern-preview data-pattern-id="shape-wine-glass" data-mode="exact">
+<header><p class="eyebrow" data-pattern-mode>exact</p><h2>Wine Glass</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>shape-wine-glass</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d08">
+<figcaption><strong>p1/d08</strong><span>exact</span></figcaption>
+<pre class="mask-grid" role="img" data-mask="#####/.###./..#../..#../.###." aria-label="Wine Glass, exact, p1/d08. Required cells use # and other cells use period.">#####
+.###.
+..#..
+..#..
+.###.</pre>
+<code class="mask-code">#####/.###./..#../..#../.###.</code>
+</figure></div>
+</article>
+<article class="pattern-card" data-pattern-preview data-pattern-id="shape-x" data-mode="exact">
+<header><p class="eyebrow" data-pattern-mode>exact</p><h2>X</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>shape-x</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d09">
+<figcaption><strong>p1/d09</strong><span>exact</span></figcaption>
+<pre class="mask-grid" role="img" data-mask="#...#/.#.#./..#../.#.#./#...#" aria-label="X, exact, p1/d09. Required cells use # and other cells use period.">#...#
+.#.#.
+..#..
+.#.#.
+#...#</pre>
+<code class="mask-code">#...#/.#.#./..#../.#.#./#...#</code>
+</figure></div>
+</article>
+<article class="pattern-card" data-pattern-preview data-pattern-id="shape-turtle" data-mode="exact">
+<header><p class="eyebrow" data-pattern-mode>exact</p><h2>Turtle</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>shape-turtle</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d10">
+<figcaption><strong>p1/d10</strong><span>exact</span></figcaption>
+<pre class="mask-grid" role="img" data-mask="..#../#####/.###./.###./#...#" aria-label="Turtle, exact, p1/d10. Required cells use # and other cells use period.">..#..
+#####
+.###.
+.###.
+#...#</pre>
+<code class="mask-code">..#../#####/.###./.###./#...#</code>
+</figure></div>
+</article>
+<article class="pattern-card" data-pattern-preview data-pattern-id="shape-stairs" data-mode="exact">
+<header><p class="eyebrow" data-pattern-mode>exact</p><h2>Stairs</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>shape-stairs</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d11">
+<figcaption><strong>p1/d11</strong><span>exact</span></figcaption>
+<pre class="mask-grid" role="img" data-mask="....#/...##/..###/.####/#####" aria-label="Stairs, exact, p1/d11. Required cells use # and other cells use period.">....#
+...##
+..###
+.####
+#####</pre>
+<code class="mask-code">....#/...##/..###/.####/#####</code>
+</figure></div>
+</article>
+<article class="pattern-card" data-pattern-preview data-pattern-id="shape-bow-tie" data-mode="exact">
+<header><p class="eyebrow" data-pattern-mode>exact</p><h2>Bow Tie</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>shape-bow-tie</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d12">
+<figcaption><strong>p1/d12</strong><span>exact</span></figcaption>
+<pre class="mask-grid" role="img" data-mask="...../##.##/#####/##.##/....." aria-label="Bow Tie, exact, p1/d12. Required cells use # and other cells use period.">.....
+##.##
+#####
+##.##
+.....</pre>
+<code class="mask-code">...../##.##/#####/##.##/.....</code>
+</figure></div>
+</article>
+<article class="pattern-card" data-pattern-preview data-pattern-id="shape-cross" data-mode="exact">
+<header><p class="eyebrow" data-pattern-mode>exact</p><h2>Cross</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>shape-cross</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d13">
+<figcaption><strong>p1/d13</strong><span>exact</span></figcaption>
+<pre class="mask-grid" role="img" data-mask="..#../#####/..#../..#../..#.." aria-label="Cross, exact, p1/d13. Required cells use # and other cells use period.">..#..
+#####
+..#..
+..#..
+..#..</pre>
+<code class="mask-code">..#../#####/..#../..#../..#..</code>
+</figure></div>
+</article>
+<article class="pattern-card" data-pattern-preview data-pattern-id="shape-plus" data-mode="exact">
+<header><p class="eyebrow" data-pattern-mode>exact</p><h2>Plus</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>shape-plus</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d14">
+<figcaption><strong>p1/d14</strong><span>exact</span></figcaption>
+<pre class="mask-grid" role="img" data-mask="..#../..#../#####/..#../..#.." aria-label="Plus, exact, p1/d14. Required cells use # and other cells use period.">..#..
+..#..
+#####
+..#..
+..#..</pre>
+<code class="mask-code">..#../..#../#####/..#../..#..</code>
+</figure></div>
+</article>
+<article class="pattern-card" data-pattern-preview data-pattern-id="shape-rectangle" data-mode="exact">
+<header><p class="eyebrow" data-pattern-mode>exact</p><h2>Rectangle</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>shape-rectangle</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d15">
+<figcaption><strong>p1/d15</strong><span>exact</span></figcaption>
+<pre class="mask-grid" role="img" data-mask="...../#####/#...#/#####/....." aria-label="Rectangle, exact, p1/d15. Required cells use # and other cells use period.">.....
+#####
+#...#
+#####
+.....</pre>
+<code class="mask-code">...../#####/#...#/#####/.....</code>
+</figure></div>
+</article>
+<article class="pattern-card" data-pattern-preview data-pattern-id="shape-heart" data-mode="exact">
+<header><p class="eyebrow" data-pattern-mode>exact</p><h2>Heart</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>shape-heart</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d16">
+<figcaption><strong>p1/d16</strong><span>exact</span></figcaption>
+<pre class="mask-grid" role="img" data-mask=".#.#./#####/#####/.###./..#.." aria-label="Heart, exact, p1/d16. Required cells use # and other cells use period.">.#.#.
+#####
+#####
+.###.
+..#..</pre>
+<code class="mask-code">.#.#./#####/#####/.###./..#..</code>
+</figure></div>
+</article>
+<article class="pattern-card" data-pattern-preview data-pattern-id="shape-hat" data-mode="exact">
+<header><p class="eyebrow" data-pattern-mode>exact</p><h2>Hat</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>shape-hat</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d17">
+<figcaption><strong>p1/d17</strong><span>exact</span></figcaption>
+<pre class="mask-grid" role="img" data-mask="...../.###./.###./#####/....." aria-label="Hat, exact, p1/d17. Required cells use # and other cells use period.">.....
+.###.
+.###.
+#####
+.....</pre>
+<code class="mask-code">...../.###./.###./#####/.....</code>
+</figure></div>
+</article>
+<article class="pattern-card" data-pattern-preview data-pattern-id="shape-hour-glass" data-mode="exact">
+<header><p class="eyebrow" data-pattern-mode>exact</p><h2>Hour Glass</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>shape-hour-glass</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d18">
+<figcaption><strong>p1/d18</strong><span>exact</span></figcaption>
+<pre class="mask-grid" role="img" data-mask="#####/.###./..#../.###./#####" aria-label="Hour Glass, exact, p1/d18. Required cells use # and other cells use period.">#####
+.###.
+..#..
+.###.
+#####</pre>
+<code class="mask-code">#####/.###./..#../.###./#####</code>
+</figure></div>
+</article>
+<article class="pattern-card" data-pattern-preview data-pattern-id="shape-pyramid" data-mode="exact">
+<header><p class="eyebrow" data-pattern-mode>exact</p><h2>Pyramid</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>shape-pyramid</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d19">
+<figcaption><strong>p1/d19</strong><span>exact</span></figcaption>
+<pre class="mask-grid" role="img" data-mask="...../...../..#../.###./#####" aria-label="Pyramid, exact, p1/d19. Required cells use # and other cells use period.">.....
+.....
+..#..
+.###.
+#####</pre>
+<code class="mask-code">...../...../..#../.###./#####</code>
+</figure></div>
+</article>
+<article class="pattern-card" data-pattern-preview data-pattern-id="shape-checkerboard" data-mode="exact">
+<header><p class="eyebrow" data-pattern-mode>exact</p><h2>Checkerboard</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>shape-checkerboard</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d20">
+<figcaption><strong>p1/d20</strong><span>exact</span></figcaption>
+<pre class="mask-grid" role="img" data-mask="#.#.#/.#.#./#.#.#/.#.#./#.#.#" aria-label="Checkerboard, exact, p1/d20. Required cells use # and other cells use period.">#.#.#
+.#.#.
+#.#.#
+.#.#.
+#.#.#</pre>
+<code class="mask-code">#.#.#/.#.#./#.#.#/.#.#./#.#.#</code>
+</figure></div>
+</article>
+<article class="pattern-card" data-pattern-preview data-pattern-id="shape-inside-square" data-mode="exact">
+<header><p class="eyebrow" data-pattern-mode>exact</p><h2>Inside Square</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>shape-inside-square</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d21">
+<figcaption><strong>p1/d21</strong><span>exact</span></figcaption>
+<pre class="mask-grid" role="img" data-mask="...../.###./.###./.###./....." aria-label="Inside Square, exact, p1/d21. Required cells use # and other cells use period.">.....
+.###.
+.###.
+.###.
+.....</pre>
+<code class="mask-code">...../.###./.###./.###./.....</code>
+</figure></div>
+</article>
+<article class="pattern-card" data-pattern-preview data-pattern-id="shape-kite" data-mode="exact">
+<header><p class="eyebrow" data-pattern-mode>exact</p><h2>Kite</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>shape-kite</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d22">
+<figcaption><strong>p1/d22</strong><span>exact</span></figcaption>
+<pre class="mask-grid" role="img" data-mask="...##/...##/..#../.#.../#...." aria-label="Kite, exact, p1/d22. Required cells use # and other cells use period.">...##
+...##
+..#..
+.#...
+#....</pre>
+<code class="mask-code">...##/...##/..#../.#.../#....</code>
+</figure></div>
+</article>
+<article class="pattern-card" data-pattern-preview data-pattern-id="shape-smiley-face" data-mode="exact">
+<header><p class="eyebrow" data-pattern-mode>exact</p><h2>Smiley Face</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>shape-smiley-face</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d23">
+<figcaption><strong>p1/d23</strong><span>exact</span></figcaption>
+<pre class="mask-grid" role="img" data-mask="...../.#.#./..#../#...#/.###." aria-label="Smiley Face, exact, p1/d23. Required cells use # and other cells use period.">.....
+.#.#.
+..#..
+#...#
+.###.</pre>
+<code class="mask-code">...../.#.#./..#../#...#/.###.</code>
+</figure></div>
+</article>
+<article class="pattern-card" data-pattern-preview data-pattern-id="shape-block-of-nine" data-mode="exact">
+<header><p class="eyebrow" data-pattern-mode>exact</p><h2>Block of Nine</h2></header>
+<dl><div><dt>Stable ID</dt><dd><code>shape-block-of-nine</code></dd></div><div><dt>Source</dt><dd><code>docs/shapes-bingo-patterns.pdf</code></dd></div></dl>
+<div class="thumbnails"><figure data-thumbnail data-reference="p1/d24">
+<figcaption><strong>p1/d24</strong><span>exact</span></figcaption>
+<pre class="mask-grid" role="img" data-mask="###../###../###../...../....." aria-label="Block of Nine, exact, p1/d24. Required cells use # and other cells use period.">###..
+###..
+###..
+.....
+.....</pre>
+<code class="mask-code">###../###../###../...../.....</code>
+</figure></div>
+</article></main>
+</body>
+</html>

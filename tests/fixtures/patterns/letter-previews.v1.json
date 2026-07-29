@@ -1,0 +1,402 @@
+[
+  {
+    "id": "letter-a",
+    "name": "A",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d01",
+        "classification": "exact",
+        "mask": "#####/#...#/#####/#...#/#...#"
+      }
+    ]
+  },
+  {
+    "id": "letter-b",
+    "name": "B",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d02",
+        "classification": "exact",
+        "mask": "####./#...#/####./#...#/####."
+      }
+    ]
+  },
+  {
+    "id": "letter-c",
+    "name": "C",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d03",
+        "classification": "exact",
+        "mask": "#####/#..../#..../#..../#####"
+      }
+    ]
+  },
+  {
+    "id": "letter-d",
+    "name": "D",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d04",
+        "classification": "exact",
+        "mask": "####./#...#/#...#/#...#/####."
+      }
+    ]
+  },
+  {
+    "id": "letter-e",
+    "name": "E",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d05",
+        "classification": "exact",
+        "mask": "#####/#..../####./#..../#####"
+      }
+    ]
+  },
+  {
+    "id": "letter-f",
+    "name": "F",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d06",
+        "classification": "exact",
+        "mask": "#####/#..../#####/#..../#...."
+      }
+    ]
+  },
+  {
+    "id": "letter-g",
+    "name": "G",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d07",
+        "classification": "exact",
+        "mask": "#####/#..../#.###/#...#/#####"
+      }
+    ]
+  },
+  {
+    "id": "letter-h",
+    "name": "H",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d08",
+        "classification": "exact",
+        "mask": "#...#/#...#/#####/#...#/#...#"
+      }
+    ]
+  },
+  {
+    "id": "letter-i",
+    "name": "I",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d09",
+        "classification": "exact",
+        "mask": "#####/..#../..#../..#../#####"
+      }
+    ]
+  },
+  {
+    "id": "letter-j",
+    "name": "J",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d10",
+        "classification": "exact",
+        "mask": "#####/....#/....#/....#/#####"
+      }
+    ]
+  },
+  {
+    "id": "letter-k",
+    "name": "K",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d11",
+        "classification": "exact",
+        "mask": "#...#/#..#./###../#..#./#...#"
+      }
+    ]
+  },
+  {
+    "id": "letter-l",
+    "name": "L",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d12",
+        "classification": "exact",
+        "mask": "#..../#..../#..../#..../#####"
+      }
+    ]
+  },
+  {
+    "id": "letter-m",
+    "name": "M",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d13",
+        "classification": "exact",
+        "mask": "#...#/##.##/#.#.#/#...#/#...#"
+      }
+    ]
+  },
+  {
+    "id": "letter-n",
+    "name": "N",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d14",
+        "classification": "exact",
+        "mask": "#...#/##..#/#.#.#/#..##/#...#"
+      }
+    ]
+  },
+  {
+    "id": "letter-o",
+    "name": "O",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d15",
+        "classification": "exact",
+        "mask": "#####/#...#/#...#/#...#/#####"
+      }
+    ]
+  },
+  {
+    "id": "letter-p",
+    "name": "P",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d16",
+        "classification": "exact",
+        "mask": "####./#...#/####./#..../#...."
+      }
+    ]
+  },
+  {
+    "id": "letter-q",
+    "name": "Q",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d17",
+        "classification": "exact",
+        "mask": "#####/#...#/#...#/#..##/#####"
+      }
+    ]
+  },
+  {
+    "id": "letter-r",
+    "name": "R",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d18",
+        "classification": "exact",
+        "mask": "####./#...#/####./#..#./#...#"
+      }
+    ]
+  },
+  {
+    "id": "letter-s",
+    "name": "S",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d19",
+        "classification": "exact",
+        "mask": "#####/#..../#####/....#/#####"
+      }
+    ]
+  },
+  {
+    "id": "letter-t",
+    "name": "T",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d20",
+        "classification": "exact",
+        "mask": "#####/..#../..#../..#../..#.."
+      }
+    ]
+  },
+  {
+    "id": "letter-u",
+    "name": "U",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d21",
+        "classification": "exact",
+        "mask": "#...#/#...#/#...#/#...#/#####"
+      }
+    ]
+  },
+  {
+    "id": "letter-v",
+    "name": "V",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d22",
+        "classification": "exact",
+        "mask": "#...#/#...#/.#.#./.#.#./..#.."
+      }
+    ]
+  },
+  {
+    "id": "letter-w",
+    "name": "W",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d23",
+        "classification": "exact",
+        "mask": "#...#/#...#/#.#.#/##.##/#...#"
+      }
+    ]
+  },
+  {
+    "id": "letter-x",
+    "name": "X",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d24",
+        "classification": "exact",
+        "mask": "#...#/.#.#./..#../.#.#./#...#"
+      }
+    ]
+  },
+  {
+    "id": "letter-y",
+    "name": "Y",
+    "mode": "exact",
+    "source": {
+      "file": "letter-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d25",
+        "classification": "exact",
+        "mask": "#...#/.#.#./..#../..#../..#.."
+      }
+    ]
+  }
+]

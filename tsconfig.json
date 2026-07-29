@@ -1,0 +1,32 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "paths": {
+      "@": ["./apps/web/src/ui.ts"],
+      "@/*": ["./apps/web/src/*"],
+      "@/atoms": ["./apps/web/src/components/atoms/index.ts"],
+      "@/atoms/*": ["./apps/web/src/components/atoms/*"],
+      "@/lib": ["./apps/web/src/lib/index.ts"],
+      "@/lib/*": ["./apps/web/src/lib/*"],
+      "@/molecules": ["./apps/web/src/components/molecules/index.ts"],
+      "@/molecules/*": ["./apps/web/src/components/molecules/*"],
+      "@/organisms": ["./apps/web/src/components/organisms/index.ts"],
+      "@/organisms/*": ["./apps/web/src/components/organisms/*"],
+      "@/templates": ["./apps/web/src/components/templates/index.ts"],
+      "@/templates/*": ["./apps/web/src/components/templates/*"]
+    },
+    "types": ["node"]
+  },
+  "include": [
+    "apps/*/src/**/*",
+    "packages/*/src/**/*",
+    "scripts/run-single-instance-load.ts",
+    "tests/**/*.ts",
+    "tests/**/*.tsx",
+    "*.config.ts"
+  ],
+  "exclude": ["tests/fixtures/quality/**/*"]
+}

@@ -1,0 +1,322 @@
+[
+  {
+    "id": "number-0",
+    "name": "0",
+    "mode": "exact",
+    "source": {
+      "file": "number-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d01",
+        "classification": "exact",
+        "mask": ".###./#..##/#.#.#/##..#/.###."
+      }
+    ]
+  },
+  {
+    "id": "number-1",
+    "name": "1",
+    "mode": "exact",
+    "source": {
+      "file": "number-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d02",
+        "classification": "exact",
+        "mask": "..#../.##../..#../..#../.###."
+      }
+    ]
+  },
+  {
+    "id": "number-2",
+    "name": "2",
+    "mode": "exact",
+    "source": {
+      "file": "number-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d03",
+        "classification": "exact",
+        "mask": ".###./#...#/..##./.#.../#####"
+      }
+    ]
+  },
+  {
+    "id": "number-3",
+    "name": "3",
+    "mode": "exact",
+    "source": {
+      "file": "number-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d04",
+        "classification": "exact",
+        "mask": ".###./#...#/..##./#...#/.###."
+      }
+    ]
+  },
+  {
+    "id": "number-4",
+    "name": "4",
+    "mode": "exact",
+    "source": {
+      "file": "number-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d05",
+        "classification": "exact",
+        "mask": "#...#/#...#/#####/....#/....#"
+      }
+    ]
+  },
+  {
+    "id": "number-5",
+    "name": "5",
+    "mode": "exact",
+    "source": {
+      "file": "number-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d06",
+        "classification": "exact",
+        "mask": "#####/#..../####./....#/####."
+      }
+    ]
+  },
+  {
+    "id": "number-6",
+    "name": "6",
+    "mode": "exact",
+    "source": {
+      "file": "number-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d07",
+        "classification": "exact",
+        "mask": ".###./#..../####./#...#/.###."
+      }
+    ]
+  },
+  {
+    "id": "number-7",
+    "name": "7",
+    "mode": "exact",
+    "source": {
+      "file": "number-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d08",
+        "classification": "exact",
+        "mask": "#####/#...#/...#./..#../..#.."
+      }
+    ]
+  },
+  {
+    "id": "number-8",
+    "name": "8",
+    "mode": "exact",
+    "source": {
+      "file": "number-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d09",
+        "classification": "exact",
+        "mask": ".###./#...#/.###./#...#/.###."
+      }
+    ]
+  },
+  {
+    "id": "number-9",
+    "name": "9",
+    "mode": "exact",
+    "source": {
+      "file": "number-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d10",
+        "classification": "exact",
+        "mask": ".###./#...#/.####/....#/.###."
+      }
+    ]
+  },
+  {
+    "id": "number-10",
+    "name": "10",
+    "mode": "exact",
+    "source": {
+      "file": "number-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d11",
+        "classification": "exact",
+        "mask": "#.###/#.#.#/#.#.#/#.#.#/#.###"
+      }
+    ]
+  },
+  {
+    "id": "number-11",
+    "name": "11",
+    "mode": "exact",
+    "source": {
+      "file": "number-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d12",
+        "classification": "exact",
+        "mask": ".#..#/##.##/.#..#/.#..#/.#..#"
+      }
+    ]
+  },
+  {
+    "id": "number-12",
+    "name": "12",
+    "mode": "exact",
+    "source": {
+      "file": "number-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d13",
+        "classification": "exact",
+        "mask": "#.###/#...#/#.###/#.#../#.###"
+      }
+    ]
+  },
+  {
+    "id": "number-13",
+    "name": "13",
+    "mode": "exact",
+    "source": {
+      "file": "number-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d14",
+        "classification": "exact",
+        "mask": "#.###/#...#/#.###/#...#/#.###"
+      }
+    ]
+  },
+  {
+    "id": "number-14",
+    "name": "14",
+    "mode": "exact",
+    "source": {
+      "file": "number-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d15",
+        "classification": "exact",
+        "mask": "#.#.#/#.#.#/#.###/#...#/#...#"
+      }
+    ]
+  },
+  {
+    "id": "number-15",
+    "name": "15",
+    "mode": "exact",
+    "source": {
+      "file": "number-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d16",
+        "classification": "exact",
+        "mask": "#.###/#.#../#.###/#...#/#.###"
+      }
+    ]
+  },
+  {
+    "id": "number-16",
+    "name": "16",
+    "mode": "exact",
+    "source": {
+      "file": "number-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d17",
+        "classification": "exact",
+        "mask": "#.###/#.#../#.###/#.#.#/#.###"
+      }
+    ]
+  },
+  {
+    "id": "number-17",
+    "name": "17",
+    "mode": "exact",
+    "source": {
+      "file": "number-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d18",
+        "classification": "exact",
+        "mask": "#.###/#.#.#/#...#/#...#/#...#"
+      }
+    ]
+  },
+  {
+    "id": "number-18",
+    "name": "18",
+    "mode": "exact",
+    "source": {
+      "file": "number-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d19",
+        "classification": "exact",
+        "mask": "#.###/#.#.#/#.###/#.#.#/#.###"
+      }
+    ]
+  },
+  {
+    "id": "number-19",
+    "name": "19",
+    "mode": "exact",
+    "source": {
+      "file": "number-bingo-patterns.pdf",
+      "alias": null
+    },
+    "thumbnails": [
+      {
+        "reference": "p1/d20",
+        "classification": "exact",
+        "mask": "#.###/#.#.#/#.###/#...#/#...#"
+      }
+    ]
+  }
+]
