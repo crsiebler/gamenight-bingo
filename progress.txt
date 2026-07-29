@@ -1,13 +1,14 @@
 GameNight Bingo - Ralph Progress
 Branch: ralph/mark-order-independent-winner-attribution
 Source: tasks/prd-mark-order-independent-winner-attribution.md
-Completed: 0/5
-Next story: US-001
+Completed: 2/5
+Next story: US-003
 
 ## Codebase Patterns
 
 - Winner attribution remains server-authoritative and bound to the current latest call, but mark order must not affect eligibility.
 - Flexible-pattern attribution must inspect every canonical mask rather than relying only on the progress display's selected closest variation.
+- Database command adapters map the persisted latest called ball to the actor's card-cell index and pass `null`, never `-1`, when that ball is absent from the card.
 - Preserve the incomplete-to-complete transition check, serializable persistence, command idempotency, event sequencing, and persist-before-broadcast behavior.
 - No database migration, wire-contract change, retroactive winner reconstruction, or browser-only winner decision is in scope.
 
@@ -42,4 +43,36 @@ Next story: US-001
   - US-002 must map the persisted latest called ball to its card-cell index and integrate this helper while preserving the existing new-mark and incomplete-to-complete guards.
 - Next iteration start:
   - Begin US-002 with a database integration regression for marking the latest required ball before the older final required ball.
+---
+
+## 2026-07-29 16:21:13 MST - US-002
+- Integrated the pure latest-call attribution rule into authoritative mark execution without changing transaction, event, notification, or acknowledgement boundaries.
+- Added PostgreSQL regressions proving an older final mark opens the co-winner window in active and paused rounds when the latest required ball was marked first, with atomic persistence and replay checks.
+- Files changed: `packages/database/src/round-command-executor.ts`, `packages/database/src/database.integration.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-002 - Recognize the first mark-order-independent winner`
+- Auto approval: `enabled`
+- Checks:
+  - `TEST_DATABASE_URL='<approved-local-url>' bun run test:database -- -t 'opens the co-winner window from an older final mark'` (red: fail as expected because no winner notification was emitted; green: pass, 2 tests)
+  - `TEST_DATABASE_URL='<approved-local-url>' bun run test:database` (pass, 143 tests)
+  - `bun run typecheck` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (initial fail for one changed file; pass after formatting)
+  - `bun run test` (initial unrelated frontend timing failure; focused rerun passed; full rerun passed with 41 files passed, 1 skipped, 754 tests passed, 147 skipped)
+- Implementation agents:
+  - Recommended: `backend-developer`, `postgres-pro`
+  - Used: `backend-developer`; skipped `postgres-pro` because the existing repository, transaction, notification, and integration-test patterns were clear and one specialist fit the standard-mode implementation budget
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, `postgres-pro`
+  - Findings: fixed the blocking fixture chronology and replaced the replay notification sleep with an ordered PostgreSQL notification barrier; targeted QA and PostgreSQL re-reviews were clean, and a speculative sentinel-collision concern was discarded because a sequence-2 replay changes the compared durable counts while notification-only replay uses recorded sequence 1
+- Decisions (why):
+  - Replaced only command-ball equality with canonical latest-call attribution so existing new-mark, incomplete-to-complete, stage, and transactional guards remain explicit.
+  - Parameterized the database regression over active and paused stages because both share the same authoritative mutation path but must clear different prior stage metadata.
+  - Used an isolated worktree PostgreSQL 16 container on port 5433 because port 5432 was already occupied; scoped auto approval covered local startup and committed migrations.
+- **Learnings for future iterations:**
+  - Winner attribution helpers operate on canonical card-cell indexes, while database calls store balls; adapters must map the triggering call through the participant's own card.
+  - Active-event subscriptions can verify the committed event and notification boundary while direct table counts verify replay adds no durable marks, winners, events, or results.
+- Known issues / follow-ups:
+  - US-003 must apply the same triggering-call attribution to additional co-winners and continuation stages without broadening the exclusive deadline.
+- Next iteration start:
+  - Begin US-003 with a co-winner regression where the triggering latest ball is marked before an older final required ball.
 ---

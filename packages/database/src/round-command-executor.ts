@@ -24,6 +24,7 @@ import {
   PatternCardStateSchema,
   PatternDefinitionSchema,
   calculatePatternProgress,
+  isPatternCompletionAttributableToLatestCall,
   type PatternCardState,
   type PatternDefinition,
 } from "@gamenight-bingo/patterns";
@@ -1299,6 +1300,7 @@ async function executeMutation(
     });
     const priorMarkedBalls = new Set(card.marks.map(({ ball }) => ball));
     const markedBalls = new Set([...priorMarkedBalls, command.ball]);
+    const priorMarkedCells = card.cells.map((ball) => ball === 0 || priorMarkedBalls.has(ball));
     const progressInput = {
       calledCells: card.cells.map((ball) => ball === 0 || calledBalls.has(ball)),
       markedCells: card.cells.map((ball) => ball === 0 || markedBalls.has(ball)),
@@ -1307,7 +1309,7 @@ async function executeMutation(
     const progress = calculatePatternProgress(pattern, progressInput);
     const priorProgress = calculatePatternProgress(pattern, {
       calledCells: progressInput.calledCells,
-      markedCells: card.cells.map((ball) => ball === 0 || priorMarkedBalls.has(ball)),
+      markedCells: priorMarkedCells,
     });
     const requiredBall =
       progress.nearWinCellIndex === null ? null : card.cells[progress.nearWinCellIndex];
@@ -1328,12 +1330,18 @@ async function executeMutation(
         : []),
     ];
     const latestCall = calls.at(-1);
+    const latestCalledCellIndex =
+      latestCall === undefined ? -1 : card.cells.indexOf(latestCall.ball);
     const attributableCompletion =
       priorMark === null &&
       !priorProgress.complete &&
       progress.complete &&
       latestCall !== undefined &&
-      command.ball === latestCall.ball;
+      isPatternCompletionAttributableToLatestCall(pattern, {
+        ...progressInput,
+        priorMarkedCells,
+        latestCalledCellIndex: latestCalledCellIndex < 0 ? null : latestCalledCellIndex,
+      });
     if (attributableCompletion && (current.stage === "ACTIVE" || current.stage === "PAUSED")) {
       const closesAt = new Date(now.getTime() + options.coWinnerWindowMs);
       const transition = transitionRound(toDomainRound(current, options.patterns), {

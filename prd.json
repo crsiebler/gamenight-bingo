@@ -39,7 +39,7 @@
         "Tests pass."
       ],
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @backend-developer, @postgres-pro. Implementation notes: Integrate the US-001 helper in packages/database/src/round-command-executor.ts while preserving the prior-progress transition check, command idempotency, and persist-before-broadcast boundaries. Database tests require an approved migrated TEST_DATABASE_URL."
     },
     {
