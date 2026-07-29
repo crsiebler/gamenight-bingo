@@ -19,6 +19,17 @@ export interface PatternProgressInput {
   readonly markedCells: PatternCardState;
 }
 
+export interface LatestCallPatternAttributionInput extends PatternProgressInput {
+  readonly priorMarkedCells: PatternCardState;
+  readonly latestCalledCellIndex: number | null;
+}
+
+function requiredCellIndexes(mask: string): number[] {
+  return Array.from(mask.replaceAll("/", ""))
+    .map((cell, index) => (cell === "#" && index !== 12 ? index : -1))
+    .filter((index) => index >= 0);
+}
+
 export function calculatePatternProgress(
   pattern: PatternDefinition,
   input: PatternProgressInput,
@@ -27,13 +38,11 @@ export function calculatePatternProgress(
   const calledCells = PatternCardStateSchema.parse(input.calledCells);
   const markedCells = PatternCardStateSchema.parse(input.markedCells);
   const candidates = parsedPattern.masks.map((mask) => {
-    const requiredCellIndexes = Array.from(mask.replaceAll("/", ""))
-      .map((cell, index) => (cell === "#" && index !== 12 ? index : -1))
-      .filter((index) => index >= 0);
-    const remainingCellIndexes = requiredCellIndexes.filter(
+    const requiredIndexes = requiredCellIndexes(mask);
+    const remainingCellIndexes = requiredIndexes.filter(
       (index) => !calledCells[index] || !markedCells[index],
     );
-    return { requiredCellIndexes, remainingCellIndexes };
+    return { requiredCellIndexes: requiredIndexes, remainingCellIndexes };
   });
   const selected = candidates.reduce((best, candidate) =>
     candidate.remainingCellIndexes.length < best.remainingCellIndexes.length ? candidate : best,
@@ -54,6 +63,47 @@ export function calculatePatternProgress(
     remainingRequiredCellCount: selected.remainingCellIndexes.length,
     nearWinCellIndex: nearWinCandidate?.remainingCellIndexes[0] ?? null,
   };
+}
+
+export function isPatternCompletionAttributableToLatestCall(
+  pattern: PatternDefinition,
+  input: LatestCallPatternAttributionInput,
+): boolean {
+  const parsedPattern = PatternDefinitionSchema.parse(pattern);
+  const calledCells = PatternCardStateSchema.parse(input.calledCells);
+  const priorMarkedCells = PatternCardStateSchema.parse(input.priorMarkedCells);
+  const markedCells = PatternCardStateSchema.parse(input.markedCells);
+  const latestCalledCellIndex = z
+    .number()
+    .int()
+    .min(0)
+    .max(24)
+    .nullable()
+    .parse(input.latestCalledCellIndex);
+  const candidates = parsedPattern.masks.map(requiredCellIndexes);
+  const isComplete = (
+    requiredIndexes: readonly number[],
+    marks: PatternCardState,
+    unavailableCellIndex: number | null = null,
+  ) =>
+    requiredIndexes.every(
+      (index) =>
+        index !== unavailableCellIndex && calledCells[index] === true && marks[index] === true,
+    );
+
+  if (
+    latestCalledCellIndex === null ||
+    latestCalledCellIndex === 12 ||
+    candidates.some((requiredIndexes) => isComplete(requiredIndexes, priorMarkedCells))
+  ) {
+    return false;
+  }
+
+  return candidates.some(
+    (requiredIndexes) =>
+      isComplete(requiredIndexes, markedCells) &&
+      !isComplete(requiredIndexes, markedCells, latestCalledCellIndex),
+  );
 }
 
 export function matchesPattern(pattern: PatternDefinition, cardState: PatternCardState): boolean {

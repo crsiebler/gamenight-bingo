@@ -19,7 +19,7 @@
         "Tests pass."
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @backend-developer, @test-automator. Implementation notes: Prefer a pure reusable helper in packages/patterns that evaluates masks directly. Preserve calculatePatternProgress tie selection and near-win behavior. Follow TDD and do not add a migration or wire-contract change."
     },
     {

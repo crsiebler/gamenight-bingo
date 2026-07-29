@@ -12,3 +12,34 @@ Next story: US-001
 - No database migration, wire-contract change, retroactive winner reconstruction, or browser-only winner decision is in scope.
 
 ## Progress Log
+
+## 2026-07-29 16:05:37 MST - US-001
+- Implemented a pure latest-call attribution predicate that evaluates every canonical mask against prior and current authoritative projections without changing progress selection.
+- Added exact, flexible, center-containing, canonical-tie, unrelated-latest-call, absent-latest-call, and already-complete regressions.
+- Files changed: `packages/patterns/src/matcher.ts`, `packages/patterns/src/index.ts`, `tests/patterns.test.ts`, `progress.txt`
+- Commit message: `feat: US-001 - Define latest-call pattern attribution`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run tests/patterns.test.ts` (pass; red run first failed 6 new tests because the predicate was absent, green run passed 28 tests)
+  - `bun run typecheck` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (pass after formatting `packages/patterns/src/matcher.ts`)
+  - `bun run test` (pass; 41 files passed, 1 skipped, 754 tests passed, 145 skipped)
+- Implementation agents:
+  - Recommended: `backend-developer`, `test-automator`
+  - Used: `backend-developer`; skipped `test-automator` because standard-mode budget allowed one useful specialist and the existing pattern test structure made the test strategy clear
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`
+  - Findings: no blocking findings; fixed one low QA finding by adding the complementary latest-cell-marked-last positive control
+- Decisions (why):
+  - Chose a card-cell index rather than a ball number because pattern matching operates on canonical masks and the authoritative adapter owns ball-to-cell mapping.
+  - Chose direct per-mask completion checks rather than reusing aggregate progress because a separately attributable completed variation must survive a canonical tie.
+  - Preserved prior-card completion as a global rejection because an already complete card cannot gain a new winner from a later mark.
+- **Learnings for future iterations:**
+  - `calculatePatternProgress` intentionally selects the first closest canonical mask, so winner attribution must not infer per-variation causality from its aggregate result.
+  - Pattern masks exclude card index `12` when deriving required cells, which keeps the free center automatically satisfied and unavailable as a triggering call.
+- Known issues / follow-ups:
+  - US-002 must map the persisted latest called ball to its card-cell index and integrate this helper while preserving the existing new-mark and incomplete-to-complete guards.
+- Next iteration start:
+  - Begin US-002 with a database integration regression for marking the latest required ball before the older final required ball.
+---
