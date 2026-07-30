@@ -93,7 +93,7 @@
         "Typecheck passes."
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Update the product and agent invariants only after the implementation stories establish the final behavior. Keep server authority, co-winner timing, and no-retroactive-repair constraints explicit."
     }
   ]

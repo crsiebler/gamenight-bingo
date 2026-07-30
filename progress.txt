@@ -262,3 +262,31 @@ Next story: US-005
 - Next iteration start:
   - If review is clean, mark US-004 passing and begin US-005 documentation alignment in the next iteration.
 ---
+
+## 2026-07-29 18:18:37 MST - US-005
+- Replaced the click-order-dependent winner invariant with canonical latest-call attribution in the root agent guidance and product PRD.
+- Documented that the current latest call must be required by a newly completed canonical variation, the new mark may target another called required cell, a subsequent unrelated call blocks earlier attribution, and deployment performs no retroactive winner reconstruction.
+- Files changed: `AGENTS.md`, `tasks/prd-private-realtime-bingo.md`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-005 - Align winner-rule documentation`
+- Auto approval: `enabled`
+- Checks:
+  - `bun run format:check` (pass)
+  - `bun run typecheck` (pass)
+  - `bun run lint` (pass)
+  - `bun run test` (pass, 41 files passed, 1 skipped, 759 tests passed, 156 skipped)
+- Implementation agents:
+  - Recommended: none
+  - Used: skipped because this was a trivial documentation-only story with explicit acceptance criteria and clear existing invariants
+- Specialist review:
+  - Agents used: Ralph staged-diff self-review, as required for a trivial change in standard mode
+  - Findings: none; the staged product and agent guidance consistently covers every acceptance criterion
+- Decisions (why):
+  - Updated both the dependency-ordered product PRD and root agent invariant because these are the durable product and implementation sources future stories consult.
+  - Kept the no-retroactive-repair statement scoped to already active, ended, or retained rounds so deployment behavior remains explicit without implying a migration or reconstruction path.
+- **Learnings for future iterations:**
+  - Winner documentation should describe canonical variation causality against the latest call, never the order in which required called cells were marked.
+- Known issues / follow-ups:
+  - Untracked `.playwright-mcp/` artifacts from prior manual verification remain intentionally excluded.
+- Next iteration start:
+  - None; all stories are complete after the final consistency check and commit.
+---
