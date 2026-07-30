@@ -6572,17 +6572,21 @@ describeDatabase("PostgreSQL durable game state", () => {
     });
   });
 
-  test("carries a latest-call completion into the next stage before reactivating play", async () => {
+  test("carries a mark-order-independent canonical variation into the next stage", async () => {
     let now = new Date("2026-07-17T09:16:00.000Z");
     const connection = await connectWithRoundCommands(() => now, { coWinnerWindowMs: 2_000 });
     const initial = createLobbyState();
     const hostCard = initial.round!.cards[0]!;
-    const latestBall = hostCard.cells[0]!;
-    const priorRequiredIndexes = [1, 2, 3, 4, 5, 10, 15, 20];
+    const latestBall = hostCard.cells[4]!;
+    const finalMarkedBall = hostCard.cells[0]!;
+    const unmarkedCalledBall = hostCard.cells[7]!;
+    const priorRequiredIndexes = [4, 1, 2, 3, 5, 10, 15, 20, 6, 18, 24];
     const calledBalls = [
+      finalMarkedBall,
       ...priorRequiredIndexes.map((index) => hostCard.cells[index]!),
-      latestBall,
-    ];
+      unmarkedCalledBall,
+    ].filter((ball, index, balls) => balls.indexOf(ball) === index && ball !== latestBall);
+    calledBalls.push(latestBall);
     const drawBalls = [
       ...calledBalls,
       ...Array.from({ length: 75 }, (_, index) => index + 1),
@@ -6624,6 +6628,8 @@ describeDatabase("PostgreSQL durable game state", () => {
       commandResults: [],
     };
     await createPersistedLobby(connection, state);
+    const winningCommandId = `complete-two-lines-${randomUUID()}`;
+    const winningMarkedAt = now;
 
     await expect(
       connection.roundCommands.executeAuthenticated({
@@ -6633,8 +6639,8 @@ describeDatabase("PostgreSQL durable game state", () => {
         command: MarkCardCommandSchema.parse({
           schemaVersion: 1,
           type: "mark-card",
-          commandId: `complete-two-lines-${randomUUID()}`,
-          ball: latestBall,
+          commandId: winningCommandId,
+          ball: finalMarkedBall,
         }),
       }),
     ).resolves.toMatchObject({
@@ -6648,19 +6654,105 @@ describeDatabase("PostgreSQL durable game state", () => {
       "settled",
     );
     now = new Date(now.getTime() + 1);
-
-    await expect(
+    const settled = await connection.lobbyStates.findById(state.lobby.id);
+    const continueCommand = ContinueRoundCommandSchema.parse({
+      schemaVersion: 1,
+      type: "continue-round",
+      commandId: `continue-completed-two-lines-${randomUUID()}`,
+      patternId: "standard-two-lines",
+    });
+    const continueRound = () =>
       connection.roundCommands.execute({
         lobbyId: state.lobby.id,
         sessionTokenHash: state.sessions[0]!.tokenHash,
-        command: ContinueRoundCommandSchema.parse({
-          schemaVersion: 1,
-          type: "continue-round",
-          commandId: `continue-completed-two-lines-${randomUUID()}`,
-          patternId: "standard-two-lines",
-        }),
-      }),
-    ).resolves.toMatchObject({
+        command: continueCommand,
+      });
+
+    await pool.query(
+      `UPDATE command_results
+          SET command_type = 'tampered-mark-card'
+        WHERE lobby_id = $1 AND command_id = $2`,
+      [state.lobby.id, winningCommandId],
+    );
+    await expect(continueRound()).rejects.toThrow();
+    await pool.query(
+      `UPDATE command_results
+          SET command_type = 'mark-card'
+        WHERE lobby_id = $1 AND command_id = $2`,
+      [state.lobby.id, winningCommandId],
+    );
+
+    await pool.query(
+      `UPDATE marks
+          SET marked_at = $3
+        WHERE card_id = $1 AND ball = $2`,
+      [hostCard.id, finalMarkedBall, new Date(winningMarkedAt.getTime() + 1)],
+    );
+    await expect(continueRound()).rejects.toThrow();
+    await pool.query(
+      `UPDATE marks
+          SET marked_at = $3
+        WHERE card_id = $1 AND ball = $2`,
+      [hostCard.id, finalMarkedBall, winningMarkedAt],
+    );
+
+    await pool.query(
+      `UPDATE co_winners
+          SET confirmed_at = $3
+        WHERE round_id = $1 AND participant_id = $2`,
+      [state.round!.id, state.participants[0]!.id, new Date(winningMarkedAt.getTime() + 1)],
+    );
+    await expect(continueRound()).rejects.toThrow();
+    await pool.query(
+      `UPDATE co_winners
+          SET confirmed_at = $3
+        WHERE round_id = $1 AND participant_id = $2`,
+      [state.round!.id, state.participants[0]!.id, winningMarkedAt],
+    );
+
+    const missingCall = calls.find(({ ball }) => ball === unmarkedCalledBall);
+    if (missingCall === undefined) throw new Error("Expected a frozen non-triggering call.");
+    await pool.query(`DELETE FROM calls WHERE id = $1`, [missingCall.id]);
+    await expect(continueRound()).rejects.toThrow();
+    await pool.query(
+      `INSERT INTO calls (id, round_id, position, ball, called_at)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        missingCall.id,
+        state.round!.id,
+        missingCall.position,
+        missingCall.ball,
+        missingCall.calledAt,
+      ],
+    );
+
+    const missingMark = state
+      .round!.cards.find(({ id }) => id === hostCard.id)
+      ?.marks.find(({ ball }) => ball === hostCard.cells[1]);
+    if (missingMark === undefined) throw new Error("Expected a frozen non-winning mark.");
+    await pool.query(`DELETE FROM marks WHERE id = $1`, [missingMark.id]);
+    await expect(continueRound()).rejects.toThrow();
+    await pool.query(
+      `INSERT INTO marks (id, round_id, card_id, ball, marked_at)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [missingMark.id, state.round!.id, hostCard.id, missingMark.ball, missingMark.markedAt],
+    );
+
+    const replacementBall = Array.from({ length: 15 }, (_, index) => index + 1).find(
+      (ball) => !hostCard.cells.includes(ball),
+    );
+    if (replacementBall === undefined) throw new Error("Expected an unused B-column ball.");
+    await pool.query(`UPDATE cards SET cells[1] = $2 WHERE id = $1`, [
+      hostCard.id,
+      replacementBall,
+    ]);
+    await expect(continueRound()).rejects.toThrow();
+    await pool.query(`UPDATE cards SET cells[1] = $2 WHERE id = $1`, [
+      hostCard.id,
+      finalMarkedBall,
+    ]);
+
+    await expect(continueRound()).resolves.toMatchObject({
       ok: true,
       acknowledgement: { eventSequence: 3 },
       activeLobbyEvent: {
@@ -6680,8 +6772,327 @@ describeDatabase("PostgreSQL durable game state", () => {
         currentPatternId: "standard-two-lines",
         nextCallAt: null,
         coWinners: [{ participantId: state.participants[0]!.id }],
+        cards: settled?.round?.cards,
+        calls: settled?.round?.calls,
+        drawOrder: settled?.round?.drawOrder,
       },
     });
+  });
+
+  test("does not carry a winner from marks added after confirmation", async () => {
+    let now = new Date("2026-07-17T09:16:30.000Z");
+    const connection = await connectWithRoundCommands(() => now, { coWinnerWindowMs: 2_000 });
+    const initial = createLobbyState();
+    const hostCard = initial.round!.cards[0]!;
+    const latestBall = hostCard.cells[4]!;
+    const finalWinningBall = hostCard.cells[0]!;
+    const calledIndexes = [0, 1, 2, 3, 5, 6, 7, 8, 9, 4];
+    const calledBalls = calledIndexes.map((index) => hostCard.cells[index]!);
+    const drawBalls = [
+      ...calledBalls,
+      ...Array.from({ length: 75 }, (_, index) => index + 1),
+    ].filter((ball, index, balls) => balls.indexOf(ball) === index);
+    const calls = calledBalls.map((ball, index) => ({
+      id: `call-post-confirmation-${index}-${randomUUID()}`,
+      position: index + 1,
+      ball,
+      calledAt: new Date(now.getTime() - (calledBalls.length - index) * 1_000),
+    }));
+    const state: DurableLobbyState = {
+      ...initial,
+      lobby: { ...initial.lobby, lastEventSequence: 0n },
+      round: {
+        ...initial.round!,
+        stage: "active",
+        nextCallAt: null,
+        coWinnerTriggeringCallId: null,
+        coWinnerOpenedAt: null,
+        coWinnerClosesAt: null,
+        resultSettledAt: null,
+        coWinners: [],
+        drawOrder: drawBalls.map((ball, index) => ({ position: index + 1, ball })),
+        calls,
+        cards: initial.round!.cards.map((card) =>
+          card.id === hostCard.id
+            ? {
+                ...card,
+                marks: [4, 1, 2, 3].map((cellIndex, index) => ({
+                  id: `mark-post-confirmation-${index}-${randomUUID()}`,
+                  ball: hostCard.cells[cellIndex]!,
+                  markedAt: new Date(now.getTime() - 500 + index),
+                })),
+              }
+            : card,
+        ),
+      },
+      events: [],
+      commandResults: [],
+    };
+    await createPersistedLobby(connection, state);
+
+    await expect(
+      connection.roundCommands.executeAuthenticated({
+        lobbyId: state.lobby.id,
+        participantId: state.participants[0]!.id,
+        participantSessionId: state.sessions[0]!.id,
+        command: MarkCardCommandSchema.parse({
+          schemaVersion: 1,
+          type: "mark-card",
+          commandId: `win-before-later-marks-${randomUUID()}`,
+          ball: finalWinningBall,
+        }),
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      activeLobbyEvent: { type: "co-winner-window" },
+    });
+    const lease = await connection.roundCommands.findCoWinnerSettlementLease(state.lobby.id);
+    if (lease === null) throw new Error("Expected the One Line result to have a settlement lease.");
+
+    for (const cellIndex of [5, 6, 7, 8, 9]) {
+      now = new Date(now.getTime() + 1);
+      await expect(
+        connection.roundCommands.executeAuthenticated({
+          lobbyId: state.lobby.id,
+          participantId: state.participants[0]!.id,
+          participantSessionId: state.sessions[0]!.id,
+          command: MarkCardCommandSchema.parse({
+            schemaVersion: 1,
+            type: "mark-card",
+            commandId: `mark-after-confirmation-${cellIndex}-${randomUUID()}`,
+            ball: hostCard.cells[cellIndex]!,
+          }),
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        acknowledgement: { scope: "participant-private", eventSequence: null },
+      });
+    }
+
+    now = lease.deadline;
+    await expect(connection.roundCommands.executeCoWinnerSettlement(lease)).resolves.toBe(
+      "settled",
+    );
+    now = new Date(now.getTime() + 1);
+    await expect(
+      connection.roundCommands.execute({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: state.sessions[0]!.tokenHash,
+        command: ContinueRoundCommandSchema.parse({
+          schemaVersion: 1,
+          type: "continue-round",
+          commandId: `continue-after-later-marks-${randomUUID()}`,
+          patternId: "standard-two-lines",
+        }),
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      activeLobbyEvent: {
+        type: "stage",
+        round: { stage: "active", patternId: "standard-two-lines" },
+      },
+    });
+    const continued = await connection.lobbyStates.findById(state.lobby.id);
+    expect(continued?.round).toMatchObject({
+      stage: "active",
+      currentPatternId: "standard-two-lines",
+      coWinners: [],
+      cards: expect.arrayContaining([
+        expect.objectContaining({
+          id: hostCard.id,
+          marks: expect.arrayContaining(
+            [...calledIndexes.filter((index) => index !== 4), 4].map((cellIndex) =>
+              expect.objectContaining({ ball: hostCard.cells[cellIndex] }),
+            ),
+          ),
+        }),
+      ]),
+    });
+    expect(latestBall).toBe(calls.at(-1)!.ball);
+  });
+
+  test("preserves repeat-winner attribution across staged continuation", async () => {
+    let now = new Date("2026-07-17T09:16:45.000Z");
+    const connection = await connectWithRoundCommands(() => now, { coWinnerWindowMs: 2_000 });
+    const initial = createLobbyState();
+    const hostCard = initial.round!.cards[0]!;
+    const calledIndexes = [0, 1, 2, 3, 5, 6, 7, 8, 9, 4];
+    const calledBalls = calledIndexes.map((index) => hostCard.cells[index]!);
+    const drawBalls = [
+      ...calledBalls,
+      ...Array.from({ length: 75 }, (_, index) => index + 1),
+    ].filter((ball, index, balls) => balls.indexOf(ball) === index);
+    const calls = calledBalls.map((ball, index) => ({
+      id: `call-repeat-winner-${index}-${randomUUID()}`,
+      position: index + 1,
+      ball,
+      calledAt: new Date(now.getTime() - (calledBalls.length - index) * 1_000),
+    }));
+    const initiallyMarkedIndexes = [4, 0, 1, 2, 5, 6, 7, 9];
+    const state: DurableLobbyState = {
+      ...initial,
+      lobby: { ...initial.lobby, lastEventSequence: 0n },
+      round: {
+        ...initial.round!,
+        stage: "active",
+        nextCallAt: null,
+        coWinnerTriggeringCallId: null,
+        coWinnerOpenedAt: null,
+        coWinnerClosesAt: null,
+        resultSettledAt: null,
+        coWinners: [],
+        drawOrder: drawBalls.map((ball, index) => ({ position: index + 1, ball })),
+        calls,
+        cards: initial.round!.cards.map((card) =>
+          card.id === hostCard.id
+            ? {
+                ...card,
+                marks: initiallyMarkedIndexes.map((cellIndex, index) => ({
+                  id: `mark-repeat-winner-${index}-${randomUUID()}`,
+                  ball: hostCard.cells[cellIndex]!,
+                  markedAt: new Date(now.getTime() - 500 + index),
+                })),
+              }
+            : card,
+        ),
+      },
+      events: [],
+      commandResults: [],
+    };
+    await createPersistedLobby(connection, state);
+
+    const mark = (cellIndex: number, commandId: string) =>
+      connection.roundCommands.executeAuthenticated({
+        lobbyId: state.lobby.id,
+        participantId: state.participants[0]!.id,
+        participantSessionId: state.sessions[0]!.id,
+        command: MarkCardCommandSchema.parse({
+          schemaVersion: 1,
+          type: "mark-card",
+          commandId,
+          ball: hostCard.cells[cellIndex],
+        }),
+      });
+    const settleCurrentWindow = async () => {
+      const lease = await connection.roundCommands.findCoWinnerSettlementLease(state.lobby.id);
+      if (lease === null) throw new Error("Expected a repeat-winner settlement lease.");
+      now = lease.deadline;
+      await expect(connection.roundCommands.executeCoWinnerSettlement(lease)).resolves.toBe(
+        "settled",
+      );
+      now = new Date(now.getTime() + 1);
+    };
+    const continueRound = (
+      patternId: "standard-two-lines" | "standard-blackout",
+      commandId: string,
+    ) =>
+      connection.roundCommands.execute({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: state.sessions[0]!.tokenHash,
+        command: ContinueRoundCommandSchema.parse({
+          schemaVersion: 1,
+          type: "continue-round",
+          commandId,
+          patternId,
+        }),
+      });
+
+    await expect(mark(3, `win-one-line-${randomUUID()}`)).resolves.toMatchObject({
+      ok: true,
+      activeLobbyEvent: { type: "co-winner-window" },
+    });
+    await settleCurrentWindow();
+    await expect(
+      continueRound("standard-two-lines", `continue-repeat-winner-${randomUUID()}`),
+    ).resolves.toMatchObject({
+      ok: true,
+      activeLobbyEvent: {
+        type: "stage",
+        round: { stage: "active", patternId: "standard-two-lines" },
+      },
+    });
+
+    now = new Date(now.getTime() + 1);
+    await expect(mark(8, `win-two-lines-${randomUUID()}`)).resolves.toMatchObject({
+      ok: true,
+      activeLobbyEvent: { type: "co-winner-window" },
+    });
+    await settleCurrentWindow();
+    const settled = await connection.lobbyStates.findById(state.lobby.id);
+    expect(settled?.round).toMatchObject({
+      stage: "result",
+      currentPatternId: "standard-two-lines",
+      coWinners: [{ participantId: state.participants[0]!.id }],
+    });
+    const attributionRows = await pool.query<{
+      result_format: number;
+      integrity_length: number;
+      triggering_call_id: string;
+      pattern_id: string;
+    }>(
+      `SELECT result_format,
+              octet_length(result_integrity)::int AS integrity_length,
+              result->'winnerAttribution'->>'triggeringCallId' AS triggering_call_id,
+              result->'participantPrivateProgress'->'pattern'->>'id' AS pattern_id
+         FROM command_results
+        WHERE lobby_id = $1
+          AND round_id = $2
+          AND participant_id = $3
+          AND result ? 'winnerAttribution'
+        ORDER BY created_at, command_id`,
+      [state.lobby.id, state.round!.id, state.participants[0]!.id],
+    );
+    expect(attributionRows.rows).toEqual([
+      {
+        result_format: 4,
+        integrity_length: 32,
+        triggering_call_id: calls.at(-1)!.id,
+        pattern_id: "standard-one-line",
+      },
+      {
+        result_format: 4,
+        integrity_length: 32,
+        triggering_call_id: calls.at(-1)!.id,
+        pattern_id: "standard-two-lines",
+      },
+    ]);
+
+    const continueCommandId = `continue-repeat-winner-blackout-${randomUUID()}`;
+    const continueToBlackout = () => continueRound("standard-blackout", continueCommandId);
+    const committed = await continueToBlackout();
+    const replayed = await continueToBlackout();
+    expect(committed).toMatchObject({
+      ok: true,
+      acknowledgement: { eventSequence: 6, idempotentReplay: false },
+      activeLobbyEvent: {
+        type: "stage",
+        round: { stage: "active", patternId: "standard-blackout" },
+      },
+    });
+    expect(replayed).toMatchObject({
+      ok: true,
+      acknowledgement: { eventSequence: 6, idempotentReplay: true },
+      activeLobbyEvent: null,
+    });
+    const continued = await connection.lobbyStates.findById(state.lobby.id);
+    expect(continued?.round).toMatchObject({
+      id: state.round!.id,
+      stage: "active",
+      currentPatternId: "standard-blackout",
+      coWinners: [],
+      cards: settled?.round?.cards,
+      calls: settled?.round?.calls,
+      drawOrder: settled?.round?.drawOrder,
+    });
+    expect(continued?.events).toHaveLength(6);
+    await expect(
+      pool.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count
+           FROM command_results
+          WHERE lobby_id = $1 AND result ? 'winnerAttribution'`,
+        [state.lobby.id],
+      ),
+    ).resolves.toMatchObject({ rows: [{ count: 2 }] });
   });
 
   test("replaces an ended result with a fresh round for every eligible participant", async () => {
@@ -6896,6 +7307,7 @@ describeDatabase("PostgreSQL durable game state", () => {
                 requiredBall: 2,
               },
             ],
+            winnerAttribution: { triggeringCallId: initial.round!.calls.at(-1)!.id },
           },
           createdAt: initial.round!.startedAt!,
         },
@@ -8272,6 +8684,405 @@ describeDatabase("PostgreSQL durable game state", () => {
       }
     },
   );
+
+  test.each([
+    {
+      label: "flexible One Line",
+      patternId: "standard-one-line",
+      requiredIndexes: [0, 1, 2, 3, 4],
+      triggeringIndex: 4,
+      finalMarkedIndex: 3,
+      unrelatedLatestIndex: null,
+      persistedTriggerIndex: 4,
+    },
+    {
+      label: "Two Lines",
+      patternId: "standard-two-lines",
+      requiredIndexes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+      triggeringIndex: 9,
+      finalMarkedIndex: 8,
+      unrelatedLatestIndex: null,
+      persistedTriggerIndex: 9,
+    },
+    {
+      label: "Blackout",
+      patternId: "standard-blackout",
+      requiredIndexes: Array.from({ length: 25 }, (_, index) => index).filter(
+        (index) => index !== 12,
+      ),
+      triggeringIndex: 24,
+      finalMarkedIndex: 23,
+      unrelatedLatestIndex: null,
+      persistedTriggerIndex: 24,
+    },
+    {
+      label: "exact Four Corners",
+      patternId: "shape-four-corners",
+      requiredIndexes: [0, 4, 20, 24],
+      triggeringIndex: 24,
+      finalMarkedIndex: 20,
+      unrelatedLatestIndex: null,
+      persistedTriggerIndex: 24,
+    },
+    {
+      label: "One Line after an unrelated call",
+      patternId: "standard-one-line",
+      requiredIndexes: [0, 1, 2, 3, 4],
+      triggeringIndex: 4,
+      finalMarkedIndex: 3,
+      unrelatedLatestIndex: 5,
+      persistedTriggerIndex: 4,
+    },
+    {
+      label: "One Line with a mismatched persisted trigger",
+      patternId: "standard-one-line",
+      requiredIndexes: [0, 1, 2, 3, 4],
+      triggeringIndex: 4,
+      finalMarkedIndex: 3,
+      unrelatedLatestIndex: null,
+      persistedTriggerIndex: 0,
+    },
+  ])(
+    "attributes an additional mark-order-independent co-winner for $label",
+    async ({
+      patternId,
+      requiredIndexes,
+      triggeringIndex,
+      finalMarkedIndex,
+      unrelatedLatestIndex,
+      persistedTriggerIndex,
+    }) => {
+      let now = new Date("2026-07-17T09:07:58.000Z");
+      const connection = await connectWithRoundCommands(() => now, { coWinnerWindowMs: 2_000 });
+      const base = createLobbyState();
+      const hostCard = base.round!.cards[0]!;
+      const playerCard = base.round!.cards[1]!;
+      const finalMarkedBall = playerCard.cells[finalMarkedIndex]!;
+      const calledIndexes = [
+        ...requiredIndexes.filter((index) => index !== triggeringIndex),
+        triggeringIndex,
+        ...(unrelatedLatestIndex === null ? [] : [unrelatedLatestIndex]),
+      ];
+      const calledBalls = calledIndexes.map((index) => playerCard.cells[index]!);
+      const calls = calledBalls.map((ball, index) => ({
+        id: `call-additional-co-winner-${index}-${randomUUID()}`,
+        position: index + 1,
+        ball,
+        calledAt: new Date(now.getTime() - (calledBalls.length - index) * 1_000),
+      }));
+      const triggeringCall = calls[calledIndexes.indexOf(persistedTriggerIndex)]!;
+      const openedAt = new Date(now.getTime() - 1_000);
+      const closesAt = new Date(now.getTime() + 1_000);
+      const initiallyMarkedIndexes = [
+        triggeringIndex,
+        ...requiredIndexes.filter(
+          (index) => index !== triggeringIndex && index !== finalMarkedIndex,
+        ),
+      ];
+      const drawBalls = [
+        ...calledBalls,
+        ...Array.from({ length: 75 }, (_, index) => index + 1),
+      ].filter((ball, index, balls) => balls.indexOf(ball) === index);
+      const state: DurableLobbyState = {
+        ...base,
+        lobby: { ...base.lobby, lastEventSequence: 1n },
+        round: {
+          ...base.round!,
+          initialPatternId: patternId,
+          currentPatternId: patternId,
+          stage: "co-winner-window",
+          nextCallAt: null,
+          coWinnerTriggeringCallId: triggeringCall.id,
+          coWinnerOpenedAt: openedAt,
+          coWinnerClosesAt: closesAt,
+          resultSettledAt: null,
+          drawOrder: drawBalls.map((ball, index) => ({ position: index + 1, ball })),
+          calls,
+          cards: base.round!.cards.map((card) =>
+            card.id === playerCard.id
+              ? {
+                  ...card,
+                  marks: initiallyMarkedIndexes.map((cellIndex, index) => ({
+                    id: `mark-additional-co-winner-${index}-${randomUUID()}`,
+                    ball: playerCard.cells[cellIndex]!,
+                    markedAt: new Date(openedAt.getTime() + index),
+                  })),
+                }
+              : { ...card, marks: [] },
+          ),
+          coWinners: [
+            {
+              participantId: base.participants[0]!.id,
+              cardId: hostCard.id,
+              triggeringCallId: triggeringCall.id,
+              confirmedAt: openedAt,
+            },
+          ],
+        },
+        events: [
+          {
+            sequence: 1n,
+            roundId: base.round!.id,
+            eventType: "co-winner-window",
+            schemaVersion: 1,
+            payload: {
+              window: {
+                triggeringCallId: triggeringCall.id,
+                openedAt: openedAt.toISOString(),
+                closesAt: closesAt.toISOString(),
+              },
+            },
+            createdAt: openedAt,
+          },
+        ],
+        commandResults: [],
+      };
+      const command = MarkCardCommandSchema.parse({
+        schemaVersion: 1,
+        type: "mark-card",
+        commandId: `complete-additional-co-winner-${randomUUID()}`,
+        ball: finalMarkedBall,
+      });
+      await createPersistedLobby(connection, state);
+
+      const execute = () =>
+        connection.roundCommands.executeAuthenticated({
+          lobbyId: state.lobby.id,
+          participantId: state.participants[1]!.id,
+          participantSessionId: state.sessions[1]!.id,
+          command,
+        });
+      const committed = await execute();
+      const replayed = await execute();
+      const restored = await connection.lobbyStates.findById(state.lobby.id);
+      const expectedParticipantIds = [
+        state.participants[0]!.id,
+        ...(unrelatedLatestIndex === null && persistedTriggerIndex === triggeringIndex
+          ? [state.participants[1]!.id]
+          : []),
+      ].sort((left, right) => left.localeCompare(right));
+
+      expect(committed).toMatchObject({
+        ok: true,
+        acknowledgement: { scope: "participant-private", eventSequence: null },
+        activeLobbyEvent: null,
+        participantPrivateEvents: [{ type: "mark-result", mark: { ball: finalMarkedBall } }],
+      });
+      expect(replayed).toMatchObject({
+        ok: true,
+        acknowledgement: {
+          scope: "participant-private",
+          eventSequence: null,
+          idempotentReplay: true,
+        },
+        activeLobbyEvent: null,
+      });
+      expect(restored?.round).toMatchObject({
+        stage: "co-winner-window",
+        coWinnerTriggeringCallId: triggeringCall.id,
+        coWinnerClosesAt: closesAt,
+      });
+      expect(restored?.round?.coWinners.map(({ participantId }) => participantId)).toEqual(
+        expectedParticipantIds,
+      );
+      expect(restored?.events).toHaveLength(1);
+      expect(restored?.commandResults).toHaveLength(1);
+
+      const lease = await connection.roundCommands.findCoWinnerSettlementLease(state.lobby.id);
+      if (lease === null) throw new Error("Expected the persisted co-winner window lease.");
+      now = closesAt;
+      await expect(connection.roundCommands.executeCoWinnerSettlement(lease)).resolves.toBe(
+        "settled",
+      );
+      const settled = await connection.lobbyStates.findById(state.lobby.id);
+      expect(settled?.round).toMatchObject({ stage: "result" });
+      expect(settled?.round?.coWinners.map(({ participantId }) => participantId)).toEqual(
+        expectedParticipantIds,
+      );
+      expect(settled?.events).toMatchObject([
+        { sequence: 1n, eventType: "co-winner-window" },
+        {
+          sequence: 2n,
+          eventType: "co-winner-result",
+          payload: { result: { winnerParticipantIds: expectedParticipantIds } },
+        },
+      ]);
+    },
+  );
+
+  test("carries a participant-private co-winner context into continuation", async () => {
+    let now = new Date("2026-07-17T09:07:59.000Z");
+    const connection = await connectWithRoundCommands(() => now, { coWinnerWindowMs: 2_000 });
+    const base = createLobbyState();
+    const hostCard = base.round!.cards[0]!;
+    const playerCard = base.round!.cards[1]!;
+    const triggeringIndex = 4;
+    const finalMarkedIndex = 0;
+    const requiredIndexes = [0, 1, 2, 3, 4, 5, 10, 15, 20];
+    const calledIndexes = [
+      ...requiredIndexes.filter((index) => index !== triggeringIndex),
+      triggeringIndex,
+    ];
+    const calledBalls = calledIndexes.map((index) => playerCard.cells[index]!);
+    const calls = calledBalls.map((ball, index) => ({
+      id: `call-private-continuation-${index}-${randomUUID()}`,
+      position: index + 1,
+      ball,
+      calledAt: new Date(now.getTime() - (calledBalls.length - index) * 1_000),
+    }));
+    const triggeringCall = calls.at(-1)!;
+    const openedAt = new Date(now.getTime() - 1_000);
+    const closesAt = new Date(now.getTime() + 1_000);
+    const initiallyMarkedIndexes = requiredIndexes.filter((index) => index !== finalMarkedIndex);
+    const drawBalls = [
+      ...calledBalls,
+      ...Array.from({ length: 75 }, (_, index) => index + 1),
+    ].filter((ball, index, balls) => balls.indexOf(ball) === index);
+    const state: DurableLobbyState = {
+      ...base,
+      lobby: { ...base.lobby, lastEventSequence: 1n },
+      round: {
+        ...base.round!,
+        stage: "co-winner-window",
+        nextCallAt: null,
+        coWinnerTriggeringCallId: triggeringCall.id,
+        coWinnerOpenedAt: openedAt,
+        coWinnerClosesAt: closesAt,
+        resultSettledAt: null,
+        drawOrder: drawBalls.map((ball, index) => ({ position: index + 1, ball })),
+        calls,
+        cards: base.round!.cards.map((card) =>
+          card.id === playerCard.id
+            ? {
+                ...card,
+                marks: initiallyMarkedIndexes.map((cellIndex, index) => ({
+                  id: `mark-private-continuation-${index}-${randomUUID()}`,
+                  ball: playerCard.cells[cellIndex]!,
+                  markedAt: new Date(openedAt.getTime() + index),
+                })),
+              }
+            : { ...card, marks: [] },
+        ),
+        coWinners: [
+          {
+            participantId: base.participants[0]!.id,
+            cardId: hostCard.id,
+            triggeringCallId: triggeringCall.id,
+            confirmedAt: openedAt,
+          },
+        ],
+      },
+      events: [
+        {
+          sequence: 1n,
+          roundId: base.round!.id,
+          eventType: "co-winner-window",
+          schemaVersion: 1,
+          payload: {
+            window: {
+              triggeringCallId: triggeringCall.id,
+              openedAt: openedAt.toISOString(),
+              closesAt: closesAt.toISOString(),
+            },
+          },
+          createdAt: openedAt,
+        },
+      ],
+      commandResults: [],
+    };
+    await createPersistedLobby(connection, state);
+    const markCommand = MarkCardCommandSchema.parse({
+      schemaVersion: 1,
+      type: "mark-card",
+      commandId: `complete-private-continuation-${randomUUID()}`,
+      ball: playerCard.cells[finalMarkedIndex],
+    });
+
+    await expect(
+      connection.roundCommands.executeAuthenticated({
+        lobbyId: state.lobby.id,
+        participantId: state.participants[1]!.id,
+        participantSessionId: state.sessions[1]!.id,
+        command: markCommand,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      acknowledgement: { scope: "participant-private", eventSequence: null },
+      activeLobbyEvent: null,
+    });
+    const privateContext = await pool.query<{
+      result_format: number;
+      delivery_scope: string;
+      integrity_length: number;
+    }>(
+      `SELECT result_format,
+              delivery_scope::text,
+              octet_length(result_integrity)::int AS integrity_length
+         FROM command_results
+        WHERE lobby_id = $1 AND command_id = $2`,
+      [state.lobby.id, markCommand.commandId],
+    );
+    expect(privateContext.rows).toEqual([
+      { result_format: 3, delivery_scope: "PARTICIPANT_PRIVATE", integrity_length: 32 },
+    ]);
+    const lease = await connection.roundCommands.findCoWinnerSettlementLease(state.lobby.id);
+    if (lease === null) throw new Error("Expected the participant-private settlement lease.");
+    now = lease.deadline;
+    await expect(connection.roundCommands.executeCoWinnerSettlement(lease)).resolves.toBe(
+      "settled",
+    );
+    now = new Date(now.getTime() + 1);
+    const settled = await connection.lobbyStates.findById(state.lobby.id);
+    expect(settled?.round?.coWinners.map(({ participantId }) => participantId)).toEqual(
+      [state.participants[0]!.id, state.participants[1]!.id].sort((left, right) =>
+        left.localeCompare(right),
+      ),
+    );
+
+    const continueCommand = ContinueRoundCommandSchema.parse({
+      schemaVersion: 1,
+      type: "continue-round",
+      commandId: `continue-private-context-${randomUUID()}`,
+      patternId: "standard-two-lines",
+    });
+    const continueRound = () =>
+      connection.roundCommands.execute({
+        lobbyId: state.lobby.id,
+        sessionTokenHash: state.sessions[0]!.tokenHash,
+        command: continueCommand,
+      });
+    const committed = await continueRound();
+    const replayed = await continueRound();
+    expect(committed).toMatchObject({
+      ok: true,
+      acknowledgement: { eventSequence: 3, idempotentReplay: false },
+      activeLobbyEvent: {
+        type: "stage",
+        round: {
+          stage: "result",
+          patternId: "standard-two-lines",
+          result: { winnerParticipantIds: [state.participants[1]!.id] },
+        },
+      },
+    });
+    expect(replayed).toMatchObject({
+      ok: true,
+      acknowledgement: { eventSequence: 3, idempotentReplay: true },
+      activeLobbyEvent: null,
+    });
+    await expect(connection.lobbyStates.findById(state.lobby.id)).resolves.toMatchObject({
+      round: {
+        id: state.round!.id,
+        stage: "result",
+        currentPatternId: "standard-two-lines",
+        coWinners: [{ participantId: state.participants[1]!.id }],
+        cards: settled?.round?.cards,
+        calls: settled?.round?.calls,
+        drawOrder: settled?.round?.drawOrder,
+      },
+      events: [{ sequence: 1n }, { sequence: 2n }, { sequence: 3n }],
+    });
+  });
 
   test("persists and settles every completion from the latest call during the co-winner window", async () => {
     let now = new Date("2026-07-17T09:08:00.000Z");
