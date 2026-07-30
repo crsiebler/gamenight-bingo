@@ -1,8 +1,8 @@
 GameNight Bingo - Ralph Progress
 Branch: ralph/mark-order-independent-winner-attribution
 Source: tasks/prd-mark-order-independent-winner-attribution.md
-Completed: 3/5
-Next story: US-004
+Completed: 4/5
+Next story: US-005
 
 ## Codebase Patterns
 
@@ -14,6 +14,7 @@ Next story: US-004
 - A participant can have multiple integrity-bound winner contexts in one round after winning successive stages; continuation must tolerate that history and select the unique context matching the current winner row's trigger, confirmation time, card, and stage pattern.
 - Frozen winner progress must remain a subset of authoritative calls and marks; later additions are allowed, but missing historical rows or an unmapped winning ball must fail closed.
 - No database migration, wire-contract change, retroactive winner reconstruction, or browser-only winner decision is in scope.
+- Winner presentation must follow authoritative co-winner and result stages, not completed client progress; an unrelated latest call may leave a fully marked pattern active without presenting a false winner.
 
 ## Progress Log
 
@@ -187,4 +188,77 @@ Next story: US-004
   - None for US-003.
 - Next iteration start:
   - After US-003 review and commit, begin US-004 with the existing co-winner/result UI and browser verification in both mark orders.
+---
+
+## 2026-07-29 17:59:26 MST - US-004
+- Added component regressions that drive active and paused rounds through a mark-order-independent winning acknowledgement, co-winner event and snapshot, settled event and snapshot, and the existing accessible winner presentation in both mark orders.
+- Added an unrelated-latest-call control proving a completed card remains in authoritative active play with normal calling controls and no false winner presentation.
+- Manually verified fresh host-only games with the latest required ball marked first and last; both opened the 2-second co-winner window and settled to the same focused, locked-card winner result with host continuation controls.
+- Files changed: `apps/web/src/components/templates/private-lobby-page.test.tsx`, `progress.txt`
+- Commit message: `feat: US-004 - Verify complete-pattern winner presentation`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/components/templates/private-lobby-page.test.tsx` (pass, 145 tests; initial run exposed and corrected a test selector and pre-resync continuation assertion)
+  - `DATABASE_URL='<approved-local-url>' bun run db:migrate:deploy` (pass; applied nine existing migrations to a fresh nonproduction browser database)
+  - Manual dev-browser verification through isolated Playwright against local web and game-server processes (pass; both mark orders settled identically, co-winner checking observed, zero console errors, all HTTP mutations returned 2xx, and realtime authority logged both event transitions)
+  - `bun run typecheck` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (initial fail only for untracked Playwright YAML artifacts; pass after formatting those artifacts)
+  - `bun run test` (pass, 41 files passed, 1 skipped, 759 tests passed, 156 skipped)
+  - `bun run test:e2e` (environment fail before browser tests because managed Chromium is not installed)
+  - `PLAYWRIGHT_BROWSER_CHANNEL=chrome bun run test:e2e` (pass, 4 tests passed, 6 database-dependent tests skipped without `TEST_DATABASE_URL`)
+- Implementation agents:
+  - Recommended: `react-specialist`, `accessibility-tester`
+  - Used: `react-specialist`, `accessibility-tester`; both fit the complex-story standard-mode budget and identified the authoritative event/snapshot ordering plus focus, live-region, and card-locking assertions
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`
+  - Findings: fixed the initial merged medium finding by binding the settled snapshot to the exact triggering call and co-winner window; targeted re-review found an unresolved medium settlement-envelope timestamp defect, so the story was not committed
+- Decisions (why):
+  - Added component coverage without production UI changes because the existing presentation already consumes authoritative co-winner and result stages correctly.
+  - Parameterized both mark orders over active and paused baselines so an eligible complete card cannot remain under normal calling controls in either state.
+  - Kept the unrelated-call completion visibly active because progress is informational and must not become a browser-only winner decision.
+  - Used stable Chrome only after the managed Playwright binary was unavailable, following the documented repository fallback without installing dependencies.
+- **Learnings for future iterations:**
+  - A winning mark can receive the sequenced co-winner event before its acknowledgement; tests should deliver that event first, then reconcile the marked co-winner snapshot.
+  - Continuation controls appear only after the settled result snapshot resolves continuation metadata, even though the result event can immediately announce and focus the winner outcome.
+  - Short co-winner windows are best verified by polling the accessible heading and announcement immediately after the final mark rather than relying on a delayed screenshot.
+- Known issues / follow-ups:
+  - Blocking: the settled result fixture uses `12:00:02` for settlement but still emits the result event and generates the settled snapshot at `12:00:00`; align both envelope timestamps at or after settlement before another review.
+  - The managed Playwright Chromium binary is absent locally; stable Chrome passes the available browser checks.
+  - The manual Next development server emits its existing smooth-scroll warning; there were no console errors or failed application requests.
+- Next iteration start:
+  - Resume US-004 by aligning the result event and settled snapshot timestamps with the close deadline, rerunning affected checks, and starting a fresh stabilization loop.
+---
+
+## 2026-07-29 18:11:23 MST - US-004
+- Corrected the winner-presentation regression chronology so the result event occurrence, settled snapshot generation, close deadline, and settlement timestamp all describe the same authoritative instant.
+- Retained the previously verified active/paused, both-mark-orders, accessible co-winner/result presentation and unrelated-latest-call control without changing production UI behavior.
+- Files changed: `apps/web/src/components/templates/private-lobby-page.test.tsx`, `prd.json`, `progress.txt`
+- Commit message: `feat: US-004 - Verify complete-pattern winner presentation`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/components/templates/private-lobby-page.test.tsx` (pass, 145 tests)
+  - `bun run typecheck` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (pass)
+  - `bun run test` (pass, 41 files passed, 1 skipped, 759 tests passed, 156 skipped)
+  - `PLAYWRIGHT_BROWSER_CHANNEL=chrome bun run test:e2e` (pass, 4 tests passed, 6 database-dependent tests skipped without `TEST_DATABASE_URL`)
+  - Existing dev-browser evidence rechecked (pass; both live mark orders show the authoritative co-winner/result flow, locked cards, focused winner outcome, continuation controls, and no console errors; this iteration changed test fixtures only)
+- Implementation agents:
+  - Recommended: `react-specialist`, `accessibility-tester`
+  - Used: skipped in this continuation because both specialists guided the original US-004 implementation and the remaining blocker was a precise non-behavioral fixture timestamp correction
+- Specialist review:
+  - Agents used: targeted `code-reviewer`, `qa-expert`
+  - Findings: none; both targeted re-review passes found the settlement chronology coherent and the staged regression coverage complete, with only the documented managed-browser and database-backed E2E skips remaining as residual risk
+- Decisions (why):
+  - Added a reusable snapshot generation-time override and one local settlement instant so the test cannot independently drift event, snapshot, deadline, and result timestamps again.
+  - Treated the correction as non-behavioral test-fixture maintenance, so focused green validation was appropriate instead of manufacturing a new red production-behavior test.
+  - Reused prior manual browser verification because no rendered application code changed; the stable-Chrome automated browser suite was rerun after the fixture correction.
+- **Learnings for future iterations:**
+  - Result fixtures should not be generated before their own settlement time; bind event and snapshot envelope times to the persisted result deadline when modeling settlement.
+- Known issues / follow-ups:
+  - The managed Playwright Chromium binary remains absent locally; stable Chrome passes the available browser checks.
+  - Untracked `.playwright-mcp/` files are prior manual verification artifacts and are intentionally excluded from the story commit.
+- Next iteration start:
+  - If review is clean, mark US-004 passing and begin US-005 documentation alignment in the next iteration.
 ---
