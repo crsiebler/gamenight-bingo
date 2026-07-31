@@ -1,0 +1,100 @@
+{
+  "project": "GameNight Bingo",
+  "branchName": "ralph/mark-order-independent-winner-attribution",
+  "description": "Recognize a newly completed Bingo pattern when it depends on the current latest call regardless of the order in which its called cells were marked, while preserving authoritative co-winner attribution and settlement.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Define latest-call pattern attribution",
+      "description": "As a game participant, I want a newly completed pattern to be attributed to the call that enabled it regardless of mark order so that valid wins are recognized consistently.",
+      "acceptanceCriteria": [
+        "Write failing unit tests for a pure pattern rule that determines whether at least one canonical variation is complete and depends on the current latest called card cell.",
+        "A variation is attributable when it is complete under the authoritative called-and-marked projection and becomes incomplete when the latest called cell is treated as unavailable.",
+        "The rule does not require the current mark command's ball to equal the latest called ball.",
+        "Flexible patterns inspect every canonical variation, so the progress display's selected closest variation cannot suppress another attributable completed variation.",
+        "The rule rejects an unrelated latest call and a card that was already complete before the current mark.",
+        "The free center remains automatically satisfied and can never be a triggering call.",
+        "Tests cover exact, flexible, center-containing, canonical-tie, unrelated-latest-call, and already-complete cases.",
+        "Typecheck passes.",
+        "Tests pass."
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "Recommended agents: @backend-developer, @test-automator. Implementation notes: Prefer a pure reusable helper in packages/patterns that evaluates masks directly. Preserve calculatePatternProgress tie selection and near-win behavior. Follow TDD and do not add a migration or wire-contract change."
+    },
+    {
+      "id": "US-002",
+      "title": "Recognize the first mark-order-independent winner",
+      "description": "As a participant, I want the authoritative mark command to open the co-winner window when my newly completed variation depends on the latest call even if I marked that latest ball earlier.",
+      "acceptanceCriteria": [
+        "Write a failing database integration regression in which the latest required ball is marked first, an older required ball is marked last without an intervening call, and the final mark opens the co-winner window.",
+        "Replace the command-ball-equals-latest-ball eligibility condition with the pure latest-call pattern-attribution rule.",
+        "Eligibility still requires a new mark and a transition from incomplete before the command to complete after the command.",
+        "The winning participant, triggering latest call ID, round stage, sequenced active-lobby event, command result, and PostgreSQL notification commit atomically in one serializable transaction.",
+        "Active and paused round states use the corrected rule.",
+        "The existing unrelated-latest-call regression remains green and an already-complete card does not gain a winner.",
+        "An idempotent replay returns its original acknowledgement without adding marks, winners, events, or notifications.",
+        "No database migration or wire-contract change is introduced.",
+        "Typecheck passes.",
+        "Tests pass."
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "Recommended agents: @backend-developer, @postgres-pro. Implementation notes: Integrate the US-001 helper in packages/database/src/round-command-executor.ts while preserving the prior-progress transition check, command idempotency, and persist-before-broadcast boundaries. Database tests require an approved migrated TEST_DATABASE_URL."
+    },
+    {
+      "id": "US-003",
+      "title": "Preserve co-winner and continuation attribution",
+      "description": "As a participant, I want the corrected attribution rule to remain consistent during co-winner windows and later pattern stages so that every stage settles fairly.",
+      "acceptanceCriteria": [
+        "Write failing integration coverage for an additional participant who marks the triggering latest ball before an older required ball and completes during the open co-winner window.",
+        "Additional winners are admitted only when their newly completed variation depends on the persisted triggering call and their command commits before the exclusive close deadline.",
+        "Integration coverage applies the corrected rule to One Line, Two Lines, Blackout, one exact catalog pattern, and one flexible catalog pattern.",
+        "Continuation preserves cards, calls, and marks and does not duplicate prior-stage winners.",
+        "A subsequent unrelated call prevents attribution to an earlier pattern-enabling call.",
+        "Winner settlement remains participant-ID ordered and retains existing event sequencing and acknowledgement scopes.",
+        "Typecheck passes.",
+        "Tests pass."
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Recommended agents: @backend-developer, @test-automator. Implementation notes: Reuse the US-001 attribution rule for the existing triggering call during co-winner evaluation. Preserve the bounded settlement scheduler, exclusive deadline, and current continuation-stage semantics."
+    },
+    {
+      "id": "US-004",
+      "title": "Verify complete-pattern winner presentation",
+      "description": "As a participant, I want a valid completed pattern to progress to winner presentation instead of remaining silently active so that visible and authoritative state agree.",
+      "acceptanceCriteria": [
+        "Add a component or browser regression for a mark-order-independent winning acknowledgement and the resulting co-winner and settled-result snapshots.",
+        "The eligible scenario cannot settle into an active or paused UI showing all required spaces marked while normal calling controls remain available.",
+        "The co-winner window and settled result retain existing accessible announcements, focus movement, card locking, and host continuation controls.",
+        "A completed card that is not attributable to the current latest call does not show a false winner presentation.",
+        "In a manual browser game, mark the latest required ball first and an older required ball last, then verify the co-winner window opens and the result settles.",
+        "Run the control browser scenario with the latest required ball marked last and verify the same winner outcome.",
+        "Browser console and relevant HTTP and realtime traffic contain no new errors or failed requests.",
+        "Typecheck passes.",
+        "Tests pass.",
+        "Verify in browser using dev-browser skill."
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "Recommended agents: @react-specialist, @accessibility-tester. Implementation notes: Reuse the existing co-winner and result UI; do not add a browser-only winner decision or new visual treatment. Use a fresh approved nonproduction database for full browser verification."
+    },
+    {
+      "id": "US-005",
+      "title": "Align winner-rule documentation",
+      "description": "As a maintainer, I want the documented invariant to describe latest-call attribution rather than click order so that future changes preserve the corrected rule.",
+      "acceptanceCriteria": [
+        "Replace documentation stating that a winner must complete by marking the latest called ball with the mark-order-independent attribution rule.",
+        "Document that the current latest call must be required by at least one newly completed canonical variation.",
+        "Document that a subsequent unrelated call prevents attribution to the earlier pattern-enabling call.",
+        "Document that deployment does not retroactively reconstruct winners for already active, ended, or retained rounds.",
+        "Formatting checks pass.",
+        "Typecheck passes."
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "Implementation notes: Update the product and agent invariants only after the implementation stories establish the final behavior. Keep server authority, co-winner timing, and no-retroactive-repair constraints explicit."
+    }
+  ]
+}

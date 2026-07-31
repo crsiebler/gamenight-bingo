@@ -1,0 +1,292 @@
+GameNight Bingo - Ralph Progress
+Branch: ralph/mark-order-independent-winner-attribution
+Source: tasks/prd-mark-order-independent-winner-attribution.md
+Completed: 4/5
+Next story: US-005
+
+## Codebase Patterns
+
+- Winner attribution remains server-authoritative and bound to the current latest call, but mark order must not affect eligibility.
+- Flexible-pattern attribution must inspect every canonical mask rather than relying only on the progress display's selected closest variation.
+- Database command adapters map the persisted latest called ball to the actor's card-cell index and pass `null`, never `-1`, when that ball is absent from the card.
+- Preserve the incomplete-to-complete transition check, serializable persistence, command idempotency, event sequencing, and persist-before-broadcast behavior.
+- Continuation carry-forward must use the integrity-bound winning command's marked projection; current marks include later co-winner-window activity, while removing the triggering-call mark reintroduces mark-order dependence.
+- A participant can have multiple integrity-bound winner contexts in one round after winning successive stages; continuation must tolerate that history and select the unique context matching the current winner row's trigger, confirmation time, card, and stage pattern.
+- Frozen winner progress must remain a subset of authoritative calls and marks; later additions are allowed, but missing historical rows or an unmapped winning ball must fail closed.
+- No database migration, wire-contract change, retroactive winner reconstruction, or browser-only winner decision is in scope.
+- Winner presentation must follow authoritative co-winner and result stages, not completed client progress; an unrelated latest call may leave a fully marked pattern active without presenting a false winner.
+
+## Progress Log
+
+## 2026-07-29 16:05:37 MST - US-001
+- Implemented a pure latest-call attribution predicate that evaluates every canonical mask against prior and current authoritative projections without changing progress selection.
+- Added exact, flexible, center-containing, canonical-tie, unrelated-latest-call, absent-latest-call, and already-complete regressions.
+- Files changed: `packages/patterns/src/matcher.ts`, `packages/patterns/src/index.ts`, `tests/patterns.test.ts`, `progress.txt`
+- Commit message: `feat: US-001 - Define latest-call pattern attribution`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run tests/patterns.test.ts` (pass; red run first failed 6 new tests because the predicate was absent, green run passed 28 tests)
+  - `bun run typecheck` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (pass after formatting `packages/patterns/src/matcher.ts`)
+  - `bun run test` (pass; 41 files passed, 1 skipped, 754 tests passed, 145 skipped)
+- Implementation agents:
+  - Recommended: `backend-developer`, `test-automator`
+  - Used: `backend-developer`; skipped `test-automator` because standard-mode budget allowed one useful specialist and the existing pattern test structure made the test strategy clear
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`
+  - Findings: no blocking findings; fixed one low QA finding by adding the complementary latest-cell-marked-last positive control
+- Decisions (why):
+  - Chose a card-cell index rather than a ball number because pattern matching operates on canonical masks and the authoritative adapter owns ball-to-cell mapping.
+  - Chose direct per-mask completion checks rather than reusing aggregate progress because a separately attributable completed variation must survive a canonical tie.
+  - Preserved prior-card completion as a global rejection because an already complete card cannot gain a new winner from a later mark.
+- **Learnings for future iterations:**
+  - `calculatePatternProgress` intentionally selects the first closest canonical mask, so winner attribution must not infer per-variation causality from its aggregate result.
+  - Pattern masks exclude card index `12` when deriving required cells, which keeps the free center automatically satisfied and unavailable as a triggering call.
+- Known issues / follow-ups:
+  - US-002 must map the persisted latest called ball to its card-cell index and integrate this helper while preserving the existing new-mark and incomplete-to-complete guards.
+- Next iteration start:
+  - Begin US-002 with a database integration regression for marking the latest required ball before the older final required ball.
+---
+
+## 2026-07-29 16:21:13 MST - US-002
+- Integrated the pure latest-call attribution rule into authoritative mark execution without changing transaction, event, notification, or acknowledgement boundaries.
+- Added PostgreSQL regressions proving an older final mark opens the co-winner window in active and paused rounds when the latest required ball was marked first, with atomic persistence and replay checks.
+- Files changed: `packages/database/src/round-command-executor.ts`, `packages/database/src/database.integration.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-002 - Recognize the first mark-order-independent winner`
+- Auto approval: `enabled`
+- Checks:
+  - `TEST_DATABASE_URL='<approved-local-url>' bun run test:database -- -t 'opens the co-winner window from an older final mark'` (red: fail as expected because no winner notification was emitted; green: pass, 2 tests)
+  - `TEST_DATABASE_URL='<approved-local-url>' bun run test:database` (pass, 143 tests)
+  - `bun run typecheck` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (initial fail for one changed file; pass after formatting)
+  - `bun run test` (initial unrelated frontend timing failure; focused rerun passed; full rerun passed with 41 files passed, 1 skipped, 754 tests passed, 147 skipped)
+- Implementation agents:
+  - Recommended: `backend-developer`, `postgres-pro`
+  - Used: `backend-developer`; skipped `postgres-pro` because the existing repository, transaction, notification, and integration-test patterns were clear and one specialist fit the standard-mode implementation budget
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, `postgres-pro`
+  - Findings: fixed the blocking fixture chronology and replaced the replay notification sleep with an ordered PostgreSQL notification barrier; targeted QA and PostgreSQL re-reviews were clean, and a speculative sentinel-collision concern was discarded because a sequence-2 replay changes the compared durable counts while notification-only replay uses recorded sequence 1
+- Decisions (why):
+  - Replaced only command-ball equality with canonical latest-call attribution so existing new-mark, incomplete-to-complete, stage, and transactional guards remain explicit.
+  - Parameterized the database regression over active and paused stages because both share the same authoritative mutation path but must clear different prior stage metadata.
+  - Used an isolated worktree PostgreSQL 16 container on port 5433 because port 5432 was already occupied; scoped auto approval covered local startup and committed migrations.
+- **Learnings for future iterations:**
+  - Winner attribution helpers operate on canonical card-cell indexes, while database calls store balls; adapters must map the triggering call through the participant's own card.
+  - Active-event subscriptions can verify the committed event and notification boundary while direct table counts verify replay adds no durable marks, winners, events, or results.
+- Known issues / follow-ups:
+  - US-003 must apply the same triggering-call attribution to additional co-winners and continuation stages without broadening the exclusive deadline.
+- Next iteration start:
+  - Begin US-003 with a co-winner regression where the triggering latest ball is marked before an older final required ball.
+---
+
+## 2026-07-29 16:42:21 MST - US-003
+- Applied canonical latest-call attribution when carrying settled winners into continuation stages, using the integrity-bound winning command projection rather than current or triggering-mark-minus state.
+- Added PostgreSQL coverage for additional mark-order-independent co-winners across One Line, Two Lines, Blackout, and exact Four Corners, including replay, participant-private acknowledgement scope, participant-ID-ordered settlement, and a later unrelated-call control.
+- Added a canonical-tie continuation regression that preserves cards, calls, draw order, marks, and a single winner row when an older final mark completes the next stage.
+- Files changed: `packages/database/src/round-command-executor.ts`, `packages/database/src/database.integration.test.ts`, `progress.txt`
+- Commit message: `feat: US-003 - Preserve co-winner and continuation attribution`
+- Auto approval: `enabled`
+- Checks:
+  - `TEST_DATABASE_URL='<approved-local-url>' bun run test:database -- -t 'carries a mark-order-independent canonical variation'` (red: failed as expected because continuation returned active instead of carrying the winner; green focused mark-order-independent run passed 6 tests)
+  - `TEST_DATABASE_URL='<approved-local-url>' bun run test:database -- -t 'does not carry a winner from marks added after confirmation'` (review-fix red: failed as expected because continuation incorrectly returned result; green: pass)
+  - `TEST_DATABASE_URL='<approved-local-url>' bun run test:database` (pass, 149 tests)
+  - `bun run typecheck` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (initial fail for one changed file; pass after formatting)
+  - `bun run test` (pass, 41 files passed, 1 skipped, 754 tests passed, 153 skipped)
+- Implementation agents:
+  - Recommended: `backend-developer`, `test-automator`
+  - Used: `backend-developer`, `test-automator`; the backend pass scoped the minimal continuation change and the test pass identified the canonical-tie red case and reusable integration fixtures
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, `postgres-pro`
+  - Findings: fixed the initial merged high finding by freezing continuation at the integrity-bound winning command projection and added a post-confirmation-mark regression; fixed timestamp ambiguity by persisting an internal winner-attribution marker and deriving the exact mark from the verified command result; targeted re-review found an unresolved high repeat-winner defect because historical stage-winning command results produce duplicate participant contexts, so the story was not committed; deferred one low fixture-purity suggestion because the seeded opener isolates additional-winner behavior and changing it would substantially duplicate the separately tested opening path
+- Decisions (why):
+  - Added an integrity-bound internal winner-attribution marker to the existing command result instead of a schema or wire change; its persisted private progress and mark event identify the exact confirmation-time projection and winning mark.
+  - Kept the persisted triggering-call-equals-latest-call fence so a later unrelated call cannot inherit attribution from an earlier enabling call.
+  - Reused the canonical predicate rather than aggregate progress so an independent completed variation cannot suppress a separate attributable variation.
+- **Learnings for future iterations:**
+  - Current card marks cannot reconstruct winner-time continuation state because winners may keep marking during the open window; use the verified command result's canonical progress and mark ID.
+  - Continuation tests need three simultaneously completed One Line variations to expose the Two Lines canonical-tie bug: one trigger-dependent pair and one independent pair after removing the trigger.
+- Known issues / follow-ups:
+  - Blocking: continuation must select exactly the winner-attribution context matching the current co-winner row's trigger, confirmation time, card, and stage pattern while tolerating the participant's historical winning contexts from prior stages; add a repeat-winner One Line/Two Lines regression before another review.
+  - US-004 must verify the existing co-winner and settled-result UI presents this authoritative outcome in both mark orders.
+- Next iteration start:
+  - Resume US-003 by writing the repeated-winner-across-stages regression, selecting the current matching integrity-bound context, rerunning all checks, and starting a fresh stabilization loop.
+---
+
+## 2026-07-29 17:03:02 MST - US-003
+- Added a real One Line/Two Lines repeat-winner regression and fixed continuation to retain verified historical attribution contexts while selecting the unique context bound to the current settled winner.
+- Preserved stage event sequencing, replay behavior, cards, calls, marks, draw order, winner uniqueness, and fail-closed integrity handling through participant-private and repeated-stage continuation.
+- Files changed: `packages/database/src/round-command-executor.ts`, `packages/database/src/database.integration.test.ts`, `progress.txt`
+- Commit message: `feat: US-003 - Preserve co-winner and continuation attribution`
+- Auto approval: `enabled`
+- Checks:
+  - `DATABASE_URL='<approved-local-url>' bun run db:migrate:deploy` (pass; created and migrated an isolated nonproduction test database)
+  - `TEST_DATABASE_URL='<approved-local-url>' bun run test:database -- -t 'preserves repeat-winner attribution across staged continuation'` (red: failed as expected on the duplicate-context guard; green: pass)
+  - `TEST_DATABASE_URL='<approved-local-url>' bun run test:database -- -t 'carries a mark-order-independent canonical variation'` (review-fix red: malformed command metadata and a changed mark timestamp each committed unexpectedly; green: both fail closed and the restored context carries)
+  - `TEST_DATABASE_URL='<approved-local-url>' bun run test:database -- -t 'attributes an additional mark-order-independent co-winner'` (pass, 6 persisted-trigger and pattern cases)
+  - `TEST_DATABASE_URL='<approved-local-url>' bun run test:database -- -t 'carries a participant-private co-winner context'` (pass)
+  - `TEST_DATABASE_URL='<approved-local-url>' bun run test:database` (pass, 152 tests)
+  - `bun run typecheck` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (initial fail for the added regression; pass after formatting)
+  - `bun run test` (pass, 41 files passed, 1 skipped, 754 tests passed, 156 skipped)
+- Implementation agents:
+  - Recommended: `backend-developer`, `test-automator`
+  - Used: `backend-developer`, `test-automator`; both were useful within the complex-story standard-mode budget to isolate the exact selector and design a real repeated-stage lifecycle regression
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, `postgres-pro`; targeted `qa-expert` and `postgres-pro` re-review
+  - Findings: fixed initial merged medium findings by querying all attribution-bearing winner rows without trusting mutable command metadata, validating full current winning-mark identity, exercising participant-private continuation, and isolating persisted-trigger mismatch; targeted QA re-review was clean, but targeted PostgreSQL re-review found an unresolved medium stale-projection defect, so the story was not committed; deferred the low detached-tombstone test because the explicit removal remains covered by final staged inspection
+- Decisions (why):
+  - Retained every integrity-verified attribution context instead of choosing the first or last database row because command-result ordering is not an authoritative stage selector.
+  - Matched the current winner by triggering call, confirmation timestamp, card, and current stage pattern because those durable fields distinguish valid historical wins without reconstructing state.
+  - Rejected multiple exact matches as ambiguous persisted state while treating unrelated historical contexts as valid history.
+  - Used a bounded JSONB-key query rather than command-type/result-format filters so malformed attribution rows cannot bypass integrity validation while ordinary marks do not inflate the continuation transaction.
+- **Learnings for future iterations:**
+  - Successive stage wins intentionally leave multiple current-round mark command results for one participant even though continuation clears prior-stage co-winner rows.
+  - A repeat-winner regression must execute both real mark, settlement, and continuation lifecycles so each context has a valid integrity digest and authoritative confirmation timestamp.
+- Known issues / follow-ups:
+  - Blocking: continuation must verify that every true non-free called and marked cell in the selected integrity-bound projection still exists in authoritative calls and marks, reject an unmapped winning ball, and permit only later additions; add deletion/mutation regressions before another stabilization loop.
+  - Low-priority follow-up: add a dedicated round-replacement fixture proving `winnerAttribution` is stripped with the other private tombstone context.
+- Next iteration start:
+  - Resume US-003 with stale called/marked projection regressions, validate the full frozen projection against current state, rerun all checks, and start a fresh stabilization loop.
+---
+
+## 2026-07-29 17:29:27 MST - US-003
+- Reused the participant-private frozen-progress subset validator for continuation and made an unmapped integrity-bound winning ball fail closed instead of silently dropping the winner.
+- Added PostgreSQL regressions proving continuation rolls back when a frozen called cell, frozen marked cell, or winning card mapping no longer matches authoritative state, while restored state still carries normally.
+- Files changed: `packages/database/src/round-command-executor.ts`, `packages/database/src/database.integration.test.ts`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-003 - Preserve co-winner and continuation attribution`
+- Auto approval: `enabled`
+- Checks:
+  - `DATABASE_URL='<approved-local-url>' bun run db:migrate:deploy` (pass; applied nine existing migrations to an isolated PostgreSQL 16 test database)
+  - `TEST_DATABASE_URL='<approved-local-url>' bun run test:database -- -t 'carries a mark-order-independent canonical variation'` (red: continuation committed with a missing frozen call; green: pass with missing-call, missing-mark, and unmapped-winning-ball rollback coverage)
+  - `TEST_DATABASE_URL='<approved-local-url>' bun run test:database -- -t 'carries a mark-order-independent canonical variation'` (review-fix red: a stale winner confirmation timestamp committed as an active continuation; green: metadata-backed selector mismatches fail closed)
+  - `TEST_DATABASE_URL='<approved-local-url>' bun run test:database -- -t 'canonical variation|marks added after confirmation|repeat-winner attribution|additional mark-order-independent co-winner|participant-private co-winner context'` (pass, 10 tests)
+  - `TEST_DATABASE_URL='<approved-local-url>' bun run test:database` (pass, 152 tests)
+  - `bun run typecheck` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (initial fail for the added regression; pass after formatting)
+  - `bun run test` (pass, 41 files passed, 1 skipped, 754 tests passed, 156 skipped)
+- Implementation agents:
+  - Recommended: `backend-developer`, `test-automator`
+  - Used: `backend-developer`, `test-automator`; both fit the complex-story standard-mode budget and independently converged on frozen-projection subset validation plus the three corruption regressions
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`, and `postgres-pro`; targeted `code-reviewer`, `qa-expert`, and `postgres-pro` re-review
+  - Findings: fixed the merged blocking missing-context finding by rejecting zero exact matches when attribution metadata exists while retaining explicit legacy behavior; removed source-pattern equality as a sole rejection and use it only to disambiguate multiple durable matches; isolated missing-call coverage from cascading mark deletion and covered tombstone stripping; discarded the proposed One Line to carried Two Lines to carried Blackout regression because nested standard completion plus the global prior-incomplete guard makes consecutive carries from one frozen mark impossible; targeted re-review was clean
+- Decisions (why):
+  - Reused the replay validator's subset semantics because winner continuation consumes the same integrity-bound canonical progress and must permit authoritative additions without trusting deletions.
+  - Kept validation against the frozen winner projection rather than current aggregate progress so marks added after confirmation cannot create carry-forward eligibility.
+  - Rejected an unmapped winning ball as persisted-state corruption because silently converting it into a valid non-carry result would conceal an authority mismatch.
+  - Reserved zero-context non-carry behavior for legacy winners with no attribution metadata because the feature explicitly avoids retroactive winner reconstruction; metadata-backed mismatches now reject the transaction.
+- **Learnings for future iterations:**
+  - Integrity verification proves command-result immutability, but continuation must separately prove that every frozen true called/marked cell still maps to retained authoritative rows.
+  - Raw corruption regressions can reuse one continuation command ID because every expected rejection rolls back before command-result persistence; after restoring state, the same ID commits normally.
+- Known issues / follow-ups:
+  - None for US-003.
+- Next iteration start:
+  - After US-003 review and commit, begin US-004 with the existing co-winner/result UI and browser verification in both mark orders.
+---
+
+## 2026-07-29 17:59:26 MST - US-004
+- Added component regressions that drive active and paused rounds through a mark-order-independent winning acknowledgement, co-winner event and snapshot, settled event and snapshot, and the existing accessible winner presentation in both mark orders.
+- Added an unrelated-latest-call control proving a completed card remains in authoritative active play with normal calling controls and no false winner presentation.
+- Manually verified fresh host-only games with the latest required ball marked first and last; both opened the 2-second co-winner window and settled to the same focused, locked-card winner result with host continuation controls.
+- Files changed: `apps/web/src/components/templates/private-lobby-page.test.tsx`, `progress.txt`
+- Commit message: `feat: US-004 - Verify complete-pattern winner presentation`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/components/templates/private-lobby-page.test.tsx` (pass, 145 tests; initial run exposed and corrected a test selector and pre-resync continuation assertion)
+  - `DATABASE_URL='<approved-local-url>' bun run db:migrate:deploy` (pass; applied nine existing migrations to a fresh nonproduction browser database)
+  - Manual dev-browser verification through isolated Playwright against local web and game-server processes (pass; both mark orders settled identically, co-winner checking observed, zero console errors, all HTTP mutations returned 2xx, and realtime authority logged both event transitions)
+  - `bun run typecheck` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (initial fail only for untracked Playwright YAML artifacts; pass after formatting those artifacts)
+  - `bun run test` (pass, 41 files passed, 1 skipped, 759 tests passed, 156 skipped)
+  - `bun run test:e2e` (environment fail before browser tests because managed Chromium is not installed)
+  - `PLAYWRIGHT_BROWSER_CHANNEL=chrome bun run test:e2e` (pass, 4 tests passed, 6 database-dependent tests skipped without `TEST_DATABASE_URL`)
+- Implementation agents:
+  - Recommended: `react-specialist`, `accessibility-tester`
+  - Used: `react-specialist`, `accessibility-tester`; both fit the complex-story standard-mode budget and identified the authoritative event/snapshot ordering plus focus, live-region, and card-locking assertions
+- Specialist review:
+  - Agents used: `code-reviewer`, `qa-expert`
+  - Findings: fixed the initial merged medium finding by binding the settled snapshot to the exact triggering call and co-winner window; targeted re-review found an unresolved medium settlement-envelope timestamp defect, so the story was not committed
+- Decisions (why):
+  - Added component coverage without production UI changes because the existing presentation already consumes authoritative co-winner and result stages correctly.
+  - Parameterized both mark orders over active and paused baselines so an eligible complete card cannot remain under normal calling controls in either state.
+  - Kept the unrelated-call completion visibly active because progress is informational and must not become a browser-only winner decision.
+  - Used stable Chrome only after the managed Playwright binary was unavailable, following the documented repository fallback without installing dependencies.
+- **Learnings for future iterations:**
+  - A winning mark can receive the sequenced co-winner event before its acknowledgement; tests should deliver that event first, then reconcile the marked co-winner snapshot.
+  - Continuation controls appear only after the settled result snapshot resolves continuation metadata, even though the result event can immediately announce and focus the winner outcome.
+  - Short co-winner windows are best verified by polling the accessible heading and announcement immediately after the final mark rather than relying on a delayed screenshot.
+- Known issues / follow-ups:
+  - Blocking: the settled result fixture uses `12:00:02` for settlement but still emits the result event and generates the settled snapshot at `12:00:00`; align both envelope timestamps at or after settlement before another review.
+  - The managed Playwright Chromium binary is absent locally; stable Chrome passes the available browser checks.
+  - The manual Next development server emits its existing smooth-scroll warning; there were no console errors or failed application requests.
+- Next iteration start:
+  - Resume US-004 by aligning the result event and settled snapshot timestamps with the close deadline, rerunning affected checks, and starting a fresh stabilization loop.
+---
+
+## 2026-07-29 18:11:23 MST - US-004
+- Corrected the winner-presentation regression chronology so the result event occurrence, settled snapshot generation, close deadline, and settlement timestamp all describe the same authoritative instant.
+- Retained the previously verified active/paused, both-mark-orders, accessible co-winner/result presentation and unrelated-latest-call control without changing production UI behavior.
+- Files changed: `apps/web/src/components/templates/private-lobby-page.test.tsx`, `prd.json`, `progress.txt`
+- Commit message: `feat: US-004 - Verify complete-pattern winner presentation`
+- Auto approval: `enabled`
+- Checks:
+  - `bunx vitest run apps/web/src/components/templates/private-lobby-page.test.tsx` (pass, 145 tests)
+  - `bun run typecheck` (pass)
+  - `bun run lint` (pass)
+  - `bun run format:check` (pass)
+  - `bun run test` (pass, 41 files passed, 1 skipped, 759 tests passed, 156 skipped)
+  - `PLAYWRIGHT_BROWSER_CHANNEL=chrome bun run test:e2e` (pass, 4 tests passed, 6 database-dependent tests skipped without `TEST_DATABASE_URL`)
+  - Existing dev-browser evidence rechecked (pass; both live mark orders show the authoritative co-winner/result flow, locked cards, focused winner outcome, continuation controls, and no console errors; this iteration changed test fixtures only)
+- Implementation agents:
+  - Recommended: `react-specialist`, `accessibility-tester`
+  - Used: skipped in this continuation because both specialists guided the original US-004 implementation and the remaining blocker was a precise non-behavioral fixture timestamp correction
+- Specialist review:
+  - Agents used: targeted `code-reviewer`, `qa-expert`
+  - Findings: none; both targeted re-review passes found the settlement chronology coherent and the staged regression coverage complete, with only the documented managed-browser and database-backed E2E skips remaining as residual risk
+- Decisions (why):
+  - Added a reusable snapshot generation-time override and one local settlement instant so the test cannot independently drift event, snapshot, deadline, and result timestamps again.
+  - Treated the correction as non-behavioral test-fixture maintenance, so focused green validation was appropriate instead of manufacturing a new red production-behavior test.
+  - Reused prior manual browser verification because no rendered application code changed; the stable-Chrome automated browser suite was rerun after the fixture correction.
+- **Learnings for future iterations:**
+  - Result fixtures should not be generated before their own settlement time; bind event and snapshot envelope times to the persisted result deadline when modeling settlement.
+- Known issues / follow-ups:
+  - The managed Playwright Chromium binary remains absent locally; stable Chrome passes the available browser checks.
+  - Untracked `.playwright-mcp/` files are prior manual verification artifacts and are intentionally excluded from the story commit.
+- Next iteration start:
+  - If review is clean, mark US-004 passing and begin US-005 documentation alignment in the next iteration.
+---
+
+## 2026-07-29 18:18:37 MST - US-005
+- Replaced the click-order-dependent winner invariant with canonical latest-call attribution in the root agent guidance and product PRD.
+- Documented that the current latest call must be required by a newly completed canonical variation, the new mark may target another called required cell, a subsequent unrelated call blocks earlier attribution, and deployment performs no retroactive winner reconstruction.
+- Files changed: `AGENTS.md`, `tasks/prd-private-realtime-bingo.md`, `progress.txt`, `prd.json`
+- Commit message: `feat: US-005 - Align winner-rule documentation`
+- Auto approval: `enabled`
+- Checks:
+  - `bun run format:check` (pass)
+  - `bun run typecheck` (pass)
+  - `bun run lint` (pass)
+  - `bun run test` (pass, 41 files passed, 1 skipped, 759 tests passed, 156 skipped)
+- Implementation agents:
+  - Recommended: none
+  - Used: skipped because this was a trivial documentation-only story with explicit acceptance criteria and clear existing invariants
+- Specialist review:
+  - Agents used: Ralph staged-diff self-review, as required for a trivial change in standard mode
+  - Findings: none; the staged product and agent guidance consistently covers every acceptance criterion
+- Decisions (why):
+  - Updated both the dependency-ordered product PRD and root agent invariant because these are the durable product and implementation sources future stories consult.
+  - Kept the no-retroactive-repair statement scoped to already active, ended, or retained rounds so deployment behavior remains explicit without implying a migration or reconstruction path.
+- **Learnings for future iterations:**
+  - Winner documentation should describe canonical variation causality against the latest call, never the order in which required called cells were marked.
+- Known issues / follow-ups:
+  - Untracked `.playwright-mcp/` artifacts from prior manual verification remain intentionally excluded.
+- Next iteration start:
+  - None; all stories are complete after the final consistency check and commit.
+---
