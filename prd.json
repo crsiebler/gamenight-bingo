@@ -19,7 +19,7 @@
         "Tests pass."
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @backend-developer, @test-automator. Implementation notes: Prefer a pure reusable helper in packages/patterns that evaluates masks directly. Preserve calculatePatternProgress tie selection and near-win behavior. Follow TDD and do not add a migration or wire-contract change."
     },
     {
@@ -39,7 +39,7 @@
         "Tests pass."
       ],
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @backend-developer, @postgres-pro. Implementation notes: Integrate the US-001 helper in packages/database/src/round-command-executor.ts while preserving the prior-progress transition check, command idempotency, and persist-before-broadcast boundaries. Database tests require an approved migrated TEST_DATABASE_URL."
     },
     {
@@ -57,7 +57,7 @@
         "Tests pass."
       ],
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @backend-developer, @test-automator. Implementation notes: Reuse the US-001 attribution rule for the existing triggering call during co-winner evaluation. Preserve the bounded settlement scheduler, exclusive deadline, and current continuation-stage semantics."
     },
     {
@@ -77,7 +77,7 @@
         "Verify in browser using dev-browser skill."
       ],
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "notes": "Recommended agents: @react-specialist, @accessibility-tester. Implementation notes: Reuse the existing co-winner and result UI; do not add a browser-only winner decision or new visual treatment. Use a fresh approved nonproduction database for full browser verification."
     },
     {
@@ -93,7 +93,7 @@
         "Typecheck passes."
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": "Implementation notes: Update the product and agent invariants only after the implementation stories establish the final behavior. Keep server authority, co-winner timing, and no-retroactive-repair constraints explicit."
     }
   ]

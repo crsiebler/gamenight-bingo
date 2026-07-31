@@ -162,17 +162,22 @@ invalid counts, timestamps, or durations.
   and recheck terminal/closed state after asynchronous recovery before binding.
 - Continue One Line to Two Lines to Blackout by updating the current round in
   place: preserve cards, marks, calls, and private draw order, clear only the
-  settled stage winner fields, carry forward prior winners whose latest-ball
-  mark also completed the next pattern, and schedule no automatic lease when
-  every draw position has already been called.
+  settled stage winner fields, carry forward prior winners whose frozen winning
+  projection attributes the next pattern to the triggering call, and schedule
+  no automatic lease when every draw position has already been called.
 - Treat co-winner settlement as a separate exact persisted lobby, round,
   triggering-call, and deadline lease with the same bounded, generation-fenced,
-  fail-closed scheduler discipline. A winner must transition from incomplete to
-  complete by marking the latest called ball; admit additional completions only
-  for that triggering call before the exclusive close deadline. Persist the
-  winning mark's sequenced window event and participant-private batch atomically
-  in one integrity-bound mixed result, then settle and broadcast the complete
-  participant-ID-ordered winner set under the lobby fence.
+  fail-closed scheduler discipline. A new mark must transition a winner from
+  incomplete to complete, and at least one newly completed canonical variation
+  must be complete with the current latest call available and incomplete without
+  it; the new mark need not target that call. Admit additional completions only
+  for that triggering call before the exclusive close deadline. A subsequent
+  unrelated call prevents attribution to an earlier pattern-enabling call, and
+  deployment must not reconstruct winners for already active, ended, or retained
+  rounds. Persist the winning mark's sequenced window event and
+  participant-private batch atomically in one integrity-bound mixed result, then
+  settle and broadcast the complete participant-ID-ordered winner set under the
+  lobby fence.
 - Assign active-lobby events a monotonic sequence. Clients apply sequences
   idempotently and request resynchronization when continuity is uncertain.
 - Put active-lobby sequences only on messages delivered to every authorized

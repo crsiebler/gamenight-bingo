@@ -568,9 +568,11 @@ This PRD is written for junior developers and autonomous agents. Stories are dep
 **Acceptance Criteria:**
 
 - [ ] The first valid completion immediately pauses calls and opens the configured 2000 ms two-second co-winner window.
-- [ ] Include all valid completions attributable to the same latest called ball that arrive during the window.
+- [ ] A completion is attributable when at least one newly completed canonical variation is complete with the current latest call available and incomplete when that call's card cell is unavailable; the new mark may target any called required cell.
+- [ ] Include all valid completions attributable to that same triggering call that arrive during the window, regardless of mark order; a subsequent unrelated call prevents attribution to an earlier pattern-enabling call.
 - [ ] Permit no call during the window; persist and broadcast the complete winner set after it closes.
 - [ ] Use deterministic ordering for presentation without excluding co-winners.
+- [ ] Deployment does not retroactively reconstruct winners for already active, ended, or retained rounds.
 - [ ] Fake-timer and multi-client co-winner tests pass.
 - [ ] Typecheck passes.
 
@@ -949,7 +951,7 @@ This PRD is written for junior developers and autonomous agents. Stories are dep
 26. **FR-026:** Current ball and chronological call history are visible.
 27. **FR-027:** Players daub only called values on their own card; marks are server-validated, idempotent, persisted, and restored.
 28. **FR-028:** Winners and near-win are server-validated; near-win means exactly one required called number away and feedback is optional/private.
-29. **FR-029:** The first valid completion pauses calls and opens a 2000 ms two-second co-winner window for completions attributable to the latest ball.
+29. **FR-029:** The first valid completion pauses calls and opens a 2000 ms two-second co-winner window when at least one newly completed canonical variation is complete with the current latest call available and incomplete without it, regardless of which called required cell the new mark targets. Additional winners must be attributable to that same triggering call before the exclusive deadline; a subsequent unrelated call prevents attribution to an earlier pattern-enabling call, and deployment does not retroactively reconstruct winners for already active, ended, or retained rounds.
 30. **FR-030:** No call occurs during that window; the complete deterministic co-winner set is persisted then broadcast.
 31. **FR-031:** Flexible One Line accepts any row, column, or diagonal; Two Lines accepts any two distinct lines, including intersections.
 32. **FR-032:** Exact masks require source cells, tolerate extra daubs, satisfy center, and never rotate, reflect, or translate.

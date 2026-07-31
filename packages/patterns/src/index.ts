@@ -22,7 +22,9 @@ export { generateCorePatternDocumentation } from "./documentation.js";
 export {
   PatternCardStateSchema,
   calculatePatternProgress,
+  isPatternCompletionAttributableToLatestCall,
   matchesPattern,
+  type LatestCallPatternAttributionInput,
   type PatternCardState,
   type PatternProgress,
   type PatternProgressInput,

@@ -6,6 +6,7 @@ import {
   PatternDefinitionSchema,
   PatternSourceSchema,
   calculatePatternProgress,
+  isPatternCompletionAttributableToLatestCall,
   patternCatalog,
   matchesPattern,
 } from "../packages/patterns/src/index.js";
@@ -776,5 +777,124 @@ describe("pattern matching", () => {
       remainingRequiredCellCount: 1,
       nearWinCellIndex: 24,
     });
+  });
+});
+
+describe("latest-call pattern attribution", () => {
+  test("attributes an exact pattern regardless of which required called cell is marked last", () => {
+    const pattern = catalogPattern("shape-four-corners");
+
+    expect(
+      isPatternCompletionAttributableToLatestCall(pattern, {
+        calledCells: cardWith(0, 4, 20, 24),
+        priorMarkedCells: cardWith(0, 4, 20),
+        markedCells: cardWith(0, 4, 20, 24),
+        latestCalledCellIndex: 4,
+      }),
+    ).toBe(true);
+    expect(
+      isPatternCompletionAttributableToLatestCall(pattern, {
+        calledCells: cardWith(0, 4, 20, 24),
+        priorMarkedCells: cardWith(0, 4, 20),
+        markedCells: cardWith(0, 4, 20, 24),
+        latestCalledCellIndex: 24,
+      }),
+    ).toBe(true);
+  });
+
+  test("attributes any completed canonical variation of a flexible pattern", () => {
+    const pattern = catalogPattern("standard-one-line");
+
+    expect(
+      isPatternCompletionAttributableToLatestCall(pattern, {
+        calledCells: cardWith(0, 1, 2, 3, 4),
+        priorMarkedCells: cardWith(0, 1, 2, 4),
+        markedCells: cardWith(0, 1, 2, 3, 4),
+        latestCalledCellIndex: 4,
+      }),
+    ).toBe(true);
+  });
+
+  test("automatically satisfies a required center without treating it as a trigger", () => {
+    const pattern = PatternDefinitionSchema.parse({
+      id: "shape-center-diagonal",
+      name: "Center Diagonal",
+      category: "shape",
+      version: 1,
+      mode: "exact",
+      source: {
+        file: "shapes-bingo-patterns.pdf",
+        references: ["p1/d99"],
+        alias: null,
+      },
+      masks: [maskWith(0, 6, 12, 18, 24)],
+    });
+    const input = {
+      calledCells: cardWith(0, 6, 18, 24),
+      priorMarkedCells: cardWith(0, 6, 24),
+      markedCells: cardWith(0, 6, 18, 24),
+    };
+
+    expect(
+      isPatternCompletionAttributableToLatestCall(pattern, {
+        ...input,
+        latestCalledCellIndex: 24,
+      }),
+    ).toBe(true);
+    expect(
+      isPatternCompletionAttributableToLatestCall(pattern, {
+        ...input,
+        latestCalledCellIndex: 12,
+      }),
+    ).toBe(false);
+  });
+
+  test("does not let a canonical tie suppress an attributable completed variation", () => {
+    const pattern = catalogPattern("standard-one-line");
+    const completedCells = cardWith(0, 1, 2, 3, 4, 5, 10, 15, 20);
+
+    expect(
+      isPatternCompletionAttributableToLatestCall(pattern, {
+        calledCells: completedCells,
+        priorMarkedCells: cardWith(1, 2, 3, 4, 5, 10, 15, 20),
+        markedCells: completedCells,
+        latestCalledCellIndex: 20,
+      }),
+    ).toBe(true);
+  });
+
+  test("rejects an unrelated or absent latest called card cell", () => {
+    const pattern = catalogPattern("shape-four-corners");
+    const input = {
+      calledCells: cardWith(0, 4, 20, 24),
+      priorMarkedCells: cardWith(0, 4, 20),
+      markedCells: cardWith(0, 4, 20, 24),
+    };
+
+    expect(
+      isPatternCompletionAttributableToLatestCall(pattern, {
+        ...input,
+        latestCalledCellIndex: 10,
+      }),
+    ).toBe(false);
+    expect(
+      isPatternCompletionAttributableToLatestCall(pattern, {
+        ...input,
+        latestCalledCellIndex: null,
+      }),
+    ).toBe(false);
+  });
+
+  test("rejects a card that was already complete before the current mark", () => {
+    const pattern = catalogPattern("standard-one-line");
+
+    expect(
+      isPatternCompletionAttributableToLatestCall(pattern, {
+        calledCells: cardWith(0, 1, 2, 3, 4, 5, 10, 15, 20),
+        priorMarkedCells: cardWith(0, 1, 2, 3, 4, 5, 10, 20),
+        markedCells: cardWith(0, 1, 2, 3, 4, 5, 10, 15, 20),
+        latestCalledCellIndex: 20,
+      }),
+    ).toBe(false);
   });
 });

@@ -60,12 +60,15 @@ function snapshotFor(
     coWinnerOpenedAt?: string;
     continuationPending?: boolean;
     eventSequence?: number | null;
+    generatedAt?: string;
     hostPresence?: "connected" | "absent";
     absentPlayerEligibility?: "playing" | "waiting";
     absentPlayerOverridden?: boolean;
     markedBalls?: readonly number[];
     patternId?: string;
     continuationPatternId?: string | null;
+    resultClosesAt?: string;
+    resultOpenedAt?: string;
     resultSettledAt?: string;
     resultTriggeringCallPosition?: number;
     round?: "waiting" | "active" | "paused" | "co-winner-window" | "result" | "ended" | null;
@@ -161,7 +164,7 @@ function snapshotFor(
 
   return SnapshotSchema.parse({
     schemaVersion: CONTRACT_SCHEMA_VERSION,
-    generatedAt: NOW,
+    generatedAt: options.generatedAt ?? NOW,
     lastEventSequence: options.eventSequence ?? null,
     lobby: {
       id: "lobby-1",
@@ -231,8 +234,8 @@ function snapshotFor(
             : { continuationPatternId: options.continuationPatternId ?? null }),
           result: {
             triggeringCallId: `call-${options.resultTriggeringCallPosition ?? 1}`,
-            openedAt: "2026-07-18T11:59:57.000Z",
-            closesAt: "2026-07-18T11:59:59.000Z",
+            openedAt: options.resultOpenedAt ?? "2026-07-18T11:59:57.000Z",
+            closesAt: options.resultClosesAt ?? "2026-07-18T11:59:59.000Z",
             settledAt: options.resultSettledAt ?? NOW,
             winnerParticipantIds: options.winnerParticipantIds ?? ["participant-host"],
           },
@@ -1875,6 +1878,208 @@ describe("PrivateLobbyPage", () => {
       /b 1 marked/i,
     );
     expect(screen.getByRole("button", { name: /i.*16.*not called.*cannot/i })).toBeVisible();
+  });
+
+  it.each([
+    {
+      finalBall: 46,
+      label: "latest required ball first from active play",
+      markedBalls: [61, 1, 16, 31],
+      round: "active" as const,
+    },
+    {
+      finalBall: 61,
+      label: "latest required ball last from active play",
+      markedBalls: [1, 16, 31, 46],
+      round: "active" as const,
+    },
+    {
+      finalBall: 46,
+      label: "latest required ball first from paused play",
+      markedBalls: [61, 1, 16, 31],
+      round: "paused" as const,
+    },
+    {
+      finalBall: 61,
+      label: "latest required ball last from paused play",
+      markedBalls: [1, 16, 31, 46],
+      round: "paused" as const,
+    },
+  ])(
+    "presents the same authoritative winner when marking the $label",
+    async ({ finalBall, markedBalls, round }) => {
+      let handlers: PrivateLobbyRealtimeHandlers | undefined;
+      const acknowledgement = deferred<ReturnType<typeof activeLobbyAck>>();
+      const allRequiredBalls = [1, 16, 31, 46, 61];
+      const completedMarks = [...markedBalls, finalBall];
+      const settledAt = "2026-07-18T12:00:02.000Z";
+      const initial = snapshotFor("host", {
+        absentPlayerOverridden: true,
+        calledBalls: allRequiredBalls,
+        eventSequence: 5,
+        markedBalls,
+        round,
+      });
+      const checking = snapshotFor("host", {
+        absentPlayerOverridden: true,
+        calledBalls: allRequiredBalls,
+        coWinnerClosesAt: settledAt,
+        coWinnerOpenedAt: NOW,
+        eventSequence: 6,
+        markedBalls: completedMarks,
+        round: "co-winner-window",
+      });
+      const settled = snapshotFor("host", {
+        absentPlayerOverridden: true,
+        calledBalls: allRequiredBalls,
+        continuationPatternId: "standard-two-lines",
+        eventSequence: 7,
+        generatedAt: settledAt,
+        markedBalls: completedMarks,
+        resultClosesAt: settledAt,
+        resultOpenedAt: NOW,
+        resultSettledAt: settledAt,
+        resultTriggeringCallPosition: 5,
+        round: "result",
+        winnerParticipantIds: ["participant-host"],
+      });
+      const loadSnapshot = vi
+        .fn<(code: string) => Promise<Snapshot>>()
+        .mockResolvedValueOnce(initial)
+        .mockResolvedValueOnce(checking);
+      render(
+        <PrivateLobbyPage
+          code="ABC234"
+          connectRealtime={(nextHandlers) => {
+            handlers = nextHandlers;
+            return { close: vi.fn(), requestResync: vi.fn() };
+          }}
+          createMarkCommandSession={() => ({ run: () => acknowledgement.promise })}
+          enableRealtime
+          loadSnapshot={loadSnapshot}
+          origin="https://play.example"
+          patterns={patterns}
+          shareInvite={null}
+        />,
+      );
+
+      const outcomeAnnouncement = await screen.findByRole("status", {
+        name: "Outcome announcement",
+      });
+      expect(screen.getByText(/4 of 5 required spaces marked/i)).toBeVisible();
+      const finalCell = screen.getByRole("button", {
+        name: new RegExp(
+          `${finalBall === 46 ? "G" : "O"}: ${finalBall} Called - mark available to mark`,
+          "i",
+        ),
+      });
+      finalCell.focus();
+      fireEvent.click(finalCell);
+
+      act(() =>
+        handlers?.onLobbyEvent(
+          ActiveLobbyEventSchema.parse({
+            schemaVersion: CONTRACT_SCHEMA_VERSION,
+            type: "co-winner-window",
+            eventSequence: 6,
+            occurredAt: NOW,
+            window: {
+              triggeringCallId: "call-5",
+              openedAt: NOW,
+              closesAt: settledAt,
+            },
+          }),
+        ),
+      );
+
+      expect(screen.getByRole("heading", { name: "Checking for co-winners" })).toBeVisible();
+      expect(finalCell).toHaveFocus();
+      expect(screen.getByRole("status", { name: "Outcome announcement" })).toBe(
+        outcomeAnnouncement,
+      );
+      expect(outcomeAnnouncement).toHaveTextContent(/checking for co-winners/i);
+      expect(screen.queryByRole("button", { name: "Call Next" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Pause calling" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Resume calling" })).toBeNull();
+
+      await act(async () => acknowledgement.resolve(activeLobbyAck(6)));
+      const committedCell = await screen.findByRole("button", {
+        name: new RegExp(`${finalBall === 46 ? "G" : "O"}: ${finalBall} Marked`, "i"),
+      });
+      expect(committedCell).toHaveFocus();
+      expect(screen.getByText(/5 of 5 required spaces marked/i)).toBeVisible();
+
+      const result = settled.round?.stage === "result" ? settled.round.result : null;
+      if (result === null) throw new Error("Missing settled result fixture.");
+      act(() =>
+        handlers?.onLobbyEvent(
+          ActiveLobbyEventSchema.parse({
+            schemaVersion: CONTRACT_SCHEMA_VERSION,
+            type: "co-winner-result",
+            eventSequence: 7,
+            occurredAt: settledAt,
+            result,
+          }),
+        ),
+      );
+
+      const resultHeading = screen.getByRole("heading", { name: /bingo.*you won/i });
+      expect(resultHeading).toHaveFocus();
+      expect(committedCell).toHaveAttribute("aria-disabled", "true");
+      expect(outcomeAnnouncement).toHaveTextContent(/results confirmed.*you won one line/i);
+      expect(screen.queryByRole("button", { name: "Call Next" })).toBeNull();
+
+      act(() => handlers?.onSnapshot(settled));
+      expect(screen.getByRole("button", { name: "Continue to Two Lines" })).toBeVisible();
+      expect(screen.getByRole("button", { name: "End round" })).toBeVisible();
+      expect(screen.queryByRole("button", { name: "Call Next" })).toBeNull();
+      expect(screen.getByRole("status", { name: "Outcome announcement" })).toBe(
+        outcomeAnnouncement,
+      );
+      expect(outcomeAnnouncement).toHaveTextContent(/results confirmed.*you won one line/i);
+    },
+  );
+
+  it("does not present a completed card as a winner after an unrelated latest call", async () => {
+    const calledBalls = [1, 16, 31, 46, 61, 2];
+    const initial = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      calledBalls,
+      eventSequence: 6,
+      markedBalls: [61, 1, 16, 31],
+      round: "active",
+    });
+    const completed = snapshotFor("host", {
+      absentPlayerOverridden: true,
+      calledBalls,
+      eventSequence: 6,
+      markedBalls: [61, 1, 16, 31, 46],
+      round: "active",
+    });
+    const loadSnapshot = vi
+      .fn<(code: string) => Promise<Snapshot>>()
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValueOnce(completed);
+    render(
+      <PrivateLobbyPage
+        code="ABC234"
+        createMarkCommandSession={() => ({ run: async () => privateAck() })}
+        loadSnapshot={loadSnapshot}
+        origin="https://play.example"
+        patterns={patterns}
+        shareInvite={null}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /G: 46 Called - mark available to mark/i }),
+    );
+
+    expect(await screen.findByText(/5 of 5 required spaces marked/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Call Next" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Checking for co-winners" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: /bingo.*you won/i })).toBeNull();
+    expect(screen.getByRole("status", { name: "Outcome announcement" })).toBeEmptyDOMElement();
   });
 
   it("retains an ambiguous mark for explicit same-card replay and blocks competing daubs", async () => {

@@ -24,12 +24,14 @@ import {
   PatternCardStateSchema,
   PatternDefinitionSchema,
   calculatePatternProgress,
+  isPatternCompletionAttributableToLatestCall,
   type PatternCardState,
   type PatternDefinition,
 } from "@gamenight-bingo/patterns";
 
 import {
   Prisma,
+  type CommandResult as DatabaseCommandResult,
   type ParticipantRole as DatabaseParticipantRole,
   type PrismaClient as GeneratedPrismaClient,
   type RoundStage as DatabaseRoundStage,
@@ -126,12 +128,14 @@ type PendingCommand =
       };
       readonly progress?: ParticipantPrivateProgress;
       readonly events?: readonly ParticipantPrivateEvent[];
+      readonly winnerAttribution?: { readonly triggeringCallId: string };
     }
   | {
       readonly roundId: string;
       readonly scope: "participant-private";
       readonly progress: ParticipantPrivateProgress;
       readonly events: readonly ParticipantPrivateEvent[];
+      readonly winnerAttribution?: { readonly triggeringCallId: string };
     };
 
 interface CurrentRound {
@@ -361,6 +365,24 @@ function verifyParticipantPrivateResultIntegrity(
   }
 }
 
+function validateParticipantPrivateProgressSubset(
+  progress: ParticipantPrivateProgress,
+  cardCells: readonly number[],
+  calledBalls: ReadonlySet<number>,
+  markedBalls: ReadonlySet<number>,
+): void {
+  if (
+    progress.calledCells.some(
+      (called, index) => called && cardCells[index] !== 0 && !calledBalls.has(cardCells[index]!),
+    ) ||
+    progress.markedCells.some(
+      (marked, index) => marked && cardCells[index] !== 0 && !markedBalls.has(cardCells[index]!),
+    )
+  ) {
+    throw new Error("Persisted participant-private progress exceeds authoritative state.");
+  }
+}
+
 async function validateReplayedParticipantPrivateEvents(
   transaction: Prisma.TransactionClient,
   input: {
@@ -432,16 +454,7 @@ async function validateReplayedParticipantPrivateEvents(
   }
   const calledBalls = new Set(round.calls.map(({ ball }) => ball));
   const markedBalls = new Set(card.marks.map(({ ball }) => ball));
-  if (
-    input.progress.calledCells.some(
-      (called, index) => called && card.cells[index] !== 0 && !calledBalls.has(card.cells[index]!),
-    ) ||
-    input.progress.markedCells.some(
-      (marked, index) => marked && card.cells[index] !== 0 && !markedBalls.has(card.cells[index]!),
-    )
-  ) {
-    throw new Error("Persisted participant-private progress exceeds authoritative state.");
-  }
+  validateParticipantPrivateProgressSubset(input.progress, card.cells, calledBalls, markedBalls);
   const progress = calculatePatternProgress(input.progress.pattern, {
     calledCells: input.progress.calledCells,
     markedCells: input.progress.markedCells,
@@ -862,8 +875,8 @@ async function executeMutation(
         UPDATE "command_results"
            SET "round_id" = NULL,
                  "result_integrity" = NULL,
-                 "result" = "result" - 'participantPrivateEvent' - 'participantPrivateEvents'
-                   - 'patternId' - 'participantPrivateProgress'
+                  "result" = "result" - 'participantPrivateEvent' - 'participantPrivateEvents'
+                   - 'patternId' - 'participantPrivateProgress' - 'winnerAttribution'
          WHERE "round_id" = ${current.id}
       `;
       await transaction.round.delete({ where: { id: current.id } });
@@ -1148,40 +1161,182 @@ async function executeMutation(
       }),
       transaction.coWinner.findMany({
         where: { lobbyId, roundId: current.id },
-        select: { participantId: true, cardId: true, triggeringCallId: true },
+        select: {
+          participantId: true,
+          cardId: true,
+          triggeringCallId: true,
+          confirmedAt: true,
+        },
       }),
     ]);
-    const winnerCards = await transaction.card.findMany({
-      where: { roundId: current.id, id: { in: settledWinners.map(({ cardId }) => cardId) } },
-      select: { id: true, cells: true, marks: { select: { ball: true } } },
-    });
+    const winnerParticipantIds = settledWinners.map(({ participantId }) => participantId);
+    const [winnerCards, winningCommandResults] = await Promise.all([
+      transaction.card.findMany({
+        where: { roundId: current.id, id: { in: settledWinners.map(({ cardId }) => cardId) } },
+        select: {
+          id: true,
+          cells: true,
+          marks: {
+            select: { id: true, roundId: true, cardId: true, ball: true, markedAt: true },
+          },
+        },
+      }),
+      winnerParticipantIds.length === 0
+        ? Promise.resolve([])
+        : transaction.$queryRaw<DatabaseCommandResult[]>(Prisma.sql`
+            SELECT "lobby_id" AS "lobbyId",
+                   "participant_id" AS "participantId",
+                   "command_id" AS "commandId",
+                   "round_id" AS "roundId",
+                   "command_type" AS "commandType",
+                   "delivery_scope" AS "deliveryScope",
+                   "event_sequence" AS "eventSequence",
+                   "result_format" AS "resultFormat",
+                   "result_integrity" AS "resultIntegrity",
+                   "result",
+                   "created_at" AS "createdAt"
+              FROM "command_results"
+             WHERE "lobby_id" = ${lobbyId}
+               AND "round_id" = ${current.id}
+               AND "participant_id" IN (${Prisma.join(winnerParticipantIds)})
+               AND jsonb_exists("result", 'winnerAttribution')
+          `),
+    ]);
     const cardsById = new Map(winnerCards.map((card) => [card.id, card]));
+    const winningContexts = new Map<
+      string,
+      {
+        readonly triggeringCallId: string;
+        readonly progress: ParticipantPrivateProgress;
+        readonly mark: Extract<ParticipantPrivateEvent, { readonly type: "mark-result" }>["mark"];
+        readonly committedAt: Date;
+      }[]
+    >();
+    for (const resultRow of winningCommandResults) {
+      const result = resultRow.result;
+      if (result === null || Array.isArray(result) || typeof result !== "object") {
+        throw new Error("Persisted winning command result is invalid.");
+      }
+      const attribution = result["winnerAttribution"];
+      if (attribution === undefined) continue;
+      if (
+        attribution === null ||
+        Array.isArray(attribution) ||
+        typeof attribution !== "object" ||
+        Object.keys(attribution).join(",") !== "triggeringCallId" ||
+        typeof attribution["triggeringCallId"] !== "string" ||
+        resultRow.commandType !== "mark-card" ||
+        (resultRow.resultFormat !== 3 && resultRow.resultFormat !== 4) ||
+        resultRow.roundId === null ||
+        (resultRow.resultFormat === 3 &&
+          (resultRow.deliveryScope !== "PARTICIPANT_PRIVATE" ||
+            resultRow.eventSequence !== null)) ||
+        (resultRow.resultFormat === 4 &&
+          (resultRow.deliveryScope !== "ACTIVE_LOBBY" || resultRow.eventSequence === null))
+      ) {
+        throw new Error("Persisted winner attribution is invalid.");
+      }
+      verifyParticipantPrivateResultIntegrity(resultRow.resultIntegrity, {
+        lobbyId: resultRow.lobbyId,
+        participantId: resultRow.participantId,
+        commandId: resultRow.commandId,
+        roundId: resultRow.roundId,
+        commandType: resultRow.commandType,
+        result,
+        createdAt: resultRow.createdAt,
+        deliveryScope: resultRow.deliveryScope,
+        eventSequence: resultRow.eventSequence,
+        resultFormat: resultRow.resultFormat,
+      });
+      const parsed = parseParticipantPrivateEvents(result, resultRow.resultFormat);
+      const markResult = parsed.events[0];
+      if (
+        parsed.progress === null ||
+        markResult?.type !== "mark-result" ||
+        markResult.commandId !== resultRow.commandId ||
+        markResult.occurredAt !== resultRow.createdAt.toISOString()
+      ) {
+        throw new Error("Persisted winning command context is invalid.");
+      }
+      const context = {
+        triggeringCallId: attribution["triggeringCallId"],
+        progress: parsed.progress,
+        mark: markResult.mark,
+        committedAt: resultRow.createdAt,
+      };
+      const participantContexts = winningContexts.get(resultRow.participantId);
+      if (participantContexts === undefined) {
+        winningContexts.set(resultRow.participantId, [context]);
+      } else {
+        participantContexts.push(context);
+      }
+    }
     const latestCall = calls.at(-1);
     const calledBalls = new Set(calls.map(({ ball }) => ball));
     const pattern = patternOrThrow(options.patterns, command.patternId);
     const carriedParticipantIds = settledWinners.flatMap((winner) => {
       const card = cardsById.get(winner.cardId);
-      const markedBalls = new Set(card?.marks.map(({ ball }) => ball));
+      const participantContexts = winningContexts.get(winner.participantId) ?? [];
+      const durableMatchingContexts = participantContexts.filter(
+        (context) =>
+          context.triggeringCallId === winner.triggeringCallId &&
+          context.committedAt.getTime() === winner.confirmedAt.getTime() &&
+          context.mark.cardId === winner.cardId,
+      );
+      const matchingContexts =
+        durableMatchingContexts.length <= 1
+          ? durableMatchingContexts
+          : durableMatchingContexts.filter(
+              (context) => context.progress.pattern.id === current.currentPatternId,
+            );
+      if (participantContexts.length > 0 && matchingContexts.length === 0) {
+        throw new Error("Persisted winning command context does not match its winner.");
+      }
+      if (matchingContexts.length > 1) {
+        throw new Error("Persisted winning command context is ambiguous.");
+      }
+      const context = matchingContexts[0];
+      const persistedMark = card?.marks.find(({ id }) => id === context?.mark.id);
+      if (context !== undefined && card === undefined) {
+        throw new Error("Persisted winning command context has no authoritative card.");
+      }
       if (
         card === undefined ||
+        context === undefined ||
         latestCall === undefined ||
-        winner.triggeringCallId !== latestCall.id ||
-        !markedBalls.has(latestCall.ball)
+        winner.triggeringCallId !== latestCall.id
       ) {
         return [];
       }
-      const calledCells = card.cells.map((ball) => ball === 0 || calledBalls.has(ball));
-      const progress = calculatePatternProgress(pattern, {
-        calledCells,
-        markedCells: card.cells.map((ball) => ball === 0 || markedBalls.has(ball)),
+      if (
+        persistedMark === undefined ||
+        persistedMark.roundId !== current.id ||
+        persistedMark.cardId !== context.mark.cardId ||
+        persistedMark.ball !== context.mark.ball ||
+        persistedMark.markedAt.toISOString() !== context.mark.markedAt
+      ) {
+        throw new Error("Persisted winning mark does not match authoritative state.");
+      }
+      const latestCalledCellIndex = card.cells.indexOf(latestCall.ball);
+      const winningMarkCellIndex = card.cells.indexOf(context.mark.ball);
+      if (winningMarkCellIndex < 0) {
+        throw new Error("Persisted winning mark does not map to its authoritative card.");
+      }
+      validateParticipantPrivateProgressSubset(
+        context.progress,
+        card.cells,
+        calledBalls,
+        new Set(card.marks.map(({ ball }) => ball)),
+      );
+      const priorMarkedCells = [...context.progress.markedCells] as PatternCardState;
+      priorMarkedCells[winningMarkCellIndex] = false;
+      const attributableCompletion = isPatternCompletionAttributableToLatestCall(pattern, {
+        calledCells: context.progress.calledCells,
+        markedCells: context.progress.markedCells,
+        priorMarkedCells,
+        latestCalledCellIndex: latestCalledCellIndex < 0 ? null : latestCalledCellIndex,
       });
-      const priorProgress = calculatePatternProgress(pattern, {
-        calledCells,
-        markedCells: card.cells.map(
-          (ball) => ball === 0 || (ball !== latestCall.ball && markedBalls.has(ball)),
-        ),
-      });
-      return !priorProgress.complete && progress.complete ? [winner.participantId] : [];
+      return attributableCompletion ? [winner.participantId] : [];
     });
     const carriesResult = carriedParticipantIds.length > 0;
     await transaction.coWinner.deleteMany({
@@ -1299,6 +1454,7 @@ async function executeMutation(
     });
     const priorMarkedBalls = new Set(card.marks.map(({ ball }) => ball));
     const markedBalls = new Set([...priorMarkedBalls, command.ball]);
+    const priorMarkedCells = card.cells.map((ball) => ball === 0 || priorMarkedBalls.has(ball));
     const progressInput = {
       calledCells: card.cells.map((ball) => ball === 0 || calledBalls.has(ball)),
       markedCells: card.cells.map((ball) => ball === 0 || markedBalls.has(ball)),
@@ -1307,7 +1463,7 @@ async function executeMutation(
     const progress = calculatePatternProgress(pattern, progressInput);
     const priorProgress = calculatePatternProgress(pattern, {
       calledCells: progressInput.calledCells,
-      markedCells: card.cells.map((ball) => ball === 0 || priorMarkedBalls.has(ball)),
+      markedCells: priorMarkedCells,
     });
     const requiredBall =
       progress.nearWinCellIndex === null ? null : card.cells[progress.nearWinCellIndex];
@@ -1328,12 +1484,18 @@ async function executeMutation(
         : []),
     ];
     const latestCall = calls.at(-1);
+    const latestCalledCellIndex =
+      latestCall === undefined ? -1 : card.cells.indexOf(latestCall.ball);
     const attributableCompletion =
       priorMark === null &&
       !priorProgress.complete &&
       progress.complete &&
       latestCall !== undefined &&
-      command.ball === latestCall.ball;
+      isPatternCompletionAttributableToLatestCall(pattern, {
+        ...progressInput,
+        priorMarkedCells,
+        latestCalledCellIndex: latestCalledCellIndex < 0 ? null : latestCalledCellIndex,
+      });
     if (attributableCompletion && (current.stage === "ACTIVE" || current.stage === "PAUSED")) {
       const closesAt = new Date(now.getTime() + options.coWinnerWindowMs);
       const transition = transitionRound(toDomainRound(current, options.patterns), {
@@ -1383,8 +1545,10 @@ async function executeMutation(
           nearWinFeedbackEnabled: options.nearWinFeedbackEnabled,
         },
         events,
+        winnerAttribution: { triggeringCallId: latestCall.id },
       };
     }
+    let winnerAttribution: { readonly triggeringCallId: string } | undefined;
     if (
       attributableCompletion &&
       current.stage === "CO_WINNER_WINDOW" &&
@@ -1400,6 +1564,7 @@ async function executeMutation(
           confirmedAt: now,
         },
       });
+      winnerAttribution = { triggeringCallId: latestCall.id };
     }
     return {
       roundId: current.id,
@@ -1410,6 +1575,7 @@ async function executeMutation(
         nearWinFeedbackEnabled: options.nearWinFeedbackEnabled,
       },
       events,
+      ...(winnerAttribution === undefined ? {} : { winnerAttribution }),
     };
   }
 
@@ -1941,6 +2107,9 @@ class PrismaRoundCommandExecutor implements RoundCommandExecutor {
                       JSON.stringify(participantPrivateEvents),
                     ) as Prisma.InputJsonArray,
                   }),
+              ...(pending.winnerAttribution === undefined
+                ? {}
+                : { winnerAttribution: pending.winnerAttribution }),
             };
             const deliveryScope =
               pending.scope === "active-lobby"
