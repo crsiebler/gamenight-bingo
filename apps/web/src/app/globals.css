@@ -777,13 +777,7 @@ h2 {
 .current-call strong.current-call-ball {
   align-items: center;
   aspect-ratio: 1;
-  background: radial-gradient(
-    circle at 32% 24%,
-    rgb(255 255 255 / 95%) 0 8%,
-    rgb(255 255 255 / 76%) 26%,
-    rgb(255 255 255 / 32%) 62%,
-    rgb(0 0 0 / 14%) 100%
-  );
+  background: var(--bingo-theme-ball-current-background);
   border: 0.25rem solid currentColor;
   border-radius: 50%;
   box-shadow:
