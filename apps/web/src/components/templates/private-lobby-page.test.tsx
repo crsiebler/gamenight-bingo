@@ -883,7 +883,9 @@ describe("PrivateLobbyPage", () => {
     );
 
     const liveGame = await screen.findByRole("region", { name: "Live game status" });
-    expect(within(liveGame).getByText("N 31", { selector: "strong" })).toBeVisible();
+    expect(within(liveGame).getByText("N 31", { selector: "strong" })).toHaveClass(
+      "current-call-ball",
+    );
     expect(within(liveGame).getByText("Automatic every 10 seconds")).toBeVisible();
     expect(within(liveGame).getByText(/next call in 5 seconds/i)).toBeVisible();
     const roundDetails = screen.getByRole("region", { name: "Round details" });

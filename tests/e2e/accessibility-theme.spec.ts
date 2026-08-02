@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-import { themeCatalog } from "../../packages/themes/src/index.js";
+import { themeCatalog, themeCssVariables } from "../../packages/themes/src/index.js";
 
 const moodboardPath = resolve(process.cwd(), "docs/theme-moodboards.html");
 const globalStylesPath = resolve(process.cwd(), "apps/web/src/app/globals.css");
@@ -157,6 +157,32 @@ test.describe("accessibility and theme regressions", () => {
     }
 
     await expectNoAccessibilityViolations(page);
+  });
+
+  test("uses the canonical opaque current-ball colors across every theme", async ({ page }) => {
+    const globalStyles = await readFile(globalStylesPath, "utf8");
+
+    for (const theme of themeCatalog) {
+      const variables = Object.entries(themeCssVariables(theme))
+        .map(([name, value]) => `${name}:${value}`)
+        .join(";");
+      await page.setContent(`
+        <style>${globalStyles}</style>
+        <main class="private-lobby-shell" data-theme-id="${theme.id}" style="${variables}">
+          <div class="current-call">
+            <strong class="current-call-ball">N 31</strong>
+          </div>
+        </main>
+      `);
+      const ball = page.locator(".current-call-ball");
+
+      await expect(ball).toHaveCSS(
+        "background-color",
+        cssRgb(theme.tokens.ball.current.background),
+      );
+      await expect(ball).toHaveCSS("background-image", "none");
+      await expect(ball).toHaveCSS("color", cssRgb(theme.tokens.ball.current.text));
+    }
   });
 
   test("uses canonical theme focus rings and restores high-contrast link underlines", async ({

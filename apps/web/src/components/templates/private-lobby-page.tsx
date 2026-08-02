@@ -2108,7 +2108,7 @@ export function PrivateLobbyPage({
           />
           <div className="theme-art-content">
             <span>Current call</span>
-            <strong>
+            <strong className={latestCall === undefined ? undefined : "current-call-ball"}>
               {snapshot.round === null
                 ? "First round not started"
                 : latestCall === undefined

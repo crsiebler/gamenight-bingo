@@ -774,6 +774,24 @@ h2 {
   line-height: 0.9;
 }
 
+.current-call strong.current-call-ball {
+  align-items: center;
+  aspect-ratio: 1;
+  background: var(--bingo-theme-ball-current-background);
+  border: 0.25rem solid currentColor;
+  border-radius: 50%;
+  box-shadow:
+    inset -0.75rem -0.85rem 1.1rem rgb(0 0 0 / 18%),
+    inset 0.45rem 0.45rem 0.7rem rgb(255 255 255 / 48%),
+    0 0.75rem 1rem rgb(0 0 0 / 28%);
+  display: inline-grid;
+  font-size: clamp(2.15rem, 10vw, 3.5rem);
+  justify-items: center;
+  line-height: 1;
+  padding: 0.75rem;
+  width: clamp(8.5rem, 38vw, 11rem);
+}
+
 .call-mode-status {
   align-content: center;
   background: rgb(255 255 255 / 8%);
@@ -1407,6 +1425,12 @@ h2 {
   .call-mode-status,
   .pattern-miniature {
     border-color: CanvasText;
+  }
+
+  .current-call strong.current-call-ball {
+    background: Canvas;
+    border-color: CanvasText;
+    box-shadow: none;
   }
 
   .pattern-miniature span[data-required="true"] {
