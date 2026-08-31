@@ -2,6 +2,7 @@
 **/.next/
 /coverage/
 /playwright-report/
+/.playwright-mcp/
 **/test-results/
 /tests/fixtures/quality/typescript/*.js
 /packages/database/generated/
