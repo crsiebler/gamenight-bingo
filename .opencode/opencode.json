@@ -9,6 +9,17 @@
     },
     "playwright": {
       "enabled": true
+    },
+    "postgresql": {
+      "command": [
+        "node",
+        "{env:HOME}/Repositories/mcp-suite/servers/postgresql/dist/servers/postgresql/src/index.js"
+      ],
+      "enabled": true,
+      "environment": {
+        "POSTGRESQL_CONNECTION_STRING": "postgresql://gamenight_bingo:gamenight_bingo@127.0.0.1:5432/gamenight_bingo"
+      },
+      "type": "local"
     }
   }
 }
